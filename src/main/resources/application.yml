@@ -6,3 +6,12 @@ spring:
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:password}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+
+authorization:
+  policy:
+    single-transaction-limits:
+      JPY: 100000.00
+      USD: 1000.00

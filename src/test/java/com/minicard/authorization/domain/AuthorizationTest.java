@@ -1,0 +1,72 @@
+package com.minicard.authorization.domain;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Currency;
+
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class AuthorizationTest {
+
+    private static final Instant CREATED_AT = Instant.parse("2026-06-07T00:00:00Z");
+    private static final Instant DECIDED_AT = Instant.parse("2026-06-07T00:00:01Z");
+
+    @Test
+    void newAuthorizationStartsPending() {
+        Authorization authorization = authorization();
+
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.PENDING);
+        assertThat(authorization.declineReason()).isEmpty();
+        assertThat(authorization.decidedAt()).isEmpty();
+    }
+
+    @Test
+    void approvesPendingAuthorization() {
+        Authorization authorization = authorization();
+
+        authorization.approve(DECIDED_AT);
+
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.APPROVED);
+        assertThat(authorization.declineReason()).isEmpty();
+        assertThat(authorization.decidedAt()).contains(DECIDED_AT);
+    }
+
+    @Test
+    void declinesPendingAuthorizationWithReason() {
+        Authorization authorization = authorization();
+
+        authorization.decline(
+                AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED,
+                DECIDED_AT
+        );
+
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.DECLINED);
+        assertThat(authorization.declineReason())
+                .contains(AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED);
+        assertThat(authorization.decidedAt()).contains(DECIDED_AT);
+    }
+
+    @Test
+    void rejectsSecondDecision() {
+        Authorization authorization = authorization();
+        authorization.approve(DECIDED_AT);
+
+        assertThatThrownBy(() -> authorization.decline(
+                AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED,
+                DECIDED_AT
+        ))
+                .isInstanceOf(InvalidAuthorizationStateException.class)
+                .hasMessage("cannot decline authorization in status APPROVED");
+    }
+
+    private Authorization authorization() {
+        return Authorization.request(
+                "card-123",
+                new Money(new BigDecimal("100.00"), Currency.getInstance("JPY")),
+                CREATED_AT
+        );
+    }
+}

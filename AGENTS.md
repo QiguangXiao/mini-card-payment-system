@@ -48,7 +48,8 @@ Keep dependencies and responsibilities explicit.
 ## Coding Rules
 
 - Keep code simple, clear, and suitable for interview explanation.
-- Prefer explicit and understandable implementations over clever abstractions.
+- 所有关键类，方法，代码，要添加解释性注释，告诉我你这样写的考虑
+- - Prefer explicit and understandable implementations over clever abstractions.
 - Do not over-engineer.
 - Do not introduce complex frameworks before they solve a demonstrated need.
 - Follow the existing project structure and conventions.
@@ -61,12 +62,11 @@ Keep dependencies and responsibilities explicit.
 - Design all state-changing APIs and operations with idempotency in mind.
 - Make transaction boundaries explicit and explain why they are correct.
 - Consider concurrent requests, race conditions, locking, and consistency.
+- 考虑高并发和多线程
+- 考虑缓存
 - Model state transitions explicitly and reject invalid transitions.
-- Never use `double` or `float` for monetary amounts.
 - Prefer `BigDecimal` when decimal arithmetic and currency-scale semantics need
   to be explicit.
-- Prefer `long` minor units when integer arithmetic, fixed currency scale, and
-  simpler persistence are appropriate.
 - Document and explain the monetary representation chosen for each domain model.
 - Consider failure recovery and partial-failure behavior before adding
   distributed workflows.
@@ -78,9 +78,6 @@ connection.
 
 - Do not implement a complete payment system.
 - Do not add user login or authentication.
-- Do not add Kafka.
-- Do not add Redis.
-- Do not add the Outbox Pattern yet.
 - Do not split the project into complex microservices.
 - Do not add credit card authorization, capture, or refund flows until they are
   explicitly requested.
