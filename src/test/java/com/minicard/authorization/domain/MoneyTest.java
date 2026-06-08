@@ -18,10 +18,17 @@ class MoneyTest {
     }
 
     @Test
-    void rejectsNonPositiveAmount() {
-        assertThatThrownBy(() -> new Money(BigDecimal.ZERO, Currency.getInstance("JPY")))
+    void allowsZeroForBalances() {
+        Money money = new Money(BigDecimal.ZERO, Currency.getInstance("JPY"));
+
+        assertThat(money.amount()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void rejectsNegativeAmount() {
+        assertThatThrownBy(() -> new Money(new BigDecimal("-0.01"), Currency.getInstance("JPY")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("amount must be greater than zero");
+                .hasMessage("amount must not be negative");
     }
 
     @Test

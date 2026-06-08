@@ -7,6 +7,7 @@ import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDecision;
@@ -15,15 +16,21 @@ import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
+import com.minicard.card.domain.Card;
+import com.minicard.card.domain.CardRepository;
+import com.minicard.card.domain.CardStatus;
+import com.minicard.creditaccount.domain.CreditAccount;
+import com.minicard.creditaccount.domain.CreditAccountRepository;
+import com.minicard.creditaccount.domain.CreditAccountStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -31,70 +38,147 @@ class AuthorizationServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-06-07T00:00:00Z");
 
-    private AuthorizationRepository repository;
+    private AuthorizationRepository authorizationRepository;
     private AuthorizationDecisionPolicy decisionPolicy;
+    private CardRepository cardRepository;
+    private CreditAccountRepository creditAccountRepository;
     private AuthorizationService service;
 
     @BeforeEach
     void setUp() {
-        repository = mock(AuthorizationRepository.class);
+        authorizationRepository = mock(AuthorizationRepository.class);
         decisionPolicy = mock(AuthorizationDecisionPolicy.class);
+        cardRepository = mock(CardRepository.class);
+        creditAccountRepository = mock(CreditAccountRepository.class);
         service = new AuthorizationService(
-                repository,
+                authorizationRepository,
                 decisionPolicy,
+                cardRepository,
+                creditAccountRepository,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
 
     @Test
-    void approvesRequestWhenPolicyApproves() {
-        AuthorizationCommand command = command("key-1", "card-123", "100.00");
+    void approvesAndReservesAvailableCredit() {
+        arrangeNewClaim();
+        CreditAccount account = activeAccount("1000.00", "0.00");
+        Card card = activeCard("card-123", account.id());
         when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
-        when(repository.saveOrGet(eq("key-1"), any()))
-                .thenAnswer(invocation -> invocation.getArgument(1));
+        when(cardRepository.findById("card-123")).thenReturn(Optional.of(card));
+        when(creditAccountRepository.findByIdForUpdate(account.id()))
+                .thenReturn(Optional.of(account));
 
-        Authorization result = service.authorize(command);
+        Authorization result = service.authorize(command("key-1", "card-123", "100.00"));
 
-        ArgumentCaptor<Authorization> captor = ArgumentCaptor.forClass(Authorization.class);
-        verify(repository).saveOrGet(eq("key-1"), captor.capture());
-        assertThat(result).isSameAs(captor.getValue());
         assertThat(result.status()).isEqualTo(AuthorizationStatus.APPROVED);
-        assertThat(result.createdAt()).isEqualTo(NOW);
-        assertThat(result.decidedAt()).contains(NOW);
+        assertThat(account.reservedAmount().amount()).isEqualByComparingTo("100.00");
+        verify(creditAccountRepository).update(account);
+        verify(authorizationRepository).update(result);
     }
 
     @Test
-    void declinesRequestWhenPolicyDeclines() {
-        AuthorizationCommand command = command("key-1", "card-123", "200000.00");
+    void declinesWithoutReservingWhenPolicyRejectsRequest() {
+        arrangeNewClaim();
         when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.decline(
                 AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED
         ));
-        when(repository.saveOrGet(eq("key-1"), any()))
-                .thenAnswer(invocation -> invocation.getArgument(1));
 
-        Authorization result = service.authorize(command);
+        Authorization result = service.authorize(command("key-1", "card-123", "200000.00"));
 
         assertThat(result.status()).isEqualTo(AuthorizationStatus.DECLINED);
         assertThat(result.declineReason())
                 .contains(AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED);
+        verify(cardRepository, never()).findById(any());
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(authorizationRepository).update(result);
     }
 
     @Test
-    void returnsExistingAuthorizationForSameIdempotentRequest() {
-        Authorization existing = approvedAuthorization("card-123", "100.00");
+    void declinesWhenAvailableCreditIsInsufficient() {
+        arrangeNewClaim();
+        CreditAccount account = activeAccount("1000.00", "950.00");
+        Card card = activeCard("card-123", account.id());
         when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
-        when(repository.saveOrGet(eq("key-1"), any())).thenReturn(existing);
+        when(cardRepository.findById("card-123")).thenReturn(Optional.of(card));
+        when(creditAccountRepository.findByIdForUpdate(account.id()))
+                .thenReturn(Optional.of(account));
+
+        Authorization result = service.authorize(command("key-1", "card-123", "100.00"));
+
+        assertThat(result.status()).isEqualTo(AuthorizationStatus.DECLINED);
+        assertThat(result.declineReason())
+                .contains(AuthorizationDeclineReason.INSUFFICIENT_AVAILABLE_CREDIT);
+        assertThat(account.reservedAmount().amount()).isEqualByComparingTo("950.00");
+        verify(creditAccountRepository, never()).update(any());
+    }
+
+    @Test
+    void declinesWhenCardDoesNotExist() {
+        arrangeNewClaim();
+        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
+        when(cardRepository.findById("unknown-card")).thenReturn(Optional.empty());
+
+        Authorization result = service.authorize(command("key-1", "unknown-card", "100.00"));
+
+        assertThat(result.declineReason())
+                .contains(AuthorizationDeclineReason.CARD_NOT_FOUND);
+    }
+
+    @Test
+    void declinesWhenCardIsBlocked() {
+        arrangeNewClaim();
+        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
+        when(cardRepository.findById("card-blocked")).thenReturn(Optional.of(new Card(
+                "card-blocked",
+                UUID.randomUUID(),
+                CardStatus.BLOCKED
+        )));
+
+        Authorization result = service.authorize(command("key-1", "card-blocked", "100.00"));
+
+        assertThat(result.declineReason()).contains(AuthorizationDeclineReason.CARD_BLOCKED);
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void declinesWhenCardIsExpired() {
+        arrangeNewClaim();
+        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
+        when(cardRepository.findById("card-expired")).thenReturn(Optional.of(new Card(
+                "card-expired",
+                UUID.randomUUID(),
+                CardStatus.EXPIRED
+        )));
+
+        Authorization result = service.authorize(command("key-1", "card-expired", "100.00"));
+
+        assertThat(result.declineReason()).contains(AuthorizationDeclineReason.CARD_EXPIRED);
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void returnsExistingIdempotentResultWithoutReservingAgain() {
+        Authorization existing = approvedAuthorization("card-123", "100.00");
+        when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
+        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
+                .thenReturn(Optional.of(existing));
 
         Authorization result = service.authorize(command("key-1", "card-123", "100.0"));
 
         assertThat(result).isSameAs(existing);
+        verify(decisionPolicy, never()).decide(any());
+        verify(cardRepository, never()).findById(any());
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(authorizationRepository, never()).update(any());
     }
 
     @Test
     void rejectsDifferentRequestUsingSameIdempotencyKey() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
-        when(repository.saveOrGet(eq("key-1"), any())).thenReturn(existing);
+        when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
+        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
+                .thenReturn(Optional.of(existing));
 
         assertThatThrownBy(() -> service.authorize(command("key-1", "card-123", "200.00")))
                 .isInstanceOf(IdempotencyConflictException.class);
@@ -103,7 +187,7 @@ class AuthorizationServiceTest {
     @Test
     void getsAuthorizationById() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
-        when(repository.findById(existing.id())).thenReturn(Optional.of(existing));
+        when(authorizationRepository.findById(existing.id())).thenReturn(Optional.of(existing));
 
         assertThat(service.get(existing.id())).isSameAs(existing);
     }
@@ -111,10 +195,20 @@ class AuthorizationServiceTest {
     @Test
     void throwsWhenAuthorizationDoesNotExist() {
         UUID id = UUID.fromString("8f2d8907-0471-4209-9862-73e09f62cd1f");
-        when(repository.findById(id)).thenReturn(Optional.empty());
+        when(authorizationRepository.findById(id)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.get(id))
                 .isInstanceOf(AuthorizationNotFoundException.class);
+    }
+
+    private void arrangeNewClaim() {
+        AtomicReference<Authorization> claimed = new AtomicReference<>();
+        when(authorizationRepository.claim(eq("key-1"), any())).thenAnswer(invocation -> {
+            claimed.set(invocation.getArgument(1));
+            return true;
+        });
+        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
+                .thenAnswer(invocation -> Optional.of(claimed.get()));
     }
 
     private AuthorizationCommand command(String key, String cardId, String amount) {
@@ -124,6 +218,20 @@ class AuthorizationServiceTest {
                 new BigDecimal(amount),
                 Currency.getInstance("JPY")
         );
+    }
+
+    private CreditAccount activeAccount(String limit, String reserved) {
+        Currency currency = Currency.getInstance("JPY");
+        return CreditAccount.restore(
+                UUID.randomUUID(),
+                new Money(new BigDecimal(limit), currency),
+                new Money(new BigDecimal(reserved), currency),
+                CreditAccountStatus.ACTIVE
+        );
+    }
+
+    private Card activeCard(String cardId, UUID accountId) {
+        return new Card(cardId, accountId, CardStatus.ACTIVE);
     }
 
     private Authorization approvedAuthorization(String cardId, String amount) {

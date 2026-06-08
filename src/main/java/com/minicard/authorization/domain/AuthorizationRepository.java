@@ -7,5 +7,9 @@ public interface AuthorizationRepository {
 
     Optional<Authorization> findById(UUID id);
 
-    Authorization saveOrGet(String idempotencyKey, Authorization authorization);
+    boolean claim(String idempotencyKey, Authorization pendingAuthorization);
+
+    Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey);
+
+    void update(Authorization authorization);
 }

@@ -53,7 +53,7 @@ Keep dependencies and responsibilities explicit.
 - Do not over-engineer.
 - Do not introduce complex frameworks before they solve a demonstrated need.
 - Follow the existing project structure and conventions.
-- Add focused tests for important business logic and behavioral changes.
+- Add focused tests for important business logic and behavioral changes only when necessary.
 - Keep changes small and scoped to the current task.
 - After every modification, ensure `./gradlew test` passes.
 

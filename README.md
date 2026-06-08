@@ -62,8 +62,21 @@ behavior when concurrent requests use the same key.
 Amounts use a `Money` value object backed by Java `BigDecimal` and MySQL
 `DECIMAL(19,2)`. New authorizations start as `PENDING` and are explicitly
 approved or declined by a domain policy. The current policy uses configurable
-single-transaction limits; account limits, external risk decisions, capture,
-and refund flows are not implemented yet.
+single-transaction limits and reserves available credit from a locked
+`CreditAccount`. A separate `Card` model validates card lifecycle and maps cards
+to accounts, allowing multiple cards to share one credit limit. External risk
+decisions, capture, reservation release, and refund flows are not implemented
+yet.
+
+Local development includes these sample cards:
+
+- `card-123`: active JPY account with a `100000.00` credit limit
+- `card-secondary`: another active card sharing `card-123`'s account
+- `card-low-limit`: active JPY account with a `5000.00` credit limit
+- `card-blocked`: blocked card
+- `card-expired`: expired card
+- `card-account-blocked`: active card linked to a blocked account
+- `card-usd`: active USD account with a `1000.00` credit limit
 
 ## Local MySQL
 

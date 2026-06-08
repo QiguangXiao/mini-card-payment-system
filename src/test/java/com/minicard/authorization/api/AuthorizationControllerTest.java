@@ -138,6 +138,26 @@ class AuthorizationControllerTest {
                 .andExpect(jsonPath("$.code").value("AUTHORIZATION_NOT_FOUND"));
     }
 
+    @Test
+    void hidesUnexpectedInternalErrorDetails() throws Exception {
+        when(authorizationService.authorize(any()))
+                .thenThrow(new RuntimeException("database connection details"));
+
+        mockMvc.perform(post("/api/authorizations")
+                        .header("Idempotency-Key", "key-internal-error")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "cardId": "card-123",
+                                  "amount": 100,
+                                  "currency": "JPY"
+                                }
+                                """))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+                .andExpect(jsonPath("$.message").value("An unexpected error occurred"));
+    }
+
     private Authorization approvedAuthorization() {
         return Authorization.restore(
                 UUID.fromString("fb6933e2-20ea-4268-b1c2-21c6705b1884"),

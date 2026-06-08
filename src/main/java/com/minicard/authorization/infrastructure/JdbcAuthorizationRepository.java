@@ -12,6 +12,7 @@ import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -37,40 +38,63 @@ public class JdbcAuthorizationRepository implements AuthorizationRepository {
     }
 
     @Override
-    public Authorization saveOrGet(String idempotencyKey, Authorization authorization) {
-        jdbcTemplate.update(
-                """
-                INSERT INTO authorizations (
-                    id, idempotency_key, card_id, amount, currency, status,
-                    decline_reason, created_at, decided_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE id = id
-                """,
-                authorization.id().toString(),
-                idempotencyKey,
-                authorization.cardId(),
-                authorization.requestedAmount().amount(),
-                authorization.requestedAmount().currency().getCurrencyCode(),
-                authorization.status().name(),
-                authorization.declineReason().map(Enum::name).orElse(null),
-                Timestamp.from(authorization.createdAt()),
-                authorization.decidedAt().map(Timestamp::from).orElse(null)
-        );
-
-        return findByIdempotencyKey(idempotencyKey)
-                .orElseThrow(() -> new IllegalStateException(
-                        "authorization was not visible after atomic upsert"
-                ));
+    public boolean claim(String idempotencyKey, Authorization authorization) {
+        try {
+            // Insert the pending row instead of doing a read-then-write check.
+            // The unique index is the source of truth for idempotency ownership
+            // across threads and application instances.
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO authorizations (
+                        id, idempotency_key, card_id, amount, currency, status,
+                        decline_reason, created_at, decided_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    authorization.id().toString(),
+                    idempotencyKey,
+                    authorization.cardId(),
+                    authorization.requestedAmount().amount(),
+                    authorization.requestedAmount().currency().getCurrencyCode(),
+                    authorization.status().name(),
+                    authorization.declineReason().map(Enum::name).orElse(null),
+                    Timestamp.from(authorization.createdAt()),
+                    authorization.decidedAt().map(Timestamp::from).orElse(null)
+            );
+            return true;
+        } catch (DuplicateKeyException exception) {
+            // A duplicate idempotency key means another request already owns
+            // this operation. Other constraint violations still fail loudly.
+            return false;
+        }
     }
 
-    private Optional<Authorization> findByIdempotencyKey(String idempotencyKey) {
-        // FOR UPDATE performs a current read, so the transaction sees the row
-        // selected by the upsert even under MySQL REPEATABLE READ.
+    @Override
+    public Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey) {
+        // A duplicate insert blocks behind an uncommitted winner. This current
+        // read then observes the completed result under REPEATABLE READ and
+        // keeps duplicate requests from returning while the winner is deciding.
         return jdbcTemplate.query(
                 "SELECT * FROM authorizations WHERE idempotency_key = ? FOR UPDATE",
                 ROW_MAPPER,
                 idempotencyKey
         ).stream().findFirst();
+    }
+
+    @Override
+    public void update(Authorization authorization) {
+        // Only decision columns are updated after claim. Request identity fields
+        // remain immutable, which is important for idempotency auditing.
+        jdbcTemplate.update(
+                """
+                UPDATE authorizations
+                SET status = ?, decline_reason = ?, decided_at = ?
+                WHERE id = ?
+                """,
+                authorization.status().name(),
+                authorization.declineReason().map(Enum::name).orElse(null),
+                authorization.decidedAt().map(Timestamp::from).orElse(null),
+                authorization.id().toString()
+        );
     }
 
     private static final class AuthorizationRowMapper implements RowMapper<Authorization> {

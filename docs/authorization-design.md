@@ -4,8 +4,9 @@
 
 The Authorization module demonstrates a small but explicit DDD vertical slice.
 It models an issuer-side decision about whether a requested card transaction is
-approved or declined. It does not yet reserve credit, call a risk system, or
-implement capture and refund flows.
+approved or declined. Approved requests reserve available credit on a
+`CreditAccount`. It does not yet call a risk system or implement capture and
+refund flows.
 
 ## Aggregate Boundary
 
@@ -24,6 +25,49 @@ The aggregate protects these invariants:
 `Money` is a value object. It keeps amount and currency together and rejects
 invalid monetary values before they reach persistence.
 
+## Credit Account Aggregate
+
+`CreditAccount` is a separate aggregate root because credit limit and reserved
+balance have their own lifecycle and consistency rules. It is not embedded in
+Authorization, and a user/customer aggregate is deliberately not required for
+the authorization decision.
+
+## Card Aggregate
+
+`Card` maps the presented card identifier to a CreditAccount and owns the card
+lifecycle status. This separation supports multiple cards sharing one account
+without duplicating or fragmenting the account's available-credit balance.
+
+The authorization flow rejects missing, blocked, and expired cards before
+locking or changing their CreditAccount.
+
+Authorization records intentionally keep the presented `card_id` without a
+foreign key to `cards`. This allows the system to retain a declined attempt for
+an unknown card while still enforcing the Card-to-CreditAccount relationship
+inside the `cards` table.
+
+Authorization records intentionally do not have a foreign key to `cards`.
+Declined attempts for unknown card identifiers still need an audit record. In a
+production system, `cardId` should be an internal token and never a plaintext
+primary account number.
+
+The account protects these invariants:
+
+- Reserved amount cannot be negative or exceed the credit limit.
+- Credit limit and reserved amount use the same currency.
+- Blocked accounts cannot reserve credit.
+- A reservation cannot exceed currently available credit.
+
+Available credit is calculated as:
+
+```text
+credit limit - reserved amount
+```
+
+The repository loads the account with `SELECT ... FOR UPDATE`. Concurrent
+authorizations for the same account are therefore serialized before checking
+and changing available credit, preventing overspending.
+
 ## Domain Service
 
 `AuthorizationDecisionPolicy` is a domain service because the decision rule does
@@ -39,14 +83,21 @@ and risk bounded contexts.
 
 `AuthorizationService` is responsible for the use case and transaction boundary:
 
-1. Create a pending Authorization.
-2. Ask the domain policy for a decision.
-3. Apply the decision through aggregate behavior.
-4. Persist the result using an idempotency key.
-5. Return the winning result for concurrent duplicate requests.
+1. Atomically claim an idempotency key with a pending Authorization.
+2. Return the original result when another request already owns that key.
+3. Ask the domain policy for preliminary rules such as transaction limits.
+4. Validate the Card and resolve its CreditAccount.
+5. Lock the CreditAccount and attempt to reserve available credit.
+6. Approve or decline the Authorization with an explicit reason.
+7. Persist the account reservation and authorization decision in one transaction.
 
 The application service coordinates the workflow but does not contain the
 authorization state-transition rules.
+
+This monolith intentionally updates two aggregates in one local database
+transaction because approving an authorization without reserving its credit
+would violate a critical financial invariant. A distributed version would need
+a different consistency design and explicit failure recovery.
 
 ## Idempotency and Concurrency
 
@@ -54,9 +105,19 @@ The idempotency key is request-processing metadata, so it is not a property of
 the Authorization aggregate. The repository stores it with the row to provide
 an atomic database uniqueness boundary.
 
-MySQL chooses one winner through a unique constraint and atomic upsert.
-`SELECT ... FOR UPDATE` then performs a current read, which avoids stale
-snapshot behavior under MySQL's default `REPEATABLE READ` isolation.
+MySQL chooses one winner through the unique idempotency-key constraint. The
+winner owns the pending Authorization and may reserve credit. A duplicate
+request blocks behind the winner and then reads the completed result with
+`SELECT ... FOR UPDATE`, avoiding duplicate reservations and stale snapshot
+behavior under MySQL's default `REPEATABLE READ` isolation.
+
+All authorization flows acquire locks in the same order:
+
+```text
+Authorization idempotency row -> Card read -> CreditAccount row
+```
+
+Consistent lock ordering reduces deadlock risk as more workflows are added.
 
 Repeating the same key and request returns the original result. Reusing the key
 for different card, amount, or currency data returns `409 Conflict`.
@@ -73,16 +134,18 @@ Domain code is the primary place for business rules. The MySQL table also uses
 constraints for positive amounts and valid status/decision column combinations.
 This protects data when writes occur outside the normal application path.
 
+The CreditAccount table additionally prevents negative reservations and
+reservations above the credit limit.
+
 `schema.sql` is currently used only for this early local-development stage.
 A production system should replace it with versioned schema migrations before
 multiple environments or valuable data are introduced.
 
 ## Deliberately Deferred Production Concerns
 
-- Card lifecycle and blocked-card checks
-- Available-credit reservation and release
 - Fraud and risk service integration
 - Authorization expiry and reversal
+- Reservation release after decline, reversal, expiry, or capture
 - Optimistic versioning for later aggregate updates
 - Capture and refund aggregates
 - Outbox events and asynchronous processing

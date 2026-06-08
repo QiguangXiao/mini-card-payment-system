@@ -62,6 +62,17 @@ class AuthorizationTest {
                 .hasMessage("cannot decline authorization in status APPROVED");
     }
 
+    @Test
+    void rejectsZeroAuthorizationAmount() {
+        assertThatThrownBy(() -> Authorization.request(
+                "card-123",
+                new Money(BigDecimal.ZERO, Currency.getInstance("JPY")),
+                CREATED_AT
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("authorization amount must be greater than zero");
+    }
+
     private Authorization authorization() {
         return Authorization.request(
                 "card-123",

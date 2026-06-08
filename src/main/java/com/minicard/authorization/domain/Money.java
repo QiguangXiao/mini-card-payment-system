@@ -9,8 +9,8 @@ public record Money(BigDecimal amount, Currency currency) {
     public Money {
         Objects.requireNonNull(amount, "amount must not be null");
         Objects.requireNonNull(currency, "currency must not be null");
-        if (amount.signum() <= 0) {
-            throw new IllegalArgumentException("amount must be greater than zero");
+        if (amount.signum() < 0) {
+            throw new IllegalArgumentException("amount must not be negative");
         }
         if (amount.scale() > 2) {
             throw new IllegalArgumentException("amount must have at most 2 decimal places");
@@ -24,6 +24,20 @@ public record Money(BigDecimal amount, Currency currency) {
     public boolean isGreaterThan(Money other) {
         ensureSameCurrency(other);
         return amount.compareTo(other.amount) > 0;
+    }
+
+    public Money add(Money other) {
+        ensureSameCurrency(other);
+        return new Money(amount.add(other.amount), currency);
+    }
+
+    public Money subtract(Money other) {
+        ensureSameCurrency(other);
+        return new Money(amount.subtract(other.amount), currency);
+    }
+
+    public boolean isPositive() {
+        return amount.signum() > 0;
     }
 
     private void ensureSameCurrency(Money other) {

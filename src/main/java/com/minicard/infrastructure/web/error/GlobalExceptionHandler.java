@@ -6,6 +6,8 @@ import com.minicard.authorization.application.AuthorizationNotFoundException;
 import com.minicard.authorization.application.IdempotencyConflictException;
 import com.minicard.authorization.domain.InvalidAuthorizationStateException;
 import jakarta.validation.ConstraintViolationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -15,6 +17,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(AuthorizationNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(AuthorizationNotFoundException exception) {
@@ -43,6 +47,17 @@ public class GlobalExceptionHandler {
     })
     public ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", exception.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleUnexpected(Exception exception) {
+        // Internal details stay in server logs and are never exposed to clients.
+        log.error("Unexpected request processing failure", exception);
+        return error(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "An unexpected error occurred"
+        );
     }
 
     private ResponseEntity<ErrorResponse> error(HttpStatus status, String code, String message) {
