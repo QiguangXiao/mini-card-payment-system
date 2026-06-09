@@ -1,1 +1,1 @@
-ALTER USER 'root'@'%' IDENTIFIED BY 'password';
+ALTER USER 'root'@'%' IDENTIFIED BY 'rootpassword';

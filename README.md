@@ -12,6 +12,8 @@ Backend Engineer interview.
 - Spring Boot 3.x
 - Gradle with Gradle Wrapper
 - MySQL 8.4 LTS with Docker Compose
+- MyBatis for primary repository implementations
+- JdbcTemplate retained for one focused comparison example
 - JUnit 5 and Spring MVC Test
 
 ## Current Stage
@@ -22,6 +24,11 @@ with local and simulated external risk checks.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
+
+Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
+idempotency behavior remain explicit while repetitive JDBC row mapping is
+reduced. `JdbcRiskVelocityRepository` intentionally remains implemented with
+`JdbcTemplate` as a small comparison example.
 
 Health check:
 
@@ -97,8 +104,7 @@ The local database connection is:
 - Database: `mini_card`
 - Host: `localhost:3306`
 - Application user: `root`
-- Application password: `password`
-- Local administrative root password: `rootpassword`
+- Application and local root password: `rootpassword`
 
 Stop MySQL:
 

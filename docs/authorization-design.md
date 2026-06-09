@@ -161,6 +161,25 @@ This protects data when writes occur outside the normal application path.
 The CreditAccount table additionally prevents negative reservations and
 reservations above the credit limit.
 
+Primary persistence adapters use MyBatis XML mappers. Domain repository
+interfaces remain independent from MyBatis:
+
+```text
+domain Repository interface
+        <- MyBatis Repository adapter
+        <- Mapper interface + XML SQL + persistence Row
+```
+
+Persistence Row records mirror database columns. Repository adapters translate
+them into domain objects through constructors and `restore` methods. This keeps
+MyBatis concerns, mutable persistence conventions, and SQL mapping outside the
+domain model.
+
+`JdbcRiskVelocityRepository` intentionally remains a small JdbcTemplate example
+for comparing direct JDBC-style mapping with MyBatis. Both approaches keep SQL
+explicit; MyBatis is used where repeated mappings and multiple operations make
+the additional mapper structure worthwhile.
+
 `schema.sql` is currently used only for this early local-development stage.
 A production system should replace it with versioned schema migrations before
 multiple environments or valuable data are introduced.

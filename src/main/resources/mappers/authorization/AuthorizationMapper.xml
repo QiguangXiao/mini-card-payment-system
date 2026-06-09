@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.authorization.infrastructure.mybatis.AuthorizationMapper">
+
+    <resultMap id="authorizationRowMap"
+               type="com.minicard.authorization.infrastructure.mybatis.AuthorizationRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="request_fingerprint" javaType="java.lang.String"/>
+            <arg column="card_id" javaType="java.lang.String"/>
+            <arg column="amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="decline_reason" javaType="java.lang.String"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="decided_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="authorizationColumns">
+        id, request_fingerprint, card_id, amount, currency, status,
+        decline_reason, created_at, decided_at
+    </sql>
+
+    <select id="findById" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE id = #{id}
+    </select>
+
+    <!--
+      INSERT-first idempotency avoids a racy read-then-insert sequence.
+      The unique idempotency_key constraint chooses the single winner.
+    -->
+    <insert id="insert">
+        INSERT INTO authorizations (
+            id, idempotency_key, request_fingerprint, card_id, amount, currency,
+            status, decline_reason, created_at, decided_at
+        ) VALUES (
+            #{authorization.id},
+            #{idempotencyKey},
+            #{authorization.requestFingerprint},
+            #{authorization.cardId},
+            #{authorization.amount},
+            #{authorization.currency},
+            #{authorization.status},
+            #{authorization.declineReason,jdbcType=VARCHAR},
+            #{authorization.createdAt},
+            #{authorization.decidedAt,jdbcType=TIMESTAMP}
+        )
+    </insert>
+
+    <!--
+      A concurrent duplicate waits for the winning transaction and then reads
+      its final decision instead of performing a second credit reservation.
+    -->
+    <select id="findByIdempotencyKeyForUpdate" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <update id="update">
+        UPDATE authorizations
+        SET status = #{status},
+            decline_reason = #{declineReason,jdbcType=VARCHAR},
+            decided_at = #{decidedAt,jdbcType=TIMESTAMP}
+        WHERE id = #{id}
+    </update>
+
+</mapper>
