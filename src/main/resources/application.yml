@@ -15,3 +15,33 @@ authorization:
     single-transaction-limits:
       JPY: 100000.00
       USD: 1000.00
+
+risk:
+  local:
+    velocity-window-seconds: 60
+    max-authorizations-per-window: 3
+    high-risk-amount-thresholds:
+      JPY: 50000.00
+      USD: 500.00
+    blocked-merchant-ids:
+      - merchant-blocked
+  external:
+    simulated-latency-millis: 100
+    failure-rate-percent: 0
+    high-risk-score-threshold: 80
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      externalRisk:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+  timelimiter:
+    instances:
+      externalRisk:
+        timeout-duration: 500ms
+        cancel-running-future: true

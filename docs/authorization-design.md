@@ -5,8 +5,8 @@
 The Authorization module demonstrates a small but explicit DDD vertical slice.
 It models an issuer-side decision about whether a requested card transaction is
 approved or declined. Approved requests reserve available credit on a
-`CreditAccount`. It does not yet call a risk system or implement capture and
-refund flows.
+`CreditAccount`. It now includes a small Risk bounded-context collaboration,
+but it does not yet implement capture and refund flows.
 
 ## Aggregate Boundary
 
@@ -79,6 +79,27 @@ The configured limits are intentionally a demonstration rule. A production card
 issuer would normally coordinate with card, account, available-credit, fraud,
 and risk bounded contexts.
 
+## Risk Checks
+
+`RiskAssessmentService` coordinates two risk layers:
+
+- `LocalRiskPolicy` performs deterministic rules inside the service boundary:
+  blocked merchant, recent authorization velocity, high amount per currency,
+  and country mismatch.
+- `SimulatedExternalRiskGateway` models a third-party or separate internal risk
+  engine and is protected by Resilience4j timeout, circuit breaker, and
+  fallback.
+
+The current fallback is fail-closed: if external risk is unavailable, the
+authorization is declined with `RISK_EXTERNAL_UNAVAILABLE`. That is conservative
+for a learning project. Real issuers may choose a mixed policy, such as
+fail-open only for low-value trusted merchants, but that must be explicit and
+auditable.
+
+Risk runs after Card eligibility and before the `CreditAccount` row lock. This
+keeps external latency out of the account-lock critical section while still
+avoiding unnecessary risk calls for missing, blocked, or expired cards.
+
 ## Application Service and Transaction
 
 `AuthorizationService` is responsible for the use case and transaction boundary:
@@ -87,9 +108,10 @@ and risk bounded contexts.
 2. Return the original result when another request already owns that key.
 3. Ask the domain policy for preliminary rules such as transaction limits.
 4. Validate the Card and resolve its CreditAccount.
-5. Lock the CreditAccount and attempt to reserve available credit.
-6. Approve or decline the Authorization with an explicit reason.
-7. Persist the account reservation and authorization decision in one transaction.
+5. Run local and external risk checks.
+6. Lock the CreditAccount and attempt to reserve available credit.
+7. Approve or decline the Authorization with an explicit reason.
+8. Persist the account reservation and authorization decision in one transaction.
 
 The application service coordinates the workflow but does not contain the
 authorization state-transition rules.
@@ -101,9 +123,11 @@ a different consistency design and explicit failure recovery.
 
 ## Idempotency and Concurrency
 
-The idempotency key is request-processing metadata, so it is not a property of
-the Authorization aggregate. The repository stores it with the row to provide
-an atomic database uniqueness boundary.
+The idempotency key is request-processing metadata. The repository stores it
+with the row to provide an atomic database uniqueness boundary. The row also
+stores a SHA-256 request fingerprint so the application can reject reuse of the
+same idempotency key for different card, amount, currency, merchant, or
+geolocation data.
 
 MySQL chooses one winner through the unique idempotency-key constraint. The
 winner owns the pending Authorization and may reserve credit. A duplicate
@@ -120,7 +144,7 @@ Authorization idempotency row -> Card read -> CreditAccount row
 Consistent lock ordering reduces deadlock risk as more workflows are added.
 
 Repeating the same key and request returns the original result. Reusing the key
-for different card, amount, or currency data returns `409 Conflict`.
+for different request data returns `409 Conflict`.
 
 ## API Semantics
 
@@ -143,7 +167,7 @@ multiple environments or valuable data are introduced.
 
 ## Deliberately Deferred Production Concerns
 
-- Fraud and risk service integration
+- Production fraud/risk model integration
 - Authorization expiry and reversal
 - Reservation release after decline, reversal, expiry, or capture
 - Optimistic versioning for later aggregate updates

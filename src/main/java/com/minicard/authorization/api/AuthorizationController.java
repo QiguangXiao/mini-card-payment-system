@@ -39,7 +39,10 @@ public class AuthorizationController {
                 idempotencyKey,
                 request.cardId(),
                 request.amount(),
-                Currency.getInstance(request.currency())
+                Currency.getInstance(request.currency()),
+                request.merchantId(),
+                request.merchantCountry(),
+                request.cardholderCountry()
         );
         return AuthorizationResponse.from(authorizationService.authorize(command));
     }

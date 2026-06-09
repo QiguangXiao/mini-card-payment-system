@@ -17,7 +17,8 @@ Backend Engineer interview.
 ## Current Stage
 
 The project currently contains a minimal runnable Spring Boot application, a
-health check endpoint, and the first DDD vertical slice for card authorization.
+health check endpoint, and the first DDD vertical slice for card authorization
+with local and simulated external risk checks.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
@@ -44,7 +45,10 @@ Content-Type: application/json
 {
   "cardId": "card-123",
   "amount": 100,
-  "currency": "JPY"
+  "currency": "JPY",
+  "merchantId": "merchant-123",
+  "merchantCountry": "JP",
+  "cardholderCountry": "JP"
 }
 ```
 
@@ -64,9 +68,11 @@ Amounts use a `Money` value object backed by Java `BigDecimal` and MySQL
 approved or declined by a domain policy. The current policy uses configurable
 single-transaction limits and reserves available credit from a locked
 `CreditAccount`. A separate `Card` model validates card lifecycle and maps cards
-to accounts, allowing multiple cards to share one credit limit. External risk
-decisions, capture, reservation release, and refund flows are not implemented
-yet.
+to accounts, allowing multiple cards to share one credit limit. The Risk module
+checks local velocity, high amount, merchant, and geolocation rules before
+calling a simulated external risk service protected by timeout, fallback, and a
+circuit breaker. Capture, reservation release, and refund flows are not
+implemented yet.
 
 Local development includes these sample cards:
 

@@ -65,6 +65,7 @@ class AuthorizationTest {
     @Test
     void rejectsZeroAuthorizationAmount() {
         assertThatThrownBy(() -> Authorization.request(
+                "fingerprint-1",
                 "card-123",
                 new Money(BigDecimal.ZERO, Currency.getInstance("JPY")),
                 CREATED_AT
@@ -75,6 +76,7 @@ class AuthorizationTest {
 
     private Authorization authorization() {
         return Authorization.request(
+                "fingerprint-1",
                 "card-123",
                 new Money(new BigDecimal("100.00"), Currency.getInstance("JPY")),
                 CREATED_AT

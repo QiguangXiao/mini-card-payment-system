@@ -50,7 +50,10 @@ class AuthorizationControllerTest {
                                 {
                                   "cardId": "card-123",
                                   "amount": 100,
-                                  "currency": "JPY"
+                                  "currency": "JPY",
+                                  "merchantId": "merchant-123",
+                                  "merchantCountry": "JP",
+                                  "cardholderCountry": "JP"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -74,7 +77,10 @@ class AuthorizationControllerTest {
                                 {
                                   "cardId": "card-123",
                                   "amount": 200000,
-                                  "currency": "JPY"
+                                  "currency": "JPY",
+                                  "merchantId": "merchant-123",
+                                  "merchantCountry": "JP",
+                                  "cardholderCountry": "JP"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -92,7 +98,10 @@ class AuthorizationControllerTest {
                                 {
                                   "cardId": "card-123",
                                   "amount": 0,
-                                  "currency": "JPY"
+                                  "currency": "JPY",
+                                  "merchantId": "merchant-123",
+                                  "merchantCountry": "JP",
+                                  "cardholderCountry": "JP"
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
@@ -110,7 +119,10 @@ class AuthorizationControllerTest {
                                 {
                                   "cardId": "card-123",
                                   "amount": 200,
-                                  "currency": "JPY"
+                                  "currency": "JPY",
+                                  "merchantId": "merchant-123",
+                                  "merchantCountry": "JP",
+                                  "cardholderCountry": "JP"
                                 }
                                 """))
                 .andExpect(status().isConflict())
@@ -150,7 +162,10 @@ class AuthorizationControllerTest {
                                 {
                                   "cardId": "card-123",
                                   "amount": 100,
-                                  "currency": "JPY"
+                                  "currency": "JPY",
+                                  "merchantId": "merchant-123",
+                                  "merchantCountry": "JP",
+                                  "cardholderCountry": "JP"
                                 }
                                 """))
                 .andExpect(status().isInternalServerError())
@@ -161,6 +176,7 @@ class AuthorizationControllerTest {
     private Authorization approvedAuthorization() {
         return Authorization.restore(
                 UUID.fromString("fb6933e2-20ea-4268-b1c2-21c6705b1884"),
+                "fingerprint-1",
                 "card-123",
                 new Money(new BigDecimal("100.00"), Currency.getInstance("JPY")),
                 AuthorizationStatus.APPROVED,
@@ -173,6 +189,7 @@ class AuthorizationControllerTest {
     private Authorization declinedAuthorization() {
         return Authorization.restore(
                 UUID.fromString("9e5958ad-8be0-44dc-bded-da06199c4a73"),
+                "fingerprint-2",
                 "card-123",
                 new Money(new BigDecimal("200000.00"), Currency.getInstance("JPY")),
                 AuthorizationStatus.DECLINED,

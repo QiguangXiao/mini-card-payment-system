@@ -8,6 +8,7 @@ import java.util.UUID;
 public final class Authorization {
 
     private final UUID id;
+    private final String requestFingerprint;
     private final String cardId;
     private final Money requestedAmount;
     private AuthorizationStatus status;
@@ -17,6 +18,7 @@ public final class Authorization {
 
     private Authorization(
             UUID id,
+            String requestFingerprint,
             String cardId,
             Money requestedAmount,
             AuthorizationStatus status,
@@ -25,6 +27,7 @@ public final class Authorization {
             Instant decidedAt
     ) {
         this.id = Objects.requireNonNull(id);
+        this.requestFingerprint = requireText(requestFingerprint, "requestFingerprint");
         this.cardId = requireText(cardId, "cardId");
         this.requestedAmount = Objects.requireNonNull(requestedAmount);
         if (!requestedAmount.isPositive()) {
@@ -37,12 +40,18 @@ public final class Authorization {
         validateDecisionState();
     }
 
-    public static Authorization request(String cardId, Money requestedAmount, Instant createdAt) {
+    public static Authorization request(
+            String requestFingerprint,
+            String cardId,
+            Money requestedAmount,
+            Instant createdAt
+    ) {
         // An authorization attempt is first recorded as PENDING. Approval is not
         // assumed at construction time because card/account/risk checks must run
         // before a final decision exists.
         return new Authorization(
                 UUID.randomUUID(),
+                requestFingerprint,
                 cardId,
                 requestedAmount,
                 AuthorizationStatus.PENDING,
@@ -54,6 +63,7 @@ public final class Authorization {
 
     public static Authorization restore(
             UUID id,
+            String requestFingerprint,
             String cardId,
             Money requestedAmount,
             AuthorizationStatus status,
@@ -63,6 +73,7 @@ public final class Authorization {
     ) {
         return new Authorization(
                 id,
+                requestFingerprint,
                 cardId,
                 requestedAmount,
                 status,
@@ -134,6 +145,10 @@ public final class Authorization {
 
     public UUID id() {
         return id;
+    }
+
+    public String requestFingerprint() {
+        return requestFingerprint;
     }
 
     public String cardId() {

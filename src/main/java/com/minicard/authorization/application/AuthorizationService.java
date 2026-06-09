@@ -17,6 +17,9 @@ import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditReservationFailure;
 import com.minicard.creditaccount.domain.CreditReservationResult;
+import com.minicard.risk.application.RiskAssessmentService;
+import com.minicard.risk.domain.RiskDecision;
+import com.minicard.risk.domain.RiskDeclineReason;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +30,7 @@ public class AuthorizationService {
     private final AuthorizationDecisionPolicy decisionPolicy;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final RiskAssessmentService riskAssessmentService;
     private final Clock clock;
 
     public AuthorizationService(
@@ -34,12 +38,14 @@ public class AuthorizationService {
             AuthorizationDecisionPolicy decisionPolicy,
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
+            RiskAssessmentService riskAssessmentService,
             Clock clock
     ) {
         this.authorizationRepository = authorizationRepository;
         this.decisionPolicy = decisionPolicy;
         this.cardRepository = cardRepository;
         this.creditAccountRepository = creditAccountRepository;
+        this.riskAssessmentService = riskAssessmentService;
         this.clock = clock;
     }
 
@@ -50,6 +56,7 @@ public class AuthorizationService {
         // before any business decision is made. This mirrors a real issuer flow:
         // receive request -> record attempt -> decide -> persist final outcome.
         Authorization pending = Authorization.request(
+                command.requestFingerprint(),
                 command.cardId(),
                 command.requestedAmount(),
                 now
@@ -77,7 +84,7 @@ public class AuthorizationService {
         }
 
         // Only the idempotency winner reaches the real decision path.
-        decideAndReserve(persisted, now);
+        decideAndReserve(persisted, command, now);
         authorizationRepository.update(persisted);
         return persisted;
     }
@@ -88,7 +95,11 @@ public class AuthorizationService {
                 .orElseThrow(() -> new AuthorizationNotFoundException(id));
     }
 
-    private void decideAndReserve(Authorization authorization, Instant now) {
+    private void decideAndReserve(
+            Authorization authorization,
+            AuthorizationCommand command,
+            Instant now
+    ) {
         // Cheap policy checks run before locking account rows. This keeps the
         // critical section short under high traffic.
         AuthorizationDecision decision = decisionPolicy.decide(authorization);
@@ -111,6 +122,15 @@ public class AuthorizationService {
             // Keep card-specific reasons in the Card domain, then translate them
             // into Authorization decline reasons for the API and audit record.
             authorization.decline(mapCardFailure(eligibility.failure()), now);
+            return;
+        }
+
+        // Risk check runs before the credit-account row lock. That order keeps
+        // external latency and algorithmic scoring out of the hot critical
+        // section where concurrent authorizations queue for the same account.
+        RiskDecision riskDecision = riskAssessmentService.assess(command.toRiskAssessmentRequest());
+        if (!riskDecision.approved()) {
+            authorization.decline(mapRiskFailure(riskDecision.declineReason()), now);
             return;
         }
 
@@ -153,6 +173,17 @@ public class AuthorizationService {
             case CURRENCY_MISMATCH -> AuthorizationDeclineReason.CURRENCY_MISMATCH;
             case INSUFFICIENT_AVAILABLE_CREDIT ->
                     AuthorizationDeclineReason.INSUFFICIENT_AVAILABLE_CREDIT;
+        };
+    }
+
+    private AuthorizationDeclineReason mapRiskFailure(RiskDeclineReason failure) {
+        return switch (failure) {
+            case VELOCITY_EXCEEDED -> AuthorizationDeclineReason.RISK_VELOCITY_EXCEEDED;
+            case HIGH_RISK_AMOUNT -> AuthorizationDeclineReason.RISK_HIGH_AMOUNT;
+            case GEOLOCATION_MISMATCH -> AuthorizationDeclineReason.RISK_GEOLOCATION_MISMATCH;
+            case BLOCKED_MERCHANT -> AuthorizationDeclineReason.RISK_BLOCKED_MERCHANT;
+            case EXTERNAL_RISK_DECLINED -> AuthorizationDeclineReason.RISK_EXTERNAL_DECLINED;
+            case EXTERNAL_RISK_UNAVAILABLE -> AuthorizationDeclineReason.RISK_EXTERNAL_UNAVAILABLE;
         };
     }
 

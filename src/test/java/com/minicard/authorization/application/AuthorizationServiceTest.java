@@ -22,6 +22,8 @@ import com.minicard.card.domain.CardStatus;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
+import com.minicard.risk.application.RiskAssessmentService;
+import com.minicard.risk.domain.RiskDecision;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +44,7 @@ class AuthorizationServiceTest {
     private AuthorizationDecisionPolicy decisionPolicy;
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
+    private RiskAssessmentService riskAssessmentService;
     private AuthorizationService service;
 
     @BeforeEach
@@ -50,11 +53,14 @@ class AuthorizationServiceTest {
         decisionPolicy = mock(AuthorizationDecisionPolicy.class);
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
+        riskAssessmentService = mock(RiskAssessmentService.class);
+        when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
                 authorizationRepository,
                 decisionPolicy,
                 cardRepository,
                 creditAccountRepository,
+                riskAssessmentService,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -216,7 +222,10 @@ class AuthorizationServiceTest {
                 key,
                 cardId,
                 new BigDecimal(amount),
-                Currency.getInstance("JPY")
+                Currency.getInstance("JPY"),
+                "merchant-123",
+                "JP",
+                "JP"
         );
     }
 
@@ -237,6 +246,7 @@ class AuthorizationServiceTest {
     private Authorization approvedAuthorization(String cardId, String amount) {
         return Authorization.restore(
                 UUID.randomUUID(),
+                command("existing-key", cardId, amount).requestFingerprint(),
                 cardId,
                 new Money(new BigDecimal(amount), Currency.getInstance("JPY")),
                 AuthorizationStatus.APPROVED,

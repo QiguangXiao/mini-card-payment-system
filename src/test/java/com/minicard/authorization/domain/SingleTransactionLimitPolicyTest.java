@@ -42,6 +42,7 @@ class SingleTransactionLimitPolicyTest {
 
     private Authorization authorization(String amount, String currency) {
         return Authorization.request(
+                "fingerprint-1",
                 "card-123",
                 new Money(new BigDecimal(amount), Currency.getInstance(currency)),
                 Instant.parse("2026-06-07T00:00:00Z")

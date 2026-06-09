@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS cards (
 CREATE TABLE IF NOT EXISTS authorizations (
     id CHAR(36) PRIMARY KEY,
     idempotency_key VARCHAR(100) NOT NULL,
+    request_fingerprint CHAR(64) NOT NULL,
     card_id VARCHAR(100) NOT NULL,
     amount DECIMAL(19, 2) NOT NULL,
     currency CHAR(3) NOT NULL,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS authorizations (
     created_at TIMESTAMP(6) NOT NULL,
     decided_at TIMESTAMP(6) NULL,
     CONSTRAINT uk_authorizations_idempotency_key UNIQUE (idempotency_key),
+    INDEX idx_authorizations_card_created_at (card_id, created_at),
     CONSTRAINT chk_authorizations_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_authorizations_decision_state CHECK (
         (status = 'PENDING' AND decline_reason IS NULL AND decided_at IS NULL)

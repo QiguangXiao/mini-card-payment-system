@@ -46,12 +46,14 @@ public class JdbcAuthorizationRepository implements AuthorizationRepository {
             jdbcTemplate.update(
                     """
                     INSERT INTO authorizations (
-                        id, idempotency_key, card_id, amount, currency, status,
+                        id, idempotency_key, request_fingerprint,
+                        card_id, amount, currency, status,
                         decline_reason, created_at, decided_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     authorization.id().toString(),
                     idempotencyKey,
+                    authorization.requestFingerprint(),
                     authorization.cardId(),
                     authorization.requestedAmount().amount(),
                     authorization.requestedAmount().currency().getCurrencyCode(),
@@ -103,6 +105,7 @@ public class JdbcAuthorizationRepository implements AuthorizationRepository {
         public Authorization mapRow(ResultSet resultSet, int rowNum) throws SQLException {
             return Authorization.restore(
                     UUID.fromString(resultSet.getString("id")),
+                    resultSet.getString("request_fingerprint"),
                     resultSet.getString("card_id"),
                     new Money(
                             resultSet.getBigDecimal("amount"),
