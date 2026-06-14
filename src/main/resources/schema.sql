@@ -58,6 +58,44 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     CONSTRAINT chk_outbox_attempts_non_negative CHECK (attempts >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+    id CHAR(36) PRIMARY KEY,
+    source_event_id CHAR(36) NOT NULL,
+    authorization_id CHAR(36) NOT NULL,
+    card_id VARCHAR(100) NOT NULL,
+    template VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    delivery_attempts INT NOT NULL DEFAULT 0,
+    last_error VARCHAR(500) NULL,
+    sent_at TIMESTAMP(6) NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_notifications_source_event UNIQUE (source_event_id),
+    CONSTRAINT chk_notifications_delivery_attempts CHECK (delivery_attempts >= 0),
+    CONSTRAINT chk_notifications_status CHECK (status IN ('PENDING', 'SENT', 'FAILED'))
+);
+
+CREATE TABLE IF NOT EXISTS consumer_inbox (
+    consumer_name VARCHAR(100) NOT NULL,
+    event_id CHAR(36) NOT NULL,
+    processed_at TIMESTAMP(6) NOT NULL,
+    PRIMARY KEY (consumer_name, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS card_risk_features (
+    card_id VARCHAR(100) PRIMARY KEY,
+    authorization_count BIGINT NOT NULL DEFAULT 0,
+    approved_count BIGINT NOT NULL DEFAULT 0,
+    declined_count BIGINT NOT NULL DEFAULT 0,
+    last_decision_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT chk_card_risk_feature_counts CHECK (
+        authorization_count >= 0
+        AND approved_count >= 0
+        AND declined_count >= 0
+        AND approved_count + declined_count = authorization_count
+    )
+);
+
 INSERT IGNORE INTO credit_accounts (
     id, credit_limit, reserved_amount, currency, status
 ) VALUES

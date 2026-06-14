@@ -86,7 +86,16 @@ implemented yet.
 
 Final authorization decisions are written to a MySQL Transactional Outbox in the
 same transaction as the decision. A scheduled publisher later sends them to
-Kafka using at-least-once delivery. Consumers are intentionally deferred.
+Kafka using at-least-once delivery.
+
+Two independent consumer groups demonstrate different production patterns:
+
+- The independent Notification bounded context creates idempotent `Notification`
+  aggregates and owns their delivery lifecycle.
+- The existing Risk bounded context maintains an idempotent, replayable
+  card-risk feature projection. It is deliberately not modeled as an aggregate.
+
+Each consumer has its own retry and dead-letter topic.
 
 Local development includes these sample cards:
 
@@ -133,6 +142,13 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --from-beginning \
   --property print.key=true \
   --property print.headers=true
+```
+
+Dead-letter topics:
+
+```text
+mini-card.authorization-notification.dlt.v1
+mini-card.authorization-risk-feature.dlt.v1
 ```
 
 Stop local services:

@@ -20,6 +20,14 @@ spring:
         max.in.flight.requests.per.connection: 5
         delivery.timeout.ms: 10000
         request.timeout.ms: 3000
+    consumer:
+      # Offsets are committed only after a listener returns successfully.
+      # Database side effects remain idempotent because Kafka and MySQL cannot
+      # participate in one atomic local transaction.
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+    listener:
+      ack-mode: record
 
 mybatis:
   mapper-locations: classpath:mappers/**/*.xml
@@ -27,6 +35,15 @@ mybatis:
 messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
+    notification-dead-letter: mini-card.authorization-notification.dlt.v1
+    risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
+  consumers:
+    notification:
+      group-id: mini-card-notification-v1
+    risk-feature:
+      group-id: mini-card-risk-feature-v1
+    dead-letter-monitor:
+      group-id: mini-card-dead-letter-monitor-v1
 
 outbox:
   publisher:

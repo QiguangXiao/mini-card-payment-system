@@ -12,6 +12,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Polls durable Outbox rows and hands them to Kafka with at-least-once delivery.
+ *
+ * <p>The database lock prevents multiple application instances from selecting
+ * the same row concurrently. It cannot make Kafka acknowledgement and MySQL
+ * commit atomic, which is why every listener still implements idempotency.</p>
+ */
 @Service
 public class OutboxPublisherService {
 

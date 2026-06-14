@@ -11,6 +11,12 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+ * Kafka adapter for the Outbox application port.
+ *
+ * <p>This class knows about topics, Kafka headers, and broker acknowledgements;
+ * the Outbox domain remains independent from Kafka infrastructure.</p>
+ */
 @Component
 public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
 

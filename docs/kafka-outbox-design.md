@@ -9,8 +9,8 @@ activities should not increase its API latency or share its transaction:
 - Risk-feature and fraud analytics updates
 - Operations, audit, and reporting projections
 
-These consumers are deliberately not implemented yet. The current scope creates
-a stable event contract and a reliable publication mechanism they can use later.
+The current implementation includes two consumers with deliberately different
+side-effect and idempotency strategies.
 
 ## Why Transactional Outbox
 
@@ -54,6 +54,11 @@ commit
 
 If the unique insert fails, the consumer has already processed the event and can
 acknowledge it without repeating the side effect.
+
+Kafka offset commits and MySQL transactions are also not one atomic transaction.
+A consumer may commit MySQL and crash before committing its Kafka offset. Kafka
+then redelivers the event, and consumer idempotency prevents the side effect from
+being applied twice.
 
 ## Event Contract
 
@@ -108,23 +113,83 @@ safe for this learning project. A higher-throughput production implementation
 could claim rows in a short transaction, use leases, and publish concurrently
 per partition key.
 
-## Future Consumers
+## Implemented Consumers
 
-### Cardholder Notification
+### Notification Bounded Context
 
-Sends push/email notifications after approval or decline. It must deduplicate by
-`eventId` so retries never send duplicate customer messages.
+Consumer group:
 
-### Risk Feature Consumer
+```text
+mini-card-notification-v1
+```
 
-Updates velocity counters and model features from authorization outcomes. This
-is a strong future candidate for Kafka Streams, Redis, or a dedicated feature
-store.
+Notification is modeled as an independent bounded context. `Notification` is an
+aggregate root that owns its `PENDING -> SENT` or `PENDING -> FAILED` lifecycle,
+delivery-attempt count, and transition rules. Kafka is only an inbound adapter:
+the listener translates the integration event into an application command and
+does not appear in the domain model.
+
+The current use case creates a durable `notifications` row. The
+`source_event_id` unique constraint prevents duplicate aggregate creation when
+Kafka redelivers an event.
+
+A future notification sender can independently retry provider calls and track
+delivery status without blocking Kafka partitions or replaying the original
+authorization event.
+
+### Risk Feature Projection
+
+Consumer group:
+
+```text
+mini-card-risk-feature-v1
+```
+
+Risk features belong to the existing Risk bounded context because they are
+historical inputs for risk assessment. They are explicitly modeled as a
+projection, not an aggregate root: the counters are derived from events,
+eventually consistent, and can be rebuilt.
+
+The projection service first claims the event in `consumer_inbox`, then updates
+`card_risk_features` in the same MySQL transaction. If projection persistence
+fails, both changes roll back and Kafka can safely redeliver.
+
+This projection is intentionally simple. A larger production system could move
+the feature computation to Kafka Streams, Redis, or a dedicated feature store.
+The current hard velocity rule still queries authorization records because an
+eventually consistent projection should not silently enforce a strong real-time
+limit.
+
+Both groups subscribe to the same topic. Kafka delivers each event once per
+consumer group, allowing notification and risk processing to scale and fail
+independently.
+
+## Retry and Dead Letter Topics
+
+Each consumer has its own listener container factory and DLT:
+
+```text
+mini-card.authorization-notification.dlt.v1
+mini-card.authorization-risk-feature.dlt.v1
+```
+
+Transient exceptions are retried twice with a one-second fixed backoff. Contract
+errors such as malformed JSON, a mismatched `eventId` header, or an unsupported
+event version are permanent and go directly to the appropriate DLT.
+
+Separate DLTs matter because a message can be valid for one consumer while the
+other consumer fails due to its own database or business rule. Operations can
+inspect and replay one consumer without disturbing the other consumer group.
+
+DLT messages retain the original payload, key, partition relationship, and
+Spring Kafka exception headers. Production operations should alert on DLT
+growth, inspect the root cause, deploy a fix, and replay messages deliberately
+rather than automatically looping DLT messages back into the source topic.
 
 ### Operations and Audit Projection
 
-Builds query-friendly operational views without coupling the authorization
-transaction to reporting workloads.
+This remains a likely future consumer. It would build query-friendly operational
+views without coupling authorization transactions to reporting workloads.
 
 Capture, reversal, and refund should produce their own versioned event types
 when those domains are implemented. They should not be inferred solely from an
