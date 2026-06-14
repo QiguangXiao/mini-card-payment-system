@@ -14,6 +14,7 @@ Backend Engineer interview.
 - MySQL 8.4 LTS with Docker Compose
 - MyBatis for primary repository implementations
 - JdbcTemplate retained for one focused comparison example
+- Apache Kafka with Transactional Outbox event publication
 - JUnit 5 and Spring MVC Test
 
 ## Current Stage
@@ -24,6 +25,8 @@ with local and simulated external risk checks.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
+See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
+consumer idempotency, partition ordering, and failure-recovery decisions.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
@@ -81,6 +84,10 @@ calling a simulated external risk service protected by timeout, fallback, and a
 circuit breaker. Capture, reservation release, and refund flows are not
 implemented yet.
 
+Final authorization decisions are written to a MySQL Transactional Outbox in the
+same transaction as the decision. A scheduled publisher later sends them to
+Kafka using at-least-once delivery. Consumers are intentionally deferred.
+
 Local development includes these sample cards:
 
 - `card-123`: active JPY account with a `100000.00` credit limit
@@ -93,7 +100,7 @@ Local development includes these sample cards:
 
 ## Local MySQL
 
-Start MySQL:
+Start MySQL and Kafka:
 
 ```bash
 docker compose up -d
@@ -106,14 +113,36 @@ The local database connection is:
 - Application user: `root`
 - Application and local root password: `rootpassword`
 
-Stop MySQL:
+Local Kafka is available at `localhost:9092`. The authorization event topic is:
+
+```text
+mini-card.authorization-events.v1
+```
+
+Describe the topic or inspect events:
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --topic mini-card.authorization-events.v1
+
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic mini-card.authorization-events.v1 \
+  --from-beginning \
+  --property print.key=true \
+  --property print.headers=true
+```
+
+Stop local services:
 
 ```bash
 docker compose down
 ```
 
-The named Docker volume keeps MySQL data between restarts. To also remove local
-database data, run `docker compose down -v`.
+Named Docker volumes keep MySQL and Kafka data between restarts. To also remove
+local database and Kafka data, run `docker compose down -v`.
 
 This early project stage uses `schema.sql` instead of a migration tool. After
 pulling a schema change, recreate the local development database with:
@@ -128,7 +157,7 @@ schema evolution requires versioned migrations.
 
 ## Run Application
 
-Ensure JDK 21 is installed and MySQL is healthy, then run:
+Ensure JDK 21 is installed and MySQL/Kafka are healthy, then run:
 
 ```bash
 ./gradlew bootRun

@@ -111,7 +111,8 @@ avoiding unnecessary risk calls for missing, blocked, or expired cards.
 5. Run local and external risk checks.
 6. Lock the CreditAccount and attempt to reserve available credit.
 7. Approve or decline the Authorization with an explicit reason.
-8. Persist the account reservation and authorization decision in one transaction.
+8. Persist the account reservation, authorization decision, and Outbox event in
+   one transaction.
 
 The application service coordinates the workflow but does not contain the
 authorization state-transition rules.

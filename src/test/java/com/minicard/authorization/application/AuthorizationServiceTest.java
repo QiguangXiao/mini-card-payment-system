@@ -22,6 +22,7 @@ import com.minicard.card.domain.CardStatus;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
+import com.minicard.messaging.outbox.application.AuthorizationDecisionOutboxWriter;
 import com.minicard.risk.application.RiskAssessmentService;
 import com.minicard.risk.domain.RiskDecision;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +46,7 @@ class AuthorizationServiceTest {
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
     private RiskAssessmentService riskAssessmentService;
+    private AuthorizationDecisionOutboxWriter outboxWriter;
     private AuthorizationService service;
 
     @BeforeEach
@@ -54,6 +56,7 @@ class AuthorizationServiceTest {
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         riskAssessmentService = mock(RiskAssessmentService.class);
+        outboxWriter = mock(AuthorizationDecisionOutboxWriter.class);
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
                 authorizationRepository,
@@ -61,6 +64,7 @@ class AuthorizationServiceTest {
                 cardRepository,
                 creditAccountRepository,
                 riskAssessmentService,
+                outboxWriter,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -81,6 +85,7 @@ class AuthorizationServiceTest {
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("100.00");
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(result);
+        verify(outboxWriter).append(result);
     }
 
     @Test
@@ -177,6 +182,7 @@ class AuthorizationServiceTest {
         verify(cardRepository, never()).findById(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
+        verify(outboxWriter, never()).append(any());
     }
 
     @Test

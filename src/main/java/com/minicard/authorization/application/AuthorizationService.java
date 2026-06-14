@@ -17,6 +17,7 @@ import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditReservationFailure;
 import com.minicard.creditaccount.domain.CreditReservationResult;
+import com.minicard.messaging.outbox.application.AuthorizationDecisionOutboxWriter;
 import com.minicard.risk.application.RiskAssessmentService;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
@@ -31,6 +32,7 @@ public class AuthorizationService {
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RiskAssessmentService riskAssessmentService;
+    private final AuthorizationDecisionOutboxWriter outboxWriter;
     private final Clock clock;
 
     public AuthorizationService(
@@ -39,6 +41,7 @@ public class AuthorizationService {
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
             RiskAssessmentService riskAssessmentService,
+            AuthorizationDecisionOutboxWriter outboxWriter,
             Clock clock
     ) {
         this.authorizationRepository = authorizationRepository;
@@ -46,6 +49,7 @@ public class AuthorizationService {
         this.cardRepository = cardRepository;
         this.creditAccountRepository = creditAccountRepository;
         this.riskAssessmentService = riskAssessmentService;
+        this.outboxWriter = outboxWriter;
         this.clock = clock;
     }
 
@@ -61,6 +65,7 @@ public class AuthorizationService {
                 command.requestedAmount(),
                 now
         );
+
 
         // The idempotency claim is deliberately the first write in the
         // transaction. If two identical client retries arrive at the same time,
@@ -86,6 +91,10 @@ public class AuthorizationService {
         // Only the idempotency winner reaches the real decision path.
         decideAndReserve(persisted, command, now);
         authorizationRepository.update(persisted);
+        // The Outbox row is inserted in this same MySQL transaction. We never
+        // publish directly to Kafka here because a broker/network failure must
+        // not leave an approved authorization without a recoverable event.
+        outboxWriter.append(persisted);
         return persisted;
     }
 

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.messaging.outbox.infrastructure.mybatis.OutboxEventMapper">
+
+    <resultMap id="outboxEventRowMap"
+               type="com.minicard.messaging.outbox.infrastructure.mybatis.OutboxEventRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="aggregate_type" javaType="java.lang.String"/>
+            <arg column="aggregate_id" javaType="java.lang.String"/>
+            <arg column="event_type" javaType="java.lang.String"/>
+            <arg column="event_version" javaType="int"/>
+            <arg column="partition_key" javaType="java.lang.String"/>
+            <arg column="payload" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="attempts" javaType="int"/>
+            <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="published_at" javaType="java.time.Instant"/>
+            <arg column="last_error" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="outboxColumns">
+        id, aggregate_type, aggregate_id, event_type, event_version,
+        partition_key, payload, status, attempts, next_attempt_at, created_at,
+        published_at, last_error
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO outbox_events (
+            <include refid="outboxColumns"/>
+        ) VALUES (
+            #{id},
+            #{aggregateType},
+            #{aggregateId},
+            #{eventType},
+            #{eventVersion},
+            #{partitionKey},
+            #{payload},
+            #{status},
+            #{attempts},
+            #{nextAttemptAt},
+            #{createdAt},
+            #{publishedAt,jdbcType=TIMESTAMP},
+            #{lastError,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <!--
+      SKIP LOCKED lets multiple application instances poll concurrently without
+      publishing the same selected rows. Delivery remains at-least-once because
+      Kafka acknowledgement and the MySQL commit are not one atomic transaction.
+    -->
+    <select id="findPublishableBatchForUpdate" resultMap="outboxEventRowMap">
+        SELECT <include refid="outboxColumns"/>
+        FROM outbox_events
+        WHERE status = 'PENDING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY created_at, id
+        LIMIT #{batchSize}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <update id="updateDeliveryState">
+        UPDATE outbox_events
+        SET status = #{status},
+            attempts = #{attempts},
+            next_attempt_at = #{nextAttemptAt},
+            published_at = #{publishedAt,jdbcType=TIMESTAMP},
+            last_error = #{lastError,jdbcType=VARCHAR}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

@@ -40,6 +40,24 @@ CREATE TABLE IF NOT EXISTS authorizations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id CHAR(36) PRIMARY KEY,
+    aggregate_type VARCHAR(50) NOT NULL,
+    aggregate_id VARCHAR(100) NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    event_version INT NOT NULL,
+    partition_key VARCHAR(100) NOT NULL,
+    payload JSON NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    published_at TIMESTAMP(6) NULL,
+    last_error VARCHAR(500) NULL,
+    INDEX idx_outbox_publishable (status, next_attempt_at, created_at),
+    CONSTRAINT chk_outbox_attempts_non_negative CHECK (attempts >= 0)
+);
+
 INSERT IGNORE INTO credit_accounts (
     id, credit_limit, reserved_amount, currency, status
 ) VALUES

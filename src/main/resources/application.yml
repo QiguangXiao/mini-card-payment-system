@@ -9,9 +9,32 @@ spring:
   sql:
     init:
       mode: always
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Broker acknowledgements and idempotent producer retries reduce duplicate
+      # writes inside Kafka, but consumers must still deduplicate Outbox events.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 3000
 
 mybatis:
   mapper-locations: classpath:mappers/**/*.xml
+
+messaging:
+  topics:
+    authorization-events: mini-card.authorization-events.v1
+
+outbox:
+  publisher:
+    enabled: true
+    fixed-delay-ms: 1000
+    batch-size: 50
+    send-timeout-ms: 5000
+    max-attempts: 10
 
 authorization:
   policy:
