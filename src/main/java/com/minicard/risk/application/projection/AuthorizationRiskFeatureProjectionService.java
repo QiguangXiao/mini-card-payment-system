@@ -3,7 +3,7 @@ package com.minicard.risk.application.projection;
 import java.time.Clock;
 import java.time.Instant;
 
-import com.minicard.messaging.consumer.inbox.domain.ConsumerInboxRepository;
+import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

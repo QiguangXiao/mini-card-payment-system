@@ -1,4 +1,4 @@
-package com.minicard.messaging.consumer.inbox.infrastructure.mybatis;
+package com.minicard.messaging.inbox.infrastructure.mybatis;
 
 import java.time.Instant;
 

@@ -1,4 +1,4 @@
-package com.minicard.messaging.outbox.application;
+package com.minicard.authorization.infrastructure.messaging;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.minicard.authorization.application.AuthorizationDecisionEventPublisher;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.messaging.event.AuthorizationDecidedEvent;
 import com.minicard.messaging.event.IntegrationEventEnvelope;
@@ -13,8 +14,13 @@ import com.minicard.messaging.outbox.domain.OutboxEvent;
 import com.minicard.messaging.outbox.domain.OutboxEventRepository;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorization outbound adapter that translates the aggregate into an
+ * integration event and stores it through the shared Outbox mechanism.
+ */
 @Component
-public class AuthorizationDecisionOutboxWriter {
+public class OutboxAuthorizationDecisionEventPublisher
+        implements AuthorizationDecisionEventPublisher {
 
     private static final String AGGREGATE_TYPE = "Authorization";
 
@@ -22,7 +28,7 @@ public class AuthorizationDecisionOutboxWriter {
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
-    public AuthorizationDecisionOutboxWriter(
+    public OutboxAuthorizationDecisionEventPublisher(
             OutboxEventRepository outboxEventRepository,
             ObjectMapper objectMapper,
             Clock clock
@@ -32,6 +38,7 @@ public class AuthorizationDecisionOutboxWriter {
         this.clock = clock;
     }
 
+    @Override
     public void append(Authorization authorization) {
         Instant decidedAt = authorization.decidedAt()
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -58,9 +65,8 @@ public class AuthorizationDecisionOutboxWriter {
                         payload
                 );
 
-        // This insert is called inside AuthorizationService's transaction. The
-        // authorization decision, credit reservation, and event intent either
-        // commit together or all roll back.
+        // AuthorizationService owns the transaction. The authorization decision,
+        // credit reservation, and event intent commit or roll back together.
         outboxEventRepository.insert(OutboxEvent.pending(
                 eventId,
                 AGGREGATE_TYPE,

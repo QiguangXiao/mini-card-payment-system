@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
-import com.minicard.messaging.consumer.inbox.domain.ConsumerInboxRepository;
+import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import org.junit.jupiter.api.Test;
 
 import static org.mockito.ArgumentMatchers.any;

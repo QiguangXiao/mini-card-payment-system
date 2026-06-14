@@ -113,6 +113,32 @@ safe for this learning project. A higher-throughput production implementation
 could claim rows in a short transaction, use leases, and publish concurrently
 per partition key.
 
+## Messaging Package Boundary
+
+The shared `messaging` package contains delivery mechanisms and integration
+contracts, not business consumers:
+
+```text
+messaging
+├── event       versioned integration event contracts
+├── inbox       shared consumer idempotency mechanism
+├── kafka       Kafka configuration and adapters shared across contexts
+└── outbox      reliable event publication mechanism
+```
+
+Notification and Risk Kafka listeners remain inside their own bounded contexts.
+This makes Kafka an adapter for business capabilities instead of making
+`messaging` a catch-all pseudo-domain.
+
+`event`, `kafka`, and `outbox` could become separate Gradle modules if the code
+base or team ownership grows. Keeping them as packages is currently easier to
+explain and avoids premature module boundaries.
+
+Authorization-specific event translation lives in
+`authorization.infrastructure.messaging`. The shared Outbox mechanism therefore
+does not depend on the Authorization aggregate or absorb business-context
+knowledge.
+
 ## Implemented Consumers
 
 ### Notification Bounded Context

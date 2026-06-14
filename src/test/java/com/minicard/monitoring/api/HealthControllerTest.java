@@ -1,4 +1,4 @@
-package com.minicard.controller;
+package com.minicard.monitoring.api;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -1,9 +1,9 @@
-package com.minicard.messaging.consumer.inbox.infrastructure.mybatis;
+package com.minicard.messaging.inbox.infrastructure.mybatis;
 
 import java.time.Instant;
 import java.util.UUID;
 
-import com.minicard.messaging.consumer.inbox.domain.ConsumerInboxRepository;
+import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 

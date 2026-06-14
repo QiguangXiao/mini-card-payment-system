@@ -33,7 +33,7 @@ idempotency behavior remain explicit while repetitive JDBC row mapping is
 reduced. `JdbcRiskVelocityRepository` intentionally remains implemented with
 `JdbcTemplate` as a small comparison example.
 
-Health check:
+The `monitoring` module currently exposes a lightweight public liveness check:
 
 ```http
 GET /api/health
@@ -42,6 +42,11 @@ GET /api/health
 ```json
 {"status":"OK"}
 ```
+
+It intentionally does not query MySQL or Kafka. Dependency health, metrics, and
+operational diagnostics belong to Spring Boot Actuator; future public
+operational APIs can be added under `monitoring` when a concrete requirement
+exists.
 
 Create an authorization:
 
