@@ -35,6 +35,7 @@ mybatis:
 messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
+    authorization-lifecycle-events: mini-card.authorization-lifecycle-events.v1
     notification-dead-letter: mini-card.authorization-notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
   consumers:
@@ -54,6 +55,10 @@ outbox:
     max-attempts: 10
 
 authorization:
+  expiry:
+    enabled: true
+    fixed-delay-ms: 60000
+    max-per-run: 100
   policy:
     single-transaction-limits:
       JPY: 100000.00

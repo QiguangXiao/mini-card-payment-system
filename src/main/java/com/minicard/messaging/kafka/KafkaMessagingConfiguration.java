@@ -30,6 +30,17 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
+    public NewTopic authorizationLifecycleEventsTopic(KafkaTopicsProperties properties) {
+        // Lifecycle events use a separate topic until a concrete consumer needs
+        // them. Existing decision-only consumers must not receive an event
+        // contract they do not understand and incorrectly send it to their DLT.
+        return TopicBuilder.name(properties.authorizationLifecycleEvents())
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         return deadLetterTopic(properties.notificationDeadLetter());
     }

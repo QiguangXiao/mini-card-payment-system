@@ -1,5 +1,6 @@
 package com.minicard.authorization.infrastructure.mybatis;
 
+import java.time.Instant;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
@@ -50,6 +51,12 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     }
 
     @Override
+    public Optional<Authorization> findNextExpiredApprovedForUpdate(Instant now) {
+        return Optional.ofNullable(authorizationMapper.findNextExpiredApprovedForUpdate(now))
+                .map(this::toDomain);
+    }
+
+    @Override
     public void update(Authorization authorization) {
         // Mapper XML updates decision columns only. Request identity remains
         // immutable for idempotency auditing.
@@ -66,7 +73,9 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
                 authorization.status().name(),
                 authorization.declineReason().map(Enum::name).orElse(null),
                 authorization.createdAt(),
-                authorization.decidedAt().orElse(null)
+                authorization.decidedAt().orElse(null),
+                authorization.expiresAt().orElse(null),
+                authorization.expiredAt().orElse(null)
         );
     }
 
@@ -79,7 +88,9 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
                 AuthorizationStatus.valueOf(row.status()),
                 optionalDeclineReason(row.declineReason()),
                 row.createdAt(),
-                row.decidedAt()
+                row.decidedAt(),
+                row.expiresAt(),
+                row.expiredAt()
         );
     }
 

@@ -257,7 +257,9 @@ class AuthorizationServiceTest {
                 AuthorizationStatus.APPROVED,
                 null,
                 NOW,
-                NOW
+                NOW,
+                NOW.plusSeconds(7 * 24 * 60 * 60),
+                null
         );
     }
 }

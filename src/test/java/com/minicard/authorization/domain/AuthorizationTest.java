@@ -32,6 +32,30 @@ class AuthorizationTest {
         assertThat(authorization.status()).isEqualTo(AuthorizationStatus.APPROVED);
         assertThat(authorization.declineReason()).isEmpty();
         assertThat(authorization.decidedAt()).contains(DECIDED_AT);
+        assertThat(authorization.expiresAt()).contains(DECIDED_AT.plusSeconds(7 * 24 * 60 * 60));
+        assertThat(authorization.expiredAt()).isEmpty();
+    }
+
+    @Test
+    void expiresApprovedAuthorizationAtOrAfterDeadline() {
+        Authorization authorization = authorization();
+        authorization.approve(DECIDED_AT);
+        Instant expiryTime = DECIDED_AT.plusSeconds(7 * 24 * 60 * 60);
+
+        authorization.expire(expiryTime);
+
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.EXPIRED);
+        assertThat(authorization.expiredAt()).contains(expiryTime);
+    }
+
+    @Test
+    void rejectsExpiryBeforeDeadline() {
+        Authorization authorization = authorization();
+        authorization.approve(DECIDED_AT);
+
+        assertThatThrownBy(() -> authorization.expire(DECIDED_AT.plusSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("authorization cannot expire before expiresAt");
     }
 
     @Test

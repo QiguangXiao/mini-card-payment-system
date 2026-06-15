@@ -12,6 +12,8 @@ public record AuthorizationRow(
         String status,
         String declineReason,
         Instant createdAt,
-        Instant decidedAt
+        Instant decidedAt,
+        Instant expiresAt,
+        Instant expiredAt
 ) {
 }

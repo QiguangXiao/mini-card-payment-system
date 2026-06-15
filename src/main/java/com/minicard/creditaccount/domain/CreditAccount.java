@@ -59,6 +59,20 @@ public final class CreditAccount {
         return CreditReservationResult.success();
     }
 
+    public void release(Money amount) {
+        Objects.requireNonNull(amount);
+        // Expiry is compensating a reservation that was already recorded. A
+        // currency mismatch or underflow therefore indicates corrupted state,
+        // so failing the transaction is safer than silently changing balances.
+        if (!creditLimit.currency().equals(amount.currency())) {
+            throw new IllegalArgumentException("release currency must match account currency");
+        }
+        if (amount.isGreaterThan(reservedAmount)) {
+            throw new IllegalStateException("release amount exceeds reserved amount");
+        }
+        reservedAmount = reservedAmount.subtract(amount);
+    }
+
     public Money availableCredit() {
         return creditLimit.subtract(reservedAmount);
     }

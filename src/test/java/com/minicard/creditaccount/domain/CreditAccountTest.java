@@ -52,6 +52,16 @@ class CreditAccountTest {
         assertThat(result.optionalFailure()).contains(CreditReservationFailure.CURRENCY_MISMATCH);
     }
 
+    @Test
+    void releasesPreviouslyReservedCredit() {
+        CreditAccount account = account("1000.00", "300.00", CreditAccountStatus.ACTIVE);
+
+        account.release(money("100.00"));
+
+        assertThat(account.reservedAmount().amount()).isEqualByComparingTo("200.00");
+        assertThat(account.availableCredit().amount()).isEqualByComparingTo("800.00");
+    }
+
     private CreditAccount account(String limit, String reserved, CreditAccountStatus status) {
         return CreditAccount.restore(
                 UUID.randomUUID(),

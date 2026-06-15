@@ -30,13 +30,22 @@ CREATE TABLE IF NOT EXISTS authorizations (
     decline_reason VARCHAR(50) NULL,
     created_at TIMESTAMP(6) NOT NULL,
     decided_at TIMESTAMP(6) NULL,
+    expires_at TIMESTAMP(6) NULL,
+    expired_at TIMESTAMP(6) NULL,
     CONSTRAINT uk_authorizations_idempotency_key UNIQUE (idempotency_key),
     INDEX idx_authorizations_card_created_at (card_id, created_at),
+    INDEX idx_authorizations_expiry (status, expires_at, id),
     CONSTRAINT chk_authorizations_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_authorizations_decision_state CHECK (
-        (status = 'PENDING' AND decline_reason IS NULL AND decided_at IS NULL)
-        OR (status = 'APPROVED' AND decline_reason IS NULL AND decided_at IS NOT NULL)
-        OR (status = 'DECLINED' AND decline_reason IS NOT NULL AND decided_at IS NOT NULL)
+        (status = 'PENDING' AND decline_reason IS NULL AND decided_at IS NULL
+            AND expires_at IS NULL AND expired_at IS NULL)
+        OR (status = 'APPROVED' AND decline_reason IS NULL AND decided_at IS NOT NULL
+            AND expires_at IS NOT NULL AND expired_at IS NULL)
+        OR (status = 'DECLINED' AND decline_reason IS NOT NULL AND decided_at IS NOT NULL
+            AND expires_at IS NULL AND expired_at IS NULL)
+        OR (status = 'EXPIRED' AND decline_reason IS NULL AND decided_at IS NOT NULL
+            AND expires_at IS NOT NULL AND expired_at IS NOT NULL
+            AND expired_at >= expires_at)
     )
 );
 

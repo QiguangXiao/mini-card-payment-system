@@ -16,12 +16,14 @@
             <arg column="decline_reason" javaType="java.lang.String"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="decided_at" javaType="java.time.Instant"/>
+            <arg column="expires_at" javaType="java.time.Instant"/>
+            <arg column="expired_at" javaType="java.time.Instant"/>
         </constructor>
     </resultMap>
 
     <sql id="authorizationColumns">
         id, request_fingerprint, card_id, amount, currency, status,
-        decline_reason, created_at, decided_at
+        decline_reason, created_at, decided_at, expires_at, expired_at
     </sql>
 
     <select id="findById" resultMap="authorizationRowMap">
@@ -37,7 +39,7 @@
     <insert id="insert">
         INSERT INTO authorizations (
             id, idempotency_key, request_fingerprint, card_id, amount, currency,
-            status, decline_reason, created_at, decided_at
+            status, decline_reason, created_at, decided_at, expires_at, expired_at
         ) VALUES (
             #{authorization.id},
             #{idempotencyKey},
@@ -48,7 +50,9 @@
             #{authorization.status},
             #{authorization.declineReason,jdbcType=VARCHAR},
             #{authorization.createdAt},
-            #{authorization.decidedAt,jdbcType=TIMESTAMP}
+            #{authorization.decidedAt,jdbcType=TIMESTAMP},
+            #{authorization.expiresAt,jdbcType=TIMESTAMP},
+            #{authorization.expiredAt,jdbcType=TIMESTAMP}
         )
     </insert>
 
@@ -63,11 +67,28 @@
         FOR UPDATE
     </select>
 
+    <!--
+      One row per transaction keeps the account lock and Outbox write short.
+      SKIP LOCKED lets multiple application instances claim different expired
+      authorizations without a distributed scheduler lock.
+    -->
+    <select id="findNextExpiredApprovedForUpdate" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE status = 'APPROVED'
+          AND expires_at &lt;= #{now}
+        ORDER BY expires_at, id
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    </select>
+
     <update id="update">
         UPDATE authorizations
         SET status = #{status},
             decline_reason = #{declineReason,jdbcType=VARCHAR},
-            decided_at = #{decidedAt,jdbcType=TIMESTAMP}
+            decided_at = #{decidedAt,jdbcType=TIMESTAMP},
+            expires_at = #{expiresAt,jdbcType=TIMESTAMP},
+            expired_at = #{expiredAt,jdbcType=TIMESTAMP}
         WHERE id = #{id}
     </update>
 

@@ -14,7 +14,9 @@ public record AuthorizationResponse(
         String status,
         String declineReason,
         Instant createdAt,
-        Instant decidedAt
+        Instant decidedAt,
+        Instant expiresAt,
+        Instant expiredAt
 ) {
 
     public static AuthorizationResponse from(Authorization authorization) {
@@ -26,7 +28,9 @@ public record AuthorizationResponse(
                 authorization.status().name(),
                 authorization.declineReason().map(Enum::name).orElse(null),
                 authorization.createdAt(),
-                authorization.decidedAt().orElse(null)
+                authorization.decidedAt().orElse(null),
+                authorization.expiresAt().orElse(null),
+                authorization.expiredAt().orElse(null)
         );
     }
 }

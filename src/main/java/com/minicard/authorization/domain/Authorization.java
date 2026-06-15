@@ -1,11 +1,19 @@
 package com.minicard.authorization.domain;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 public final class Authorization {
+
+    /**
+     * The hold deadline is persisted when approval happens. Persisting the
+     * deadline means a later policy change does not silently change the expiry
+     * date of authorizations that were already approved.
+     */
+    private static final Duration HOLD_DURATION = Duration.ofDays(7);
 
     private final UUID id;
     private final String requestFingerprint;
@@ -15,6 +23,13 @@ public final class Authorization {
     private AuthorizationDeclineReason declineReason;
     private final Instant createdAt;
     private Instant decidedAt;
+    // The business deadline is stored explicitly instead of recalculated from
+    // decidedAt, preserving the original hold policy for audit and replay.
+    private Instant expiresAt;
+    // This records when the scheduler actually completed expiry. It can be
+    // later than expiresAt because scheduled processing is intentionally
+    // eventually executed rather than guaranteed at the exact deadline.
+    private Instant expiredAt;
 
     private Authorization(
             UUID id,
@@ -24,7 +39,9 @@ public final class Authorization {
             AuthorizationStatus status,
             AuthorizationDeclineReason declineReason,
             Instant createdAt,
-            Instant decidedAt
+            Instant decidedAt,
+            Instant expiresAt,
+            Instant expiredAt
     ) {
         this.id = Objects.requireNonNull(id);
         this.requestFingerprint = requireText(requestFingerprint, "requestFingerprint");
@@ -37,6 +54,8 @@ public final class Authorization {
         this.declineReason = declineReason;
         this.createdAt = Objects.requireNonNull(createdAt);
         this.decidedAt = decidedAt;
+        this.expiresAt = expiresAt;
+        this.expiredAt = expiredAt;
         validateDecisionState();
     }
 
@@ -57,6 +76,8 @@ public final class Authorization {
                 AuthorizationStatus.PENDING,
                 null,
                 createdAt,
+                null,
+                null,
                 null
         );
     }
@@ -69,7 +90,9 @@ public final class Authorization {
             AuthorizationStatus status,
             AuthorizationDeclineReason declineReason,
             Instant createdAt,
-            Instant decidedAt
+            Instant decidedAt,
+            Instant expiresAt,
+            Instant expiredAt
     ) {
         return new Authorization(
                 id,
@@ -79,7 +102,9 @@ public final class Authorization {
                 status,
                 declineReason,
                 createdAt,
-                decidedAt
+                decidedAt,
+                expiresAt,
+                expiredAt
         );
     }
 
@@ -101,6 +126,8 @@ public final class Authorization {
         status = AuthorizationStatus.APPROVED;
         declineReason = null;
         decidedAt = Objects.requireNonNull(decisionTime);
+        expiresAt = decisionTime.plus(HOLD_DURATION);
+        expiredAt = null;
     }
 
     public void decline(AuthorizationDeclineReason reason, Instant decisionTime) {
@@ -110,6 +137,18 @@ public final class Authorization {
         status = AuthorizationStatus.DECLINED;
         declineReason = Objects.requireNonNull(reason);
         decidedAt = Objects.requireNonNull(decisionTime);
+        expiresAt = null;
+        expiredAt = null;
+    }
+
+    public void expire(Instant expiryTime) {
+        ensureApproved("expire");
+        Instant actualExpiryTime = Objects.requireNonNull(expiryTime);
+        if (actualExpiryTime.isBefore(expiresAt)) {
+            throw new IllegalArgumentException("authorization cannot expire before expiresAt");
+        }
+        status = AuthorizationStatus.EXPIRED;
+        expiredAt = actualExpiryTime;
     }
 
     public boolean isPending() {
@@ -122,17 +161,35 @@ public final class Authorization {
         }
     }
 
+    private void ensureApproved(String action) {
+        if (status != AuthorizationStatus.APPROVED) {
+            throw new InvalidAuthorizationStateException(status, action);
+        }
+    }
+
     private void validateDecisionState() {
         // This validation also runs when restoring from the database, so corrupt
         // persisted rows cannot silently become valid domain objects.
-        if (status == AuthorizationStatus.PENDING && (declineReason != null || decidedAt != null)) {
+        if (status == AuthorizationStatus.PENDING
+                && (declineReason != null || decidedAt != null
+                || expiresAt != null || expiredAt != null)) {
             throw new IllegalArgumentException("pending authorization cannot have a decision");
         }
-        if (status == AuthorizationStatus.APPROVED && (declineReason != null || decidedAt == null)) {
+        if (status == AuthorizationStatus.APPROVED
+                && (declineReason != null || decidedAt == null
+                || expiresAt == null || expiredAt != null)) {
             throw new IllegalArgumentException("approved authorization has invalid decision data");
         }
-        if (status == AuthorizationStatus.DECLINED && (declineReason == null || decidedAt == null)) {
+        if (status == AuthorizationStatus.DECLINED
+                && (declineReason == null || decidedAt == null
+                || expiresAt != null || expiredAt != null)) {
             throw new IllegalArgumentException("declined authorization requires decision data");
+        }
+        if (status == AuthorizationStatus.EXPIRED
+                && (declineReason != null || decidedAt == null
+                || expiresAt == null || expiredAt == null
+                || expiredAt.isBefore(expiresAt))) {
+            throw new IllegalArgumentException("expired authorization has invalid expiry data");
         }
     }
 
@@ -173,5 +230,13 @@ public final class Authorization {
 
     public Optional<Instant> decidedAt() {
         return Optional.ofNullable(decidedAt);
+    }
+
+    public Optional<Instant> expiresAt() {
+        return Optional.ofNullable(expiresAt);
+    }
+
+    public Optional<Instant> expiredAt() {
+        return Optional.ofNullable(expiredAt);
     }
 }

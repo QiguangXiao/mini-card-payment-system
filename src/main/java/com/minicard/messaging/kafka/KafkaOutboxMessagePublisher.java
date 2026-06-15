@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import com.minicard.messaging.event.AuthorizationDecidedEvent;
+import com.minicard.messaging.event.AuthorizationExpiredEvent;
 import com.minicard.messaging.outbox.application.OutboxMessagePublisher;
 import com.minicard.messaging.outbox.domain.OutboxEvent;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -61,6 +62,9 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
     private String topicFor(String eventType) {
         if (AuthorizationDecidedEvent.EVENT_TYPE.equals(eventType)) {
             return topics.authorizationEvents();
+        }
+        if (AuthorizationExpiredEvent.EVENT_TYPE.equals(eventType)) {
+            return topics.authorizationLifecycleEvents();
         }
         throw new IllegalArgumentException("no Kafka topic configured for event type " + eventType);
     }

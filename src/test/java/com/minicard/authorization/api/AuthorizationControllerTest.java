@@ -182,7 +182,9 @@ class AuthorizationControllerTest {
                 AuthorizationStatus.APPROVED,
                 null,
                 Instant.parse("2026-06-07T00:00:00Z"),
-                Instant.parse("2026-06-07T00:00:01Z")
+                Instant.parse("2026-06-07T00:00:01Z"),
+                Instant.parse("2026-06-14T00:00:01Z"),
+                null
         );
     }
 
@@ -195,7 +197,9 @@ class AuthorizationControllerTest {
                 AuthorizationStatus.DECLINED,
                 AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED,
                 Instant.parse("2026-06-07T00:00:00Z"),
-                Instant.parse("2026-06-07T00:00:01Z")
+                Instant.parse("2026-06-07T00:00:01Z"),
+                null,
+                null
         );
     }
 }
