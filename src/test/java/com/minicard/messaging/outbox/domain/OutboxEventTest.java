@@ -12,6 +12,16 @@ class OutboxEventTest {
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");
 
     @Test
+    void marksEventProcessingWithLeaseDeadline() {
+        OutboxEvent event = pendingEvent();
+
+        event.markProcessing(NOW, 30);
+
+        assertThat(event.status()).isEqualTo(OutboxEventStatus.PROCESSING);
+        assertThat(event.nextAttemptAt()).isEqualTo(NOW.plusSeconds(30));
+    }
+
+    @Test
     void retriesWithExponentialBackoffBeforeBecomingDead() {
         OutboxEvent event = pendingEvent();
 

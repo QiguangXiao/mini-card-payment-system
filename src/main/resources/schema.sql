@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     published_at TIMESTAMP(6) NULL,
     last_error VARCHAR(500) NULL,
     INDEX idx_outbox_publishable (status, next_attempt_at, created_at),
-    CONSTRAINT chk_outbox_attempts_non_negative CHECK (attempts >= 0)
+    CONSTRAINT chk_outbox_attempts_non_negative CHECK (attempts >= 0),
+    CONSTRAINT chk_outbox_status CHECK (status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD'))
 );
 
 CREATE TABLE IF NOT EXISTS delay_jobs (

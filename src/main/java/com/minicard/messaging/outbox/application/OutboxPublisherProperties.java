@@ -8,6 +8,7 @@ public record OutboxPublisherProperties(
         long fixedDelayMs,
         int batchSize,
         long sendTimeoutMs,
+        long processingTimeoutSeconds,
         int maxAttempts
 ) {
 }

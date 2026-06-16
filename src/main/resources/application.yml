@@ -52,6 +52,7 @@ outbox:
     fixed-delay-ms: 1000
     batch-size: 50
     send-timeout-ms: 5000
+    processing-timeout-seconds: 30
     max-attempts: 10
 
 delay-jobs:

@@ -50,17 +50,24 @@
     </insert>
 
     <!--
-      SKIP LOCKED 允许多个 application instance 并发 poll，而不会发布同一批 selected rows。
-      但 Kafka acknowledgement 和 MySQL commit 不是原子事务，所以 delivery 仍是 at-least-once。
+      SKIP LOCKED 允许多个 application instance 并发 claim，而不会处理同一条可用 row。
+      PENDING 是首次发布；PROCESSING 且 next_attempt_at 到期表示上一个 publisher lease 超时。
     -->
-    <select id="findPublishableBatchForUpdate" resultMap="outboxEventRowMap">
+    <select id="findNextPublishableForUpdate" resultMap="outboxEventRowMap">
         SELECT <include refid="outboxColumns"/>
         FROM outbox_events
-        WHERE status = 'PENDING'
+        WHERE status IN ('PENDING', 'PROCESSING')
           AND next_attempt_at &lt;= #{now}
         ORDER BY created_at, id
-        LIMIT #{batchSize}
+        LIMIT 1
         FOR UPDATE SKIP LOCKED
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="outboxEventRowMap">
+        SELECT <include refid="outboxColumns"/>
+        FROM outbox_events
+        WHERE id = #{id}
+        FOR UPDATE
     </select>
 
     <update id="updateDeliveryState">

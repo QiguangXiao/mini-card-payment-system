@@ -73,7 +73,9 @@
 - `event_type` / `event_version`：事件类型和版本。
 - `partition_key`：Kafka 分区 key，目前用 authorization id。
 - `payload`：JSON 字符串。
-- `status`：`PENDING`、`PUBLISHED`、`DEAD`。
+- `status`：`PENDING`、`PROCESSING`、`PUBLISHED`、`DEAD`。
+- `next_attempt_at`：下一次可领取时间；`PROCESSING` 时也作为 publisher lease deadline。
+- `attempts` / `last_error`：失败重试和排障信息。
 
 ## 3. 核心流程一：创建授权
 
@@ -155,7 +157,7 @@ curl -X POST http://localhost:8080/api/authorizations \
    用 `SELECT ... FOR UPDATE` 读取该幂等键对应的 authorization。
    如果两个 pod 同时收到相同重试，loser 会等待 winner 完成事务，然后读取 winner 的最终状态。
 
-4. `returnIdempotentResult(persisted, command)`
+4. `assertSameIdempotentRequest(persisted, command)`
 
    比较 fingerprint。
    同一个 key + 相同请求：允许返回已有结果。
@@ -291,34 +293,80 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 关键步骤：
 
-1. `findPublishableBatchForUpdate(now, batchSize)`
+1. `claimNextPublishable()`
 
+   短事务内调用 `findNextPublishableForUpdate(now)`。
    MyBatis XML 使用：
 
    ```sql
    FOR UPDATE SKIP LOCKED
    ```
 
-   多个 pod 可以同时扫描 outbox，但不会选中同一批 row。
+   多个 pod 可以同时扫描 outbox，但不会领取同一条可用 row。
+
+   领取后调用：
+
+   - `event.markProcessing(now, processingTimeoutSeconds)`
+   - `outboxEventRepository.updateDeliveryState(event)`
+
+   这一步提交后，DB row lock 释放。
 
 2. `messagePublisher.publish(event, timeout)`
 
-   把已保存的 JSON payload 发布到 Kafka。
+   在事务外把已保存的 JSON payload 发布到 Kafka。
+   这样等待 broker acknowledgement 时，不会长时间持有 MySQL row lock。
 
-3. `event.markPublished(...)`
+3. `markPublished(event)`
 
-   发布成功后标记 `PUBLISHED`。
+   重新开启短事务，`findByIdForUpdate(event.id)` 锁住当前 row。
+   如果 row 仍然是同一个 `PROCESSING` lease，就调用 `event.markPublished(...)`。
 
-4. `event.markFailed(...)`
+4. `markFailed(event, error, exception)`
 
-   发布失败时增加 `attempts`，计算 exponential backoff。
-   达到最大次数后进入 `DEAD`。
+   发布失败时也重新开启短事务。
+   如果 row 仍然是同一个 `PROCESSING` lease，就调用 `event.markFailed(...)`：
+
+   - 增加 `attempts`
+   - 计算 exponential backoff
+   - 未达最大次数时回到 `PENDING`
+   - 达到最大次数后进入 `DEAD`
+
+5. stale lease 防护
+
+   `PROCESSING` 的 `next_attempt_at` 被当作轻量 lease token。
+   如果 publisher 太慢，lease 过期后事件被另一个实例重新领取，旧 publisher 的迟到结果不会覆盖新状态。
 
 重要语义：
 
 - Outbox 是 `at-least-once delivery`。
 - Kafka ack 和 MySQL commit 不能原子化，所以消息可能重复。
 - 下游 consumer 必须用 `eventId` 做幂等。
+- `processingTimeoutSeconds` 应大于正常 Kafka send timeout，避免健康 publisher 被过早认为失联。
+
+### 4.1 消息可靠性结构说明
+
+当前消息相关代码分成 4 组：
+
+- `messaging/outbox`：可靠发布机制。业务事务只写 `outbox_events`，后台 publisher 再发 Kafka。
+- `messaging/kafka`：Kafka 技术 adapter。负责 topic、headers、producer ack、consumer DLT。
+- `messaging/inbox`：消费者侧幂等机制。Kafka 是 at-least-once，所以 consumer 需要按 `eventId` 去重。
+- 业务 bounded context 的 listener，例如：
+  - `notification/infrastructure/messaging/AuthorizationNotificationListener`
+  - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
+
+为什么不再保留 `messaging/consumer/...` 空目录：
+
+- `consumer` 只是旧的提前规划骨架，没有实际类。
+- 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务消费入口放回各自 bounded context。
+- 面试中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
+
+PayPay Card 面试提示：
+
+- Outbox 解决的是“业务事务成功后，消息不能丢”的问题。
+- 它不解决“消息绝不重复”的问题，因为 Kafka ack 和 MySQL commit 无法组成单机事务。
+- 因此下游必须设计 idempotent consumer，例如 `source_event_id` 唯一索引或 `consumer_inbox` 表。
+- `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
+- `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
 
 ## 5. 核心流程三：DelayJob 自动过期授权
 

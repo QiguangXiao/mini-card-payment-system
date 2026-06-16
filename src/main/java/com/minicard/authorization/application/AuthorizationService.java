@@ -83,8 +83,8 @@ public class AuthorizationService {
                         "authorization claim was not visible"
                 ));
         // FOR UPDATE 会锁住已 claim 的 authorization row，确保并发 duplicate 等到最终状态后再返回。
-        // returnIdempotentResult() 校验 fingerprint，防止同一个幂等键隐藏了不同交易。
-        returnIdempotentResult(persisted, command);
+        // assertSameIdempotentRequest() 校验 fingerprint，防止同一个幂等键隐藏了不同交易。
+        assertSameIdempotentRequest(persisted, command);
 
         if (!claimed) {
             // claimed=false 表示这是 retry 或并发 duplicate；直接返回能避免 double reservation。
@@ -197,7 +197,7 @@ public class AuthorizationService {
         };
     }
 
-    private void returnIdempotentResult(
+    private void assertSameIdempotentRequest(
             Authorization existing,
             AuthorizationCommand command
     ) {

@@ -1,7 +1,8 @@
 package com.minicard.messaging.outbox.domain;
 
 import java.time.Instant;
-import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * OutboxEvent 的 repository port，抽象 database-backed publish queue。
@@ -14,9 +15,11 @@ public interface OutboxEventRepository {
     void insert(OutboxEvent event);
 
     /**
-     * 领取可发布事件并加 row lock，通常由 FOR UPDATE SKIP LOCKED 实现。
+     * 领取下一条可发布事件并加 row lock，通常由 FOR UPDATE SKIP LOCKED 实现。
      */
-    List<OutboxEvent> findPublishableBatchForUpdate(Instant now, int batchSize);
+    Optional<OutboxEvent> findNextPublishableForUpdate(Instant now);
+
+    Optional<OutboxEvent> findByIdForUpdate(UUID id);
 
     void updateDeliveryState(OutboxEvent event);
 }

@@ -23,8 +23,7 @@ public class OutboxPublisherScheduler {
             scheduler = "outboxTaskScheduler"
     )
     public void publishPendingEvents() {
-        // Scheduling and transaction handling live on separate Spring beans so
-        // the @Transactional proxy on publishBatch() is actually applied.
+        // @Scheduled 只负责周期性触发；claim/publish/finalize 的事务拆分由 service 内部控制。
         publisherService.publishBatch();
     }
 }

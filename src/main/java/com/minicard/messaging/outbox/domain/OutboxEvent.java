@@ -132,6 +132,17 @@ public final class OutboxEvent {
         lastError = null;
     }
 
+    public void markProcessing(Instant startedAt, long processingTimeoutSeconds) {
+        Instant actualStartedAt = Objects.requireNonNull(startedAt);
+        if (processingTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("processingTimeoutSeconds must be positive");
+        }
+        // PROCESSING 是短租约(lease)，不是最终状态。
+        // publisher 宕机时，nextAttemptAt 到期后其他实例可以重新 claim 并重发。
+        status = OutboxEventStatus.PROCESSING;
+        nextAttemptAt = actualStartedAt.plusSeconds(processingTimeoutSeconds);
+    }
+
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         attempts++;
         lastError = truncate(requireText(error, "error"));
@@ -147,6 +158,7 @@ public final class OutboxEvent {
                 1L << Math.min(attempts - 1, 6),
                 MAX_RETRY_DELAY_SECONDS
         );
+        status = OutboxEventStatus.PENDING;
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
