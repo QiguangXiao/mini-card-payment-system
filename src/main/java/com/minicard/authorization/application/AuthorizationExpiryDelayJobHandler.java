@@ -18,11 +18,13 @@ public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
     @Override
     public DelayJobType jobType() {
+        // jobType() 是 DelayJobService 分发(handler dispatch)的 key。
         return DelayJobType.AUTHORIZATION_EXPIRY;
     }
 
     @Override
     public void handle(DelayJob job) {
+        // DelayJob 只保存通用 aggregateId；handler 把它转换成业务用的 authorizationId。
         expiryService.expire(UUID.fromString(job.aggregateId()));
     }
 }

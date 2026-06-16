@@ -11,12 +11,10 @@ import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Shared scheduling infrastructure with separate worker pools per mechanism.
+ * Scheduler 基础设施：复用相同 ThreadPoolTaskScheduler 创建方式，但按机制分 worker pool。
  *
- * <p>Outbox and DelayJob both use polling schedulers, so they share the same
- * ThreadPoolTaskScheduler construction pattern. They do not share a pool: Kafka
- * publication and delayed business actions have different latency and locking
- * profiles.</p>
+ * <p>Outbox 和 DelayJob 都是 polling scheduler，所以配置方式对称。
+ * 但 Kafka publication 和 delayed business action 的耗时/锁竞争不同，因此线程池隔离。</p>
  */
 @Configuration
 @EnableScheduling
@@ -25,11 +23,13 @@ public class SchedulerThreadPoolConfiguration {
 
     @Bean(name = "outboxTaskScheduler")
     public ThreadPoolTaskScheduler outboxTaskScheduler() {
+        // Outbox 只负责消息发布，单线程更容易保持 publication order。
         return taskScheduler("outbox-scheduler-", 1);
     }
 
     @Bean(name = "delayJobTaskScheduler")
     public ThreadPoolTaskScheduler delayJobTaskScheduler() {
+        // DelayJob 可能执行不同业务动作；预留小 worker pool，后续可按吞吐调整。
         return taskScheduler("delay-job-scheduler-", 2);
     }
 
@@ -37,6 +37,7 @@ public class SchedulerThreadPoolConfiguration {
     public TransactionOperations transactionOperations(
             PlatformTransactionManager transactionManager
     ) {
+        // TransactionOperations 让 DelayJobService 能显式拆分 claim/handle/finalize 三段事务。
         return new TransactionTemplate(transactionManager);
     }
 

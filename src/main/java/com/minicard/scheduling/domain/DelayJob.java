@@ -5,11 +5,10 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Durable plan for executing a business action after a delay.
+ * 延迟业务动作的 durable plan，当前用于“7 天未 capture 的授权自动过期”。
  *
- * <p>This is intentionally similar to OutboxEvent: both are database-backed
- * work queues claimed by polling schedulers. The meaning is different though:
- * Outbox publishes messages, while DelayJob executes future business actions.</p>
+ * <p>它刻意和 OutboxEvent 保持相似：都是 database-backed work queue，都由 scheduler 轮询。
+ * 区别是 Outbox 负责 publish message，DelayJob 负责 execute future business action。</p>
  */
 public final class DelayJob {
 
@@ -65,6 +64,7 @@ public final class DelayJob {
             Instant scheduledAt,
             Instant createdAt
     ) {
+        // pending() 是新 job 的 factory method；job id 由调用方生成，scheduledAt 决定最早执行时间。
         return new DelayJob(
                 id,
                 jobType,
@@ -109,6 +109,7 @@ public final class DelayJob {
     }
 
     public void markDone(Instant doneAt) {
+        // DONE 表示业务动作已成功执行，scheduler 不会再次自动处理。
         status = DelayJobStatus.DONE;
         updatedAt = Objects.requireNonNull(doneAt);
         lastError = null;
@@ -119,8 +120,8 @@ public final class DelayJob {
         if (processingTimeoutSeconds <= 0) {
             throw new IllegalArgumentException("processingTimeoutSeconds must be positive");
         }
-        // PROCESSING is a lease, not a permanent state. If a pod dies after
-        // claiming the job, nextAttemptAt lets another pod reclaim it later.
+        // PROCESSING 是 lease，不是永久状态。pod claim 后宕机时，
+        // nextAttemptAt 到期后其他 pod 可以 reclaim，避免 job 永久卡死。
         status = DelayJobStatus.PROCESSING;
         updatedAt = actualStartedAt;
         nextAttemptAt = actualStartedAt.plusSeconds(processingTimeoutSeconds);
@@ -131,16 +132,14 @@ public final class DelayJob {
         updatedAt = Objects.requireNonNull(failedAt);
         lastError = truncate(requireText(error, "error"));
         if (attempts >= maxAttempts) {
-            // DEAD jobs stop automatic retries. Operations can inspect the last
-            // error and decide whether a manual repair or replay is appropriate.
+            // DEAD 停止自动 retry，交给人工/运维判断是否需要 repair 或 replay。
             status = DelayJobStatus.DEAD;
             nextAttemptAt = failedAt;
             return;
         }
 
         status = DelayJobStatus.PENDING;
-        // Keep the retry policy symmetric with Outbox: short exponential
-        // backoff, capped to avoid leaving recoverable jobs dormant for hours.
+        // retry policy 与 Outbox 对称：短 exponential backoff，并设置上限避免可恢复任务睡太久。
         long delaySeconds = Math.min(
                 1L << Math.min(attempts - 1, 6),
                 MAX_RETRY_DELAY_SECONDS

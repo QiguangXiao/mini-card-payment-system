@@ -15,7 +15,7 @@ import com.minicard.messaging.outbox.domain.OutboxEventRepository;
 import org.springframework.stereotype.Component;
 
 /**
- * Outbox adapter for the separate authorization-expired lifecycle event.
+ * Authorization expired lifecycle event 的 Outbox adapter。
  */
 @Component
 public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExpiryEventPublisher {
@@ -38,6 +38,7 @@ public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExp
 
     @Override
     public void append(Authorization authorization) {
+        // expired event 需要同时包含计划过期时间(expiresAt)和实际处理时间(expiredAt)。
         Instant expiresAt = authorization.expiresAt()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "expired authorization must have expiresAt"
@@ -46,6 +47,7 @@ public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExp
                 .orElseThrow(() -> new IllegalArgumentException(
                         "expired authorization must have expiredAt"
                 ));
+        // 新 eventId 用于消息幂等；它和 authorizationId 不同，因为一个 aggregate 可产生多个事件。
         UUID eventId = UUID.randomUUID();
         AuthorizationExpiredEvent payload = new AuthorizationExpiredEvent(
                 authorization.id(),
@@ -55,6 +57,7 @@ public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExp
                 expiresAt,
                 expiredAt
         );
+        // envelope 统一 metadata：event type/version/occurredAt/payload。
         IntegrationEventEnvelope<AuthorizationExpiredEvent> envelope =
                 new IntegrationEventEnvelope<>(
                         eventId,
@@ -64,8 +67,8 @@ public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExp
                         payload
                 );
 
-        // This insert participates in AuthorizationExpiryService's transaction,
-        // so released credit cannot commit without a recoverable event intent.
+        // insert OutboxEvent 参与 AuthorizationExpiryService 的 transaction。
+        // released credit 不能在缺少 recoverable event intent 的情况下单独 commit。
         outboxEventRepository.insert(OutboxEvent.pending(
                 eventId,
                 AGGREGATE_TYPE,
@@ -80,6 +83,7 @@ public class OutboxAuthorizationExpiryEventPublisher implements AuthorizationExp
 
     private String serialize(IntegrationEventEnvelope<AuthorizationExpiredEvent> envelope) {
         try {
+            // 序列化失败直接抛异常，让上层 transaction rollback，避免写入不完整事件。
             return objectMapper.writeValueAsString(envelope);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("failed to serialize authorization expiry event", exception);

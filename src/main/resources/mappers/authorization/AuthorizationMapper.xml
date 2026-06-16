@@ -33,8 +33,8 @@
     </select>
 
     <!--
-      INSERT-first idempotency avoids a racy read-then-insert sequence.
-      The unique idempotency_key constraint chooses the single winner.
+      INSERT-first idempotency：先写入 claim，避免 read-then-insert race。
+      unique idempotency_key constraint 会在并发请求中选出唯一 winner。
     -->
     <insert id="insert">
         INSERT INTO authorizations (
@@ -57,8 +57,8 @@
     </insert>
 
     <!--
-      A concurrent duplicate waits for the winning transaction and then reads
-      its final decision instead of performing a second credit reservation.
+      concurrent duplicate 会等待 winner transaction，然后读取最终状态。
+      这样 duplicate 不会再次执行 credit reservation。
     -->
     <select id="findByIdempotencyKeyForUpdate" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
@@ -68,9 +68,8 @@
     </select>
 
     <!--
-      DelayJobService owns the job-row lock. This authorization lock is still
-      required because the business state is the final source of truth before
-      releasing reserved credit.
+      DelayJobService 已经锁住 job row；这里仍要锁 authorization row。
+      原因是 business state 才是释放 reserved credit 前的 source of truth。
     -->
     <select id="findByIdForUpdate" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>

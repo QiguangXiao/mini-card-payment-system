@@ -36,19 +36,16 @@ public final class CreditAccount {
 
     public CreditReservationResult reserve(Money amount) {
         Objects.requireNonNull(amount);
-        // A blocked account can reject every card linked to it. This is distinct
-        // from a blocked Card, which rejects only that single card.
+        // ACTIVE check 是账户级开关：blocked account 会拒绝该账户下所有卡，区别于单张 Card blocked。
         if (status != CreditAccountStatus.ACTIVE) {
             return CreditReservationResult.rejected(CreditReservationFailure.ACCOUNT_BLOCKED);
         }
-        // Currency mismatch is a domain failure. Without this check, arithmetic
-        // like JPY limit minus USD charge would look valid but be meaningless.
+        // currency mismatch 是 domain failure；JPY limit 减 USD amount 在业务上没有意义。
         if (!creditLimit.currency().equals(amount.currency())) {
             return CreditReservationResult.rejected(CreditReservationFailure.CURRENCY_MISMATCH);
         }
-        // Available credit is computed from the aggregate state, and the row is
-        // locked by the repository before this method is called. That pairing is
-        // what makes the check safe under concurrent authorizations.
+        // availableCredit() 来自 aggregate 当前状态；service 在调用前已经拿到 DB row lock。
+        // “row lock + domain invariant”配合，才能在并发 authorization 下安全预占额度。
         if (amount.isGreaterThan(availableCredit())) {
             return CreditReservationResult.rejected(
                     CreditReservationFailure.INSUFFICIENT_AVAILABLE_CREDIT
@@ -61,9 +58,8 @@ public final class CreditAccount {
 
     public void release(Money amount) {
         Objects.requireNonNull(amount);
-        // Expiry is compensating a reservation that was already recorded. A
-        // currency mismatch or underflow therefore indicates corrupted state,
-        // so failing the transaction is safer than silently changing balances.
+        // release() 是 expiry 对已存在 reservation 的补偿动作(compensating action)。
+        // currency mismatch 或 underflow 代表状态损坏，直接失败并 rollback 比静默修正更安全。
         if (!creditLimit.currency().equals(amount.currency())) {
             throw new IllegalArgumentException("release currency must match account currency");
         }
@@ -78,8 +74,7 @@ public final class CreditAccount {
     }
 
     private void validateState() {
-        // These invariants protect both newly loaded database rows and future
-        // factory methods from representing impossible account balances.
+        // invariant 同时保护 DB restore 和未来 factory method，避免 impossible balance 进入领域模型。
         if (!creditLimit.currency().equals(reservedAmount.currency())) {
             throw new IllegalArgumentException("credit limit and reserved amount currencies differ");
         }

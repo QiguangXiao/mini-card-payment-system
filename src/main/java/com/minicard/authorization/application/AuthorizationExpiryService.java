@@ -16,11 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Expires one overdue authorization and releases its reserved credit atomically.
+ * 处理单个过期授权(expired authorization)，并在同一事务内释放 reserved credit。
  *
- * <p>Processing one item per transaction keeps database locks short and ensures
- * a corrupt item cannot roll back unrelated expiry work in the same scheduler
- * run.</p>
+ * <p>一个 job 一个 transaction，可以缩短 DB lock 时间，也避免坏数据回滚同一轮里的其他 job。</p>
  */
 @Service
 public class AuthorizationExpiryService {
@@ -50,6 +48,7 @@ public class AuthorizationExpiryService {
     @Transactional
     public void expire(UUID authorizationId) {
         Instant now = Instant.now(clock);
+        // 先锁 authorization row：delay_jobs 只是执行计划，真正能否释放额度要看业务表 source of truth。
         Authorization authorization = authorizationRepository
                 .findByIdForUpdate(authorizationId)
                 .orElseThrow(() -> new IllegalStateException(
@@ -58,8 +57,7 @@ public class AuthorizationExpiryService {
                 ));
 
         if (!authorization.status().isApproved()) {
-            // The job can be safely completed when the business state no longer
-            // needs expiry. This makes retry and manual replay idempotent.
+            // 状态已经不是 APPROVED 时，说明不再需要 expiry；直接视为成功，保证 retry/manual replay 幂等。
             log.info(
                     "authorization_expiry_skipped authorizationId={} status={}",
                     authorization.id(),
@@ -75,17 +73,14 @@ public class AuthorizationExpiryService {
             throw new IllegalStateException("authorization expiry job ran before expiresAt");
         }
 
-        // The delay_jobs row is already locked by DelayJobService. We still
-        // lock the authorization row before reading status/expiresAt because
-        // the business row is the source of truth for whether release is valid.
+        // Card 用于找到 creditAccountId；authorization 保存 cardId，不直接保存 accountId，保持边界清晰。
         Card card = cardRepository.findById(authorization.cardId())
                 .orElseThrow(() -> new IllegalStateException(
                         "approved authorization references missing card "
                                 + authorization.cardId()
                 ));
-        // The account row lock serializes expiry releases with new credit
-        // reservations. This prevents a concurrent request from calculating
-        // available credit from a stale reserved amount.
+        // account row lock 把 expiry release 和新 authorization reserve 串行化，
+        // 避免并发请求基于 stale reservedAmount 计算可用额度。
         CreditAccount account = creditAccountRepository.findByIdForUpdate(card.creditAccountId())
                 .orElseThrow(() -> new IllegalStateException(
                         "approved authorization references missing credit account "
@@ -95,8 +90,8 @@ public class AuthorizationExpiryService {
         account.release(authorization.requestedAmount());
         authorization.expire(now);
 
-        // Account release, authorization transition, and Outbox insert share
-        // this transaction. A failure in any step rolls back all three changes.
+        // 三件事同事务提交：account release、authorization EXPIRED、Outbox expired event。
+        // 任何一步失败都会 rollback，避免释放额度但状态/事件缺失。
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
         eventPublisher.append(authorization);

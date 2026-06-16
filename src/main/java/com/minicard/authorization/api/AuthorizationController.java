@@ -35,6 +35,8 @@ public class AuthorizationController {
             @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody CreateAuthorizationRequest request
     ) {
+        // Controller 只做 HTTP adapter：把 header/body 转成 application command。
+        // 真正的幂等性(idempotency)、锁(row lock)、额度预占(reservation)都放在 Service/Domain。
         AuthorizationCommand command = new AuthorizationCommand(
                 idempotencyKey,
                 request.cardId(),
@@ -44,11 +46,13 @@ public class AuthorizationController {
                 request.merchantCountry(),
                 request.cardholderCountry()
         );
+        // authorize(command) 是核心 use case 入口；返回 domain object 后再映射成 API response。
         return AuthorizationResponse.from(authorizationService.authorize(command));
     }
 
     @GetMapping("/{id}")
     public AuthorizationResponse get(@PathVariable UUID id) {
+        // GET 是只读查询(read-only query)，按 authorizationId 读取当前状态，不修改额度或事件表。
         return AuthorizationResponse.from(authorizationService.get(id));
     }
 }

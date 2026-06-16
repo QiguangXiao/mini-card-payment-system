@@ -9,9 +9,8 @@ import java.util.UUID;
 public final class Authorization {
 
     /**
-     * The hold deadline is persisted when approval happens. Persisting the
-     * deadline means a later policy change does not silently change the expiry
-     * date of authorizations that were already approved.
+     * Hold duration 是授权保留额度的业务窗口。APPROVED 时会把 expiresAt 持久化，
+     * 这样以后策略变化不会偷偷改变历史 authorization 的过期时间。
      */
     private static final Duration HOLD_DURATION = Duration.ofDays(7);
 
@@ -23,12 +22,9 @@ public final class Authorization {
     private AuthorizationDeclineReason declineReason;
     private final Instant createdAt;
     private Instant decidedAt;
-    // The business deadline is stored explicitly instead of recalculated from
-    // decidedAt, preserving the original hold policy for audit and replay.
+    // expiresAt 是显式 business deadline，不从 decidedAt 动态重算，方便 audit/replay。
     private Instant expiresAt;
-    // This records when the scheduler actually completed expiry. It can be
-    // later than expiresAt because scheduled processing is intentionally
-    // eventually executed rather than guaranteed at the exact deadline.
+    // expiredAt 表示 scheduler 实际完成释放的时间，可能晚于 expiresAt；定时任务是 eventual execution。
     private Instant expiredAt;
 
     private Authorization(
@@ -65,9 +61,8 @@ public final class Authorization {
             Money requestedAmount,
             Instant createdAt
     ) {
-        // An authorization attempt is first recorded as PENDING. Approval is not
-        // assumed at construction time because card/account/risk checks must run
-        // before a final decision exists.
+        // request() 是新授权的 factory method：这里生成 UUID，并先进入 PENDING。
+        // 是否 APPROVED 要等 card/account/risk 检查后才能决定。
         return new Authorization(
                 UUID.randomUUID(),
                 requestFingerprint,
@@ -110,8 +105,7 @@ public final class Authorization {
 
     public void apply(AuthorizationDecision decision, Instant decisionTime) {
         Objects.requireNonNull(decision);
-        // Decision objects let domain services express "approve or decline"
-        // while the aggregate still owns how that decision mutates state.
+        // AuthorizationDecision 表达“批准或拒绝”，但真正修改状态的规则仍由 aggregate 维护。
         if (decision.approved()) {
             approve(decisionTime);
         } else {
@@ -120,8 +114,7 @@ public final class Authorization {
     }
 
     public void approve(Instant decisionTime) {
-        // Only one final decision is allowed. This protects the audit trail and
-        // prevents accidental transitions such as DECLINED -> APPROVED.
+        // ensurePending() 防止重复决策，保护 audit trail，并禁止 DECLINED -> APPROVED 这类非法跳转。
         ensurePending("approve");
         status = AuthorizationStatus.APPROVED;
         declineReason = null;
@@ -131,8 +124,7 @@ public final class Authorization {
     }
 
     public void decline(AuthorizationDeclineReason reason, Instant decisionTime) {
-        // Decline reason is mandatory because operations and support teams need
-        // to explain why a transaction failed.
+        // decline reason 必填，后续 API、客服和审计都需要知道失败原因。
         ensurePending("decline");
         status = AuthorizationStatus.DECLINED;
         declineReason = Objects.requireNonNull(reason);
@@ -142,6 +134,7 @@ public final class Authorization {
     }
 
     public void expire(Instant expiryTime) {
+        // expire() 只允许 APPROVED -> EXPIRED。释放额度前后要保持 authorization 状态可追踪。
         ensureApproved("expire");
         Instant actualExpiryTime = Objects.requireNonNull(expiryTime);
         if (actualExpiryTime.isBefore(expiresAt)) {
@@ -168,8 +161,7 @@ public final class Authorization {
     }
 
     private void validateDecisionState() {
-        // This validation also runs when restoring from the database, so corrupt
-        // persisted rows cannot silently become valid domain objects.
+        // restore() 从 DB 还原时也会跑这段 validation，避免脏数据绕过 domain invariant。
         if (status == AuthorizationStatus.PENDING
                 && (declineReason != null || decidedAt != null
                 || expiresAt != null || expiredAt != null)) {

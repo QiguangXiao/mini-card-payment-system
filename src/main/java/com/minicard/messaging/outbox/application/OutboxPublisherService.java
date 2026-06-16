@@ -13,11 +13,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Polls durable Outbox rows and hands them to Kafka with at-least-once delivery.
+ * 轮询 durable Outbox rows，并以 at-least-once 语义发布到 Kafka。
  *
- * <p>The database lock prevents multiple application instances from selecting
- * the same row concurrently. It cannot make Kafka acknowledgement and MySQL
- * commit atomic, which is why every listener still implements idempotency.</p>
+ * <p>DB lock 可以避免多个实例同时选中同一 row，但不能让 Kafka ack 和 MySQL commit 原子化。
+ * 因此消费者仍必须按 eventId 做幂等(idempotency)。</p>
  */
 @Service
 public class OutboxPublisherService {
@@ -44,6 +43,8 @@ public class OutboxPublisherService {
     @Transactional
     public void publishBatch() {
         Instant now = Instant.now(clock);
+        // findPublishableBatchForUpdate() 使用 FOR UPDATE SKIP LOCKED，
+        // 多个 pod 可以并发扫描 outbox，而不会同时发布同一批 row。
         List<OutboxEvent> events = outboxEventRepository.findPublishableBatchForUpdate(
                 now,
                 properties.batchSize()
@@ -51,6 +52,7 @@ public class OutboxPublisherService {
 
         for (OutboxEvent event : events) {
             try {
+                // publish() 只负责把已持久化 payload 发给 broker；成功后再更新 DB delivery state。
                 messagePublisher.publish(
                         event,
                         Duration.ofMillis(properties.sendTimeoutMs())
@@ -64,6 +66,7 @@ public class OutboxPublisherService {
                         event.aggregateId()
                 );
             } catch (RuntimeException exception) {
+                // 失败不丢事件：markFailed() 会增加 attempts，并设置下一次 retry 时间或进入 DEAD。
                 event.markFailed(
                         exception.getMessage() == null
                                 ? exception.getClass().getSimpleName()
@@ -81,9 +84,8 @@ public class OutboxPublisherService {
                         exception
                 );
 
-                // Stop after a failure so later events do not overtake an older
-                // event. A production high-throughput publisher may preserve
-                // ordering per partition key instead of stopping globally.
+                // 遇到失败先停止本批次，避免后面的事件 overtaking 前面的事件。
+                // 生产级高吞吐实现通常按 partition key 保序，而不是全局停止。
                 break;
             }
         }

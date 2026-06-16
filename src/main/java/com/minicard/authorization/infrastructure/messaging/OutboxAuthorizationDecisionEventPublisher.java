@@ -15,8 +15,8 @@ import com.minicard.messaging.outbox.domain.OutboxEventRepository;
 import org.springframework.stereotype.Component;
 
 /**
- * Authorization outbound adapter that translates the aggregate into an
- * integration event and stores it through the shared Outbox mechanism.
+ * Authorization outbound adapter：把 domain aggregate 转成 integration event，
+ * 再写入共享 Outbox 机制等待异步发布。
  */
 @Component
 public class OutboxAuthorizationDecisionEventPublisher
@@ -40,22 +40,24 @@ public class OutboxAuthorizationDecisionEventPublisher
 
     @Override
     public void append(Authorization authorization) {
+        // 只有已经决策(decided)的 authorization 才能生成事件；PENDING 事件对下游没有业务意义。
         Instant decidedAt = authorization.decidedAt()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "only a decided authorization can produce an integration event"
                 ));
+        // eventId 是下游 consumer 做幂等去重(deduplication)的主键。
         UUID eventId = UUID.randomUUID();
         AuthorizationDecidedEvent payload = new AuthorizationDecidedEvent(
                 authorization.id(),
                 authorization.cardId(),
-                // Decimal text preserves financial precision and scale across
-                // JSON stores and consumers that might otherwise use floating point.
+                // 金额用 decimal text，避免 JSON consumer 用 floating point 时丢失金融精度。
                 authorization.requestedAmount().amount().toPlainString(),
                 authorization.requestedAmount().currency().getCurrencyCode(),
                 authorization.status().name(),
                 authorization.declineReason().map(Enum::name).orElse(null),
                 decidedAt
         );
+        // envelope 是统一事件外壳：包含 event metadata + payload，方便版本化和路由。
         IntegrationEventEnvelope<AuthorizationDecidedEvent> envelope =
                 new IntegrationEventEnvelope<>(
                         eventId,
@@ -65,8 +67,8 @@ public class OutboxAuthorizationDecisionEventPublisher
                         payload
                 );
 
-        // AuthorizationService owns the transaction. The authorization decision,
-        // credit reservation, and event intent commit or roll back together.
+        // insert OutboxEvent 参与 AuthorizationService 的 transaction。
+        // authorization decision、credit reservation、event intent 要么一起 commit，要么一起 rollback。
         outboxEventRepository.insert(OutboxEvent.pending(
                 eventId,
                 AGGREGATE_TYPE,
@@ -81,6 +83,7 @@ public class OutboxAuthorizationDecisionEventPublisher
 
     private String serialize(IntegrationEventEnvelope<AuthorizationDecidedEvent> envelope) {
         try {
+            // ObjectMapper 把 envelope 序列化成 JSON payload，Outbox 表只保存字符串形式的消息体。
             return objectMapper.writeValueAsString(envelope);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("failed to serialize authorization event", exception);

@@ -45,9 +45,8 @@
     </insert>
 
     <!--
-      This mirrors the Outbox claim query: due rows are selected in a stable
-      order and locked with SKIP LOCKED so multiple pods can work safely.
-      PROCESSING rows become runnable only after their lease expires.
+      这和 Outbox claim query 对称：按稳定顺序选择 due rows，并使用 SKIP LOCKED。
+      多个 pod 可以安全并发扫描；PROCESSING row 只有 lease 到期后才会再次 runnable。
     -->
     <select id="findNextRunnableForUpdate" resultMap="delayJobRowMap">
         SELECT <include refid="delayJobColumns"/>

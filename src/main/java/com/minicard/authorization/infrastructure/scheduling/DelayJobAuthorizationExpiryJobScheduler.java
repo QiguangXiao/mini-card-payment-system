@@ -12,7 +12,7 @@ import com.minicard.scheduling.domain.DelayJobType;
 import org.springframework.stereotype.Component;
 
 /**
- * Stores authorization expiry plans in the shared delay_jobs mechanism.
+ * 把 authorization expiry plan 写入通用 delay_jobs 表。
  */
 @Component
 public class DelayJobAuthorizationExpiryJobScheduler implements AuthorizationExpiryJobScheduler {
@@ -38,8 +38,8 @@ public class DelayJobAuthorizationExpiryJobScheduler implements AuthorizationExp
                 ));
         Instant now = Instant.now(clock);
 
-        // This insert participates in AuthorizationService's transaction. If
-        // the approval rolls back, the delayed expiry plan rolls back too.
+        // insertIfAbsent() 和 AuthorizationService 的 APPROVED 写入同事务。
+        // 如果 approval rollback，延迟释放计划也 rollback，保持 authorization/delay_jobs 一致。
         delayJobRepository.insertIfAbsent(DelayJob.pending(
                 UUID.randomUUID(),
                 DelayJobType.AUTHORIZATION_EXPIRY,

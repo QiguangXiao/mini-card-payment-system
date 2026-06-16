@@ -23,10 +23,12 @@ public record AuthorizationCommand(
 ) {
 
     public Money requestedAmount() {
+        // Money value object 把金额和币种绑定在一起，避免 service 里到处传 BigDecimal + Currency。
         return new Money(amount, currency);
     }
 
     public RiskAssessmentRequest toRiskAssessmentRequest() {
+        // RiskAssessmentRequest 是给风控(risk)模块的输入模型，避免风控直接依赖 HTTP DTO。
         return new RiskAssessmentRequest(
                 cardId,
                 merchantId,
@@ -37,6 +39,8 @@ public record AuthorizationCommand(
     }
 
     public String requestFingerprint() {
+        // canonical request 表示“同一个业务请求”的稳定字符串。
+        // 同一个 Idempotency-Key 只能重复提交完全相同的 canonical request。
         String canonicalRequest = String.join(
                 "|",
                 cardId,
@@ -47,6 +51,7 @@ public record AuthorizationCommand(
                 currency.getCurrencyCode()
         );
         try {
+            // SHA-256 fingerprint 用来快速比较请求是否相同；它不是安全认证，只是幂等冲突检测。
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(
                     canonicalRequest.getBytes(StandardCharsets.UTF_8)
@@ -57,6 +62,7 @@ public record AuthorizationCommand(
     }
 
     public boolean matches(Authorization authorization) {
+        // Retry 请求必须和已保存 authorization 的 fingerprint 一致，否则说明复用了错误的幂等键。
         return requestFingerprint().equals(authorization.requestFingerprint());
     }
 

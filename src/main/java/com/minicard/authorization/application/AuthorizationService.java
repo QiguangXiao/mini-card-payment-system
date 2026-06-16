@@ -58,9 +58,8 @@ public class AuthorizationService {
     @Transactional
     public Authorization authorize(AuthorizationCommand command) {
         Instant now = Instant.now(clock);
-        // Start with a PENDING aggregate so every request has an auditable row
-        // before any business decision is made. This mirrors a real issuer flow:
-        // receive request -> record attempt -> decide -> persist final outcome.
+        // 先创建 PENDING aggregate：每次请求都先落一条可审计(auditable)记录，
+        // 再进入风控、卡状态和额度检查，符合真实发卡行 issuer flow。
         Authorization pending = Authorization.request(
                 command.requestFingerprint(),
                 command.cardId(),
@@ -69,39 +68,33 @@ public class AuthorizationService {
         );
 
 
-        // The idempotency claim is deliberately the first write in the
-        // transaction. If two identical client retries arrive at the same time,
-        // only the winner is allowed to continue to card/account checks and
-        // reserve credit. The loser reads the winner's result below.
+        // claim() 是本事务第一笔写入：利用 idempotency_key 唯一索引让并发 retry 只有一个 winner。
+        // loser 不会继续做额度预占(reserve credit)，而是在下面读取 winner 的结果。
         boolean claimed = authorizationRepository.claim(command.idempotencyKey(), pending);
         Authorization persisted = authorizationRepository
                 .findByIdempotencyKeyForUpdate(command.idempotencyKey())
                 .orElseThrow(() -> new IllegalStateException(
                         "authorization claim was not visible"
                 ));
-        // A reused idempotency key is only valid when it represents the exact
-        // same business request. Otherwise, the caller could accidentally hide a
-        // different charge behind an old retry key.
+        // FOR UPDATE 会锁住已 claim 的 authorization row，确保并发 duplicate 等到最终状态后再返回。
+        // returnIdempotentResult() 校验 fingerprint，防止同一个幂等键隐藏了不同交易。
         returnIdempotentResult(persisted, command);
 
         if (!claimed) {
-            // Existing result means this is a retry or concurrent duplicate.
-            // Returning here is what prevents double-reserving available credit.
+            // claimed=false 表示这是 retry 或并发 duplicate；直接返回能避免 double reservation。
             return persisted;
         }
 
-        // Only the idempotency winner reaches the real decision path.
+        // 只有 idempotency winner 才能进入真实决策路径(decision path)。
         decideAndReserve(persisted, command, now);
         authorizationRepository.update(persisted);
         if (persisted.status().isApproved()) {
-            // The delay job is written in the same transaction as the approval.
-            // This keeps "reserved credit must eventually expire" consistent
-            // with the authorization row that made the hold visible.
+            // DelayJob 和 APPROVED authorization 在同一事务提交：
+            // 只要额度 hold 生效，就一定有一个未来释放额度的 durable plan。
             expiryJobScheduler.schedule(persisted);
         }
-        // The Outbox row is inserted in this same MySQL transaction. We never
-        // publish directly to Kafka here because a broker/network failure must
-        // not leave an approved authorization without a recoverable event.
+        // Outbox row 也在同一 MySQL transaction 写入；这里不直接发 Kafka，
+        // 因为 broker/network failure 不应该破坏主交易，只需要后续可恢复发布。
         eventPublisher.append(persisted);
         return persisted;
     }
@@ -117,18 +110,15 @@ public class AuthorizationService {
             AuthorizationCommand command,
             Instant now
     ) {
-        // Cheap policy checks run before locking account rows. This keeps the
-        // critical section short under high traffic.
+        // 便宜的 policy check 先执行，尽量推迟 account row lock，缩短高并发下的 critical section。
         AuthorizationDecision decision = decisionPolicy.decide(authorization);
         if (!decision.approved()) {
-            // The aggregate applies the decision so status invariants remain in
-            // one place instead of being assigned by the service.
+            // apply() 让 aggregate 自己维护状态转换(state transition)，service 不直接改字段。
             authorization.apply(decision, now);
             return;
         }
 
-        // Card is a separate aggregate: it answers "may this plastic/token be
-        // used?" while CreditAccount answers "is there enough available limit?"
+        // Card 是独立 aggregate：回答“这张卡能不能用”；CreditAccount 回答“额度够不够”。
         Card card = cardRepository.findById(authorization.cardId()).orElse(null);
         if (card == null) {
             authorization.decline(AuthorizationDeclineReason.CARD_NOT_FOUND, now);
@@ -136,24 +126,21 @@ public class AuthorizationService {
         }
         CardAuthorizationResult eligibility = card.checkAuthorizationEligibility();
         if (!eligibility.eligible()) {
-            // Keep card-specific reasons in the Card domain, then translate them
-            // into Authorization decline reasons for the API and audit record.
+            // Card domain 产出自己的失败原因，再映射成 Authorization decline reason 给 API/audit 使用。
             authorization.decline(mapCardFailure(eligibility.failure()), now);
             return;
         }
 
-        // Risk check runs before the credit-account row lock. That order keeps
-        // external latency and algorithmic scoring out of the hot critical
-        // section where concurrent authorizations queue for the same account.
+        // riskAssessmentService.assess() 放在账户锁之前：风控可能有计算/外部调用成本，
+        // 不应该让同账户的其他 authorization 在锁上白等。
         RiskDecision riskDecision = riskAssessmentService.assess(command.toRiskAssessmentRequest());
         if (!riskDecision.approved()) {
             authorization.decline(mapRiskFailure(riskDecision.declineReason()), now);
             return;
         }
 
-        // This SELECT ... FOR UPDATE is the core concurrency control for credit
-        // limit. Every authorization for the same account queues here before
-        // checking available credit and changing reservedAmount.
+        // findByIdForUpdate() 对 credit_accounts 做 SELECT ... FOR UPDATE。
+        // 这是额度并发控制核心：同一账户的请求在这里串行检查 availableCredit 并更新 reservedAmount。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(card.creditAccountId())
                 .orElse(null);
@@ -162,17 +149,16 @@ public class AuthorizationService {
             return;
         }
 
-        // reserve() is a domain behavior, not arithmetic in the service. The
-        // CreditAccount aggregate owns the invariant that reserved <= limit.
+        // reserve() 是 domain behavior，不是 service 里的普通加减法。
+        // CreditAccount aggregate 负责保证 reservedAmount <= creditLimit。
         CreditReservationResult reservation = account.reserve(authorization.requestedAmount());
         if (!reservation.reserved()) {
             authorization.decline(mapFailure(reservation.failure()), now);
             return;
         }
 
-        // Persist account first, then approve the authorization in the same
-        // transaction. If either write fails, the transaction rolls back and the
-        // system will not show an approval without the matching credit reserve.
+        // 同一 transaction 内先保存 account reservedAmount，再把 authorization 标成 APPROVED。
+        // 任一写入失败都会 rollback，避免“授权成功但额度没冻结”的不一致状态。
         creditAccountRepository.update(account);
         authorization.approve(now);
     }

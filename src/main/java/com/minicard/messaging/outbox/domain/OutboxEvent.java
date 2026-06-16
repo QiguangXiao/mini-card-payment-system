@@ -5,11 +5,10 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Reliable-message state stored in MySQL before publication to Kafka.
+ * Kafka 发布前先落 MySQL 的 reliable-message state。
  *
- * <p>Outbox delivery is intentionally at-least-once. A crash after Kafka
- * acknowledges a message but before MySQL commits can publish it again, so
- * every future consumer must deduplicate by event ID.</p>
+ * <p>Outbox delivery 是 at-least-once：Kafka ack 后、MySQL commit 前宕机可能导致重复发布。
+ * 所以后续 consumer 必须用 eventId 去重(deduplicate)。</p>
  */
 public final class OutboxEvent {
 
@@ -76,6 +75,7 @@ public final class OutboxEvent {
             String payload,
             Instant createdAt
     ) {
+        // pending() 创建尚未发布的事件；eventId 由业务 adapter 生成，payload 已经序列化好。
         return new OutboxEvent(
                 id,
                 aggregateType,
@@ -126,6 +126,7 @@ public final class OutboxEvent {
     }
 
     public void markPublished(Instant publishedAt) {
+        // PUBLISHED 表示 broker 已确认，Outbox scheduler 不再自动重发。
         status = OutboxEventStatus.PUBLISHED;
         this.publishedAt = Objects.requireNonNull(publishedAt);
         lastError = null;
@@ -135,15 +136,13 @@ public final class OutboxEvent {
         attempts++;
         lastError = truncate(requireText(error, "error"));
         if (attempts >= maxAttempts) {
-            // DEAD events require an explicit operational replay decision. This
-            // prevents a poison event from retrying forever and hiding failure.
+            // DEAD event 停止自动 retry，避免 poison message 无限重试并掩盖真实故障。
             status = OutboxEventStatus.DEAD;
             nextAttemptAt = failedAt;
             return;
         }
 
-        // Exponential backoff reduces pressure during a Kafka outage and is
-        // capped so recovery does not leave events waiting for hours.
+        // exponential backoff 降低 Kafka outage 时的压力；上限避免恢复后事件等待太久。
         long delaySeconds = Math.min(
                 1L << Math.min(attempts - 1, 6),
                 MAX_RETRY_DELAY_SECONDS

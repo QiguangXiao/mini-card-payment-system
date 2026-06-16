@@ -5,7 +5,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Generic scheduler for delayed business actions.
+ * 通用延迟任务 scheduler，负责周期性触发 DelayJobService。
  */
 @Component
 @ConditionalOnProperty(
@@ -31,9 +31,8 @@ public class DelayJobScheduler {
             scheduler = "delayJobTaskScheduler"
     )
     public void dispatchDueJobs() {
-        // This mirrors the Outbox publisher's polling shape, but uses a
-        // separate worker pool because business jobs may contend with account
-        // locks and should not delay message publication.
+        // @Scheduled 使用独立 delayJobTaskScheduler worker pool。
+        // 它和 Outbox polling 形状相同，但业务 job 可能持有 account lock，所以不和消息发布共用线程池。
         for (int processed = 0; processed < properties.maxPerRun(); processed++) {
             if (!delayJobService.dispatchNext()) {
                 return;

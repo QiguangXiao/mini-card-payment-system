@@ -50,9 +50,8 @@
     </insert>
 
     <!--
-      SKIP LOCKED lets multiple application instances poll concurrently without
-      publishing the same selected rows. Delivery remains at-least-once because
-      Kafka acknowledgement and the MySQL commit are not one atomic transaction.
+      SKIP LOCKED 允许多个 application instance 并发 poll，而不会发布同一批 selected rows。
+      但 Kafka acknowledgement 和 MySQL commit 不是原子事务，所以 delivery 仍是 at-least-once。
     -->
     <select id="findPublishableBatchForUpdate" resultMap="outboxEventRowMap">
         SELECT <include refid="outboxColumns"/>
