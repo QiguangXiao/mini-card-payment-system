@@ -32,6 +32,7 @@ public class AuthorizationService {
     private final CreditAccountRepository creditAccountRepository;
     private final RiskAssessmentService riskAssessmentService;
     private final AuthorizationDecisionEventPublisher eventPublisher;
+    private final AuthorizationExpiryJobScheduler expiryJobScheduler;
     private final Clock clock;
 
     public AuthorizationService(
@@ -41,6 +42,7 @@ public class AuthorizationService {
             CreditAccountRepository creditAccountRepository,
             RiskAssessmentService riskAssessmentService,
             AuthorizationDecisionEventPublisher eventPublisher,
+            AuthorizationExpiryJobScheduler expiryJobScheduler,
             Clock clock
     ) {
         this.authorizationRepository = authorizationRepository;
@@ -49,6 +51,7 @@ public class AuthorizationService {
         this.creditAccountRepository = creditAccountRepository;
         this.riskAssessmentService = riskAssessmentService;
         this.eventPublisher = eventPublisher;
+        this.expiryJobScheduler = expiryJobScheduler;
         this.clock = clock;
     }
 
@@ -90,6 +93,12 @@ public class AuthorizationService {
         // Only the idempotency winner reaches the real decision path.
         decideAndReserve(persisted, command, now);
         authorizationRepository.update(persisted);
+        if (persisted.status().isApproved()) {
+            // The delay job is written in the same transaction as the approval.
+            // This keeps "reserved credit must eventually expire" consistent
+            // with the authorization row that made the hold visible.
+            expiryJobScheduler.schedule(persisted);
+        }
         // The Outbox row is inserted in this same MySQL transaction. We never
         // publish directly to Kafka here because a broker/network failure must
         // not leave an approved authorization without a recoverable event.

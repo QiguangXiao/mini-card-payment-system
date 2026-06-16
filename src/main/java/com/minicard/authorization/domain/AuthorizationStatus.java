@@ -4,5 +4,9 @@ public enum AuthorizationStatus {
     PENDING,
     APPROVED,
     DECLINED,
-    EXPIRED
+    EXPIRED;
+
+    public boolean isApproved() {
+        return this == APPROVED;
+    }
 }

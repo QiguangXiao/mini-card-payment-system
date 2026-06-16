@@ -67,6 +67,24 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     CONSTRAINT chk_outbox_attempts_non_negative CHECK (attempts >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS delay_jobs (
+    id CHAR(36) PRIMARY KEY,
+    job_type VARCHAR(100) NOT NULL,
+    aggregate_type VARCHAR(50) NOT NULL,
+    aggregate_id VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    scheduled_at TIMESTAMP(6) NOT NULL,
+    next_attempt_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    last_error VARCHAR(500) NULL,
+    CONSTRAINT uk_delay_jobs_aggregate UNIQUE (job_type, aggregate_type, aggregate_id),
+    INDEX idx_delay_jobs_runnable (status, next_attempt_at, created_at),
+    CONSTRAINT chk_delay_jobs_attempts_non_negative CHECK (attempts >= 0),
+    CONSTRAINT chk_delay_jobs_status CHECK (status IN ('PENDING', 'PROCESSING', 'DONE', 'DEAD'))
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id CHAR(36) PRIMARY KEY,
     source_event_id CHAR(36) NOT NULL,

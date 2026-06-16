@@ -1,6 +1,5 @@
 package com.minicard.authorization.domain;
 
-import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,7 +11,7 @@ public interface AuthorizationRepository {
 
     Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey);
 
-    Optional<Authorization> findNextExpiredApprovedForUpdate(Instant now);
+    Optional<Authorization> findByIdForUpdate(UUID id);
 
     void update(Authorization authorization);
 }

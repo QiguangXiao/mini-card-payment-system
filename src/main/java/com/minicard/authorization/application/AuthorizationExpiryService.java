@@ -2,6 +2,7 @@ package com.minicard.authorization.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.UUID;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
@@ -47,17 +48,36 @@ public class AuthorizationExpiryService {
     }
 
     @Transactional
-    public boolean expireNext() {
+    public void expire(UUID authorizationId) {
         Instant now = Instant.now(clock);
         Authorization authorization = authorizationRepository
-                .findNextExpiredApprovedForUpdate(now)
-                .orElse(null);
-        if (authorization == null) {
-            return false;
+                .findByIdForUpdate(authorizationId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "authorization expiry job references missing authorization "
+                                + authorizationId
+                ));
+
+        if (!authorization.status().isApproved()) {
+            // The job can be safely completed when the business state no longer
+            // needs expiry. This makes retry and manual replay idempotent.
+            log.info(
+                    "authorization_expiry_skipped authorizationId={} status={}",
+                    authorization.id(),
+                    authorization.status()
+            );
+            return;
+        }
+        Instant expiresAt = authorization.expiresAt()
+                .orElseThrow(() -> new IllegalStateException(
+                        "approved authorization has no expiresAt"
+                ));
+        if (now.isBefore(expiresAt)) {
+            throw new IllegalStateException("authorization expiry job ran before expiresAt");
         }
 
-        // The authorization row is locked first. Multiple scheduler instances
-        // use SKIP LOCKED, so only one transaction can release this hold.
+        // The delay_jobs row is already locked by DelayJobService. We still
+        // lock the authorization row before reading status/expiresAt because
+        // the business row is the source of truth for whether release is valid.
         Card card = cardRepository.findById(authorization.cardId())
                 .orElseThrow(() -> new IllegalStateException(
                         "approved authorization references missing card "
@@ -87,6 +107,5 @@ public class AuthorizationExpiryService {
                 authorization.requestedAmount().amount(),
                 authorization.requestedAmount().currency().getCurrencyCode()
         );
-        return true;
     }
 }

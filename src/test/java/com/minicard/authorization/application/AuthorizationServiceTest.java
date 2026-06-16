@@ -46,6 +46,7 @@ class AuthorizationServiceTest {
     private CreditAccountRepository creditAccountRepository;
     private RiskAssessmentService riskAssessmentService;
     private AuthorizationDecisionEventPublisher eventPublisher;
+    private AuthorizationExpiryJobScheduler expiryJobScheduler;
     private AuthorizationService service;
 
     @BeforeEach
@@ -56,6 +57,7 @@ class AuthorizationServiceTest {
         creditAccountRepository = mock(CreditAccountRepository.class);
         riskAssessmentService = mock(RiskAssessmentService.class);
         eventPublisher = mock(AuthorizationDecisionEventPublisher.class);
+        expiryJobScheduler = mock(AuthorizationExpiryJobScheduler.class);
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
                 authorizationRepository,
@@ -64,6 +66,7 @@ class AuthorizationServiceTest {
                 creditAccountRepository,
                 riskAssessmentService,
                 eventPublisher,
+                expiryJobScheduler,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -84,6 +87,7 @@ class AuthorizationServiceTest {
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("100.00");
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(result);
+        verify(expiryJobScheduler).schedule(result);
         verify(eventPublisher).append(result);
     }
 
@@ -102,6 +106,7 @@ class AuthorizationServiceTest {
         verify(cardRepository, never()).findById(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository).update(result);
+        verify(expiryJobScheduler, never()).schedule(any());
     }
 
     @Test
@@ -121,6 +126,7 @@ class AuthorizationServiceTest {
                 .contains(AuthorizationDeclineReason.INSUFFICIENT_AVAILABLE_CREDIT);
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("950.00");
         verify(creditAccountRepository, never()).update(any());
+        verify(expiryJobScheduler, never()).schedule(any());
     }
 
     @Test
@@ -181,6 +187,7 @@ class AuthorizationServiceTest {
         verify(cardRepository, never()).findById(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
+        verify(expiryJobScheduler, never()).schedule(any());
         verify(eventPublisher, never()).append(any());
     }
 

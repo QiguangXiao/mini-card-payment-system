@@ -18,7 +18,10 @@ public class OutboxPublisherScheduler {
         this.publisherService = publisherService;
     }
 
-    @Scheduled(fixedDelayString = "${outbox.publisher.fixed-delay-ms:1000}")
+    @Scheduled(
+            fixedDelayString = "${outbox.publisher.fixed-delay-ms:1000}",
+            scheduler = "outboxTaskScheduler"
+    )
     public void publishPendingEvents() {
         // Scheduling and transaction handling live on separate Spring beans so
         // the @Transactional proxy on publishBatch() is actually applied.

@@ -68,18 +68,15 @@
     </select>
 
     <!--
-      One row per transaction keeps the account lock and Outbox write short.
-      SKIP LOCKED lets multiple application instances claim different expired
-      authorizations without a distributed scheduler lock.
+      DelayJobService owns the job-row lock. This authorization lock is still
+      required because the business state is the final source of truth before
+      releasing reserved credit.
     -->
-    <select id="findNextExpiredApprovedForUpdate" resultMap="authorizationRowMap">
+    <select id="findByIdForUpdate" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
         FROM authorizations
-        WHERE status = 'APPROVED'
-          AND expires_at &lt;= #{now}
-        ORDER BY expires_at, id
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED
+        WHERE id = #{id}
+        FOR UPDATE
     </select>
 
     <update id="update">

@@ -1,6 +1,5 @@
 package com.minicard.authorization.infrastructure.mybatis;
 
-import java.time.Instant;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
@@ -51,8 +50,8 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     }
 
     @Override
-    public Optional<Authorization> findNextExpiredApprovedForUpdate(Instant now) {
-        return Optional.ofNullable(authorizationMapper.findNextExpiredApprovedForUpdate(now))
+    public Optional<Authorization> findByIdForUpdate(UUID id) {
+        return Optional.ofNullable(authorizationMapper.findByIdForUpdate(id.toString()))
                 .map(this::toDomain);
     }
 

@@ -54,11 +54,15 @@ outbox:
     send-timeout-ms: 5000
     max-attempts: 10
 
-authorization:
-  expiry:
+delay-jobs:
+  scheduler:
     enabled: true
-    fixed-delay-ms: 60000
+    fixed-delay-ms: 1000
     max-per-run: 100
+    max-attempts: 10
+    processing-timeout-seconds: 60
+
+authorization:
   policy:
     single-transaction-limits:
       JPY: 100000.00

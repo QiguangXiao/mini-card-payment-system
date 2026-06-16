@@ -21,6 +21,7 @@ import com.minicard.creditaccount.domain.CreditAccountStatus;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -42,7 +43,7 @@ class AuthorizationExpiryServiceTest {
         Authorization authorization = approvedAuthorization();
         CreditAccount account = account();
         Card card = new Card("card-123", account.id(), CardStatus.ACTIVE);
-        when(authorizationRepository.findNextExpiredApprovedForUpdate(NOW))
+        when(authorizationRepository.findByIdForUpdate(authorization.id()))
                 .thenReturn(Optional.of(authorization));
         when(cardRepository.findById("card-123")).thenReturn(Optional.of(card));
         when(accountRepository.findByIdForUpdate(account.id())).thenReturn(Optional.of(account));
@@ -54,9 +55,8 @@ class AuthorizationExpiryServiceTest {
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 
-        boolean processed = service.expireNext();
+        service.expire(authorization.id());
 
-        assertThat(processed).isTrue();
         assertThat(authorization.status()).isEqualTo(AuthorizationStatus.EXPIRED);
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("200.00");
         // This order documents the transaction's financial consistency story:
@@ -69,14 +69,15 @@ class AuthorizationExpiryServiceTest {
     }
 
     @Test
-    void returnsWithoutSideEffectsWhenNoAuthorizationIsDue() {
+    void completesWithoutSideEffectsWhenAuthorizationNoLongerNeedsExpiry() {
         AuthorizationRepository authorizationRepository = mock(AuthorizationRepository.class);
         CardRepository cardRepository = mock(CardRepository.class);
         CreditAccountRepository accountRepository = mock(CreditAccountRepository.class);
         AuthorizationExpiryEventPublisher eventPublisher =
                 mock(AuthorizationExpiryEventPublisher.class);
-        when(authorizationRepository.findNextExpiredApprovedForUpdate(NOW))
-                .thenReturn(Optional.empty());
+        Authorization authorization = declinedAuthorization();
+        when(authorizationRepository.findByIdForUpdate(authorization.id()))
+                .thenReturn(Optional.of(authorization));
         AuthorizationExpiryService service = new AuthorizationExpiryService(
                 authorizationRepository,
                 cardRepository,
@@ -85,11 +86,11 @@ class AuthorizationExpiryServiceTest {
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 
-        assertThat(service.expireNext()).isFalse();
+        service.expire(authorization.id());
 
-        verify(cardRepository, never()).findById(org.mockito.ArgumentMatchers.any());
-        verify(accountRepository, never()).findByIdForUpdate(org.mockito.ArgumentMatchers.any());
-        verify(eventPublisher, never()).append(org.mockito.ArgumentMatchers.any());
+        verify(cardRepository, never()).findById(any());
+        verify(accountRepository, never()).findByIdForUpdate(any());
+        verify(eventPublisher, never()).append(any());
     }
 
     private Authorization approvedAuthorization() {
@@ -100,6 +101,20 @@ class AuthorizationExpiryServiceTest {
                 APPROVED_AT
         );
         authorization.approve(APPROVED_AT);
+        return authorization;
+    }
+
+    private Authorization declinedAuthorization() {
+        Authorization authorization = Authorization.request(
+                "fingerprint",
+                "card-123",
+                money("100.00"),
+                APPROVED_AT
+        );
+        authorization.decline(
+                com.minicard.authorization.domain.AuthorizationDeclineReason.CARD_BLOCKED,
+                APPROVED_AT
+        );
         return authorization;
     }
 
