@@ -9,6 +9,12 @@ import com.minicard.messaging.outbox.domain.OutboxEventRepository;
 import com.minicard.messaging.outbox.domain.OutboxEventStatus;
 import org.springframework.stereotype.Repository;
 
+/**
+ * OutboxEventRepository 的 MyBatis adapter，负责 durable message queue 的数据库访问。
+ *
+ * <p>面试重点：Outbox 是基础设施可靠性模式，不是业务 aggregate。
+ * 它用 DB row state 表达待发布、已发布、失败重试和 DEAD。</p>
+ */
 @Repository
 public class MyBatisOutboxEventRepository implements OutboxEventRepository {
 
@@ -25,6 +31,7 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
 
     @Override
     public List<OutboxEvent> findPublishableBatchForUpdate(Instant now, int batchSize) {
+        // mapper 使用 FOR UPDATE SKIP LOCKED，支持多个 publisher 实例并行领取不同事件。
         return mapper.findPublishableBatchForUpdate(now, batchSize).stream()
                 .map(this::toDomain)
                 .toList();
@@ -32,6 +39,7 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
 
     @Override
     public void updateDeliveryState(OutboxEvent event) {
+        // 只更新 delivery state，不改 payload；消息内容一旦入库就应保持 immutable。
         mapper.updateDeliveryState(toRow(event));
     }
 

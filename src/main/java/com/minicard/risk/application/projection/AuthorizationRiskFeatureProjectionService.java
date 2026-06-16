@@ -10,11 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Updates the Risk bounded context's eventually consistent feature projection.
+ * 更新 Risk bounded context 的 eventually consistent feature projection。
  *
- * <p>The projection can later provide low-latency historical signals to risk
- * scoring. It must not be used for a hard real-time limit until its freshness
- * and consistency guarantees are explicitly acceptable.</p>
+ * <p>projection 未来可给 risk scoring 提供低延迟历史信号。
+ * 但在明确 freshness/consistency 保证前，不能把它当强实时限流依据。</p>
  */
 @Service
 public class AuthorizationRiskFeatureProjectionService {
@@ -40,8 +39,8 @@ public class AuthorizationRiskFeatureProjectionService {
 
     @Transactional
     public void project(RecordAuthorizationDecisionCommand decision) {
-        // Inbox claim and projection update share one MySQL transaction. If the
-        // projection fails, the claim rolls back and Kafka can safely redeliver.
+        // Inbox claim 和 projection update 共用一个 MySQL transaction。
+        // projection 失败时 claim 会 rollback，Kafka 可以安全 redeliver。
         if (!inboxRepository.claim(CONSUMER_NAME, decision.eventId(), Instant.now(clock))) {
             log.info("risk_feature_event_duplicate eventId={}", decision.eventId());
             return;

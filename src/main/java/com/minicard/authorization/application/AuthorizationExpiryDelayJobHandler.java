@@ -7,6 +7,12 @@ import com.minicard.scheduling.domain.DelayJob;
 import com.minicard.scheduling.domain.DelayJobType;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorization expiry 的 DelayJob handler，把通用延迟任务分发到具体业务用例。
+ *
+ * <p>面试重点：DelayJobService 不认识授权业务，只按 jobType 找 handler；
+ * 这样 scheduler 是通用机制，业务动作仍留在 authorization application layer。</p>
+ */
 @Component
 public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 

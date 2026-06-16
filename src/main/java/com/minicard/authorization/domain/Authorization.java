@@ -6,6 +6,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * 授权 aggregate root，表达一笔 card authorization 从 PENDING 到 APPROVED/DECLINED/EXPIRED 的生命周期。
+ *
+ * <p>面试重点：状态转换(state transition)放在 domain 内部，service 只能调用
+ * approve/decline/expire 这些业务行为，不能绕过 invariant 直接改字段。</p>
+ */
 public final class Authorization {
 
     /**

@@ -15,6 +15,12 @@ import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * 全局 API 错误映射，把 application/domain exception 转换成稳定的 HTTP error contract。
+ *
+ * <p>面试重点：金融 API 不应该把 Java stack trace 或数据库错误直接暴露给客户端；
+ * 客户端需要稳定 code，服务端日志保留细节用于排查。</p>
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -51,7 +57,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception exception) {
-        // Internal details stay in server logs and are never exposed to clients.
+        // 内部细节只写 server logs，不返回给客户端，避免泄漏实现细节和敏感信息。
         log.error("Unexpected request processing failure", exception);
         return error(
                 HttpStatus.INTERNAL_SERVER_ERROR,

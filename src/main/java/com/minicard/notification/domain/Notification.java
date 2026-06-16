@@ -5,11 +5,10 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Aggregate root that owns one customer notification and its delivery lifecycle.
+ * 通知 aggregate root，维护一条客户通知及其 delivery lifecycle。
  *
- * <p>The aggregate is created from an integration event, but Kafka is not part
- * of its model. This keeps delivery rules usable from Kafka, an admin retry
- * endpoint, or a scheduled worker without moving business rules into adapters.</p>
+ * <p>它由 integration event 创建，但 Kafka 不属于领域模型。
+ * 这样 delivery 规则可以被 Kafka、admin retry endpoint 或 scheduler 复用。</p>
  */
 public class Notification {
 
@@ -52,10 +51,10 @@ public class Notification {
     }
 
     /**
-     * Creates a notification requested by an authorization decision.
+     * 根据 authorization decision 创建通知。
      *
-     * <p>The source event id is retained as the idempotency key. Kafka provides
-     * at-least-once delivery, so the same event may request creation repeatedly.</p>
+     * <p>source event id 被保留为 idempotency key。Kafka 是 at-least-once delivery，
+     * 同一个事件可能重复触发创建请求。</p>
      */
     public static Notification requestAuthorizationDecision(
             UUID sourceEventId,
@@ -83,8 +82,7 @@ public class Notification {
     }
 
     /**
-     * Marks successful delivery and prevents a provider callback from sending
-     * the same logical notification twice.
+     * 标记发送成功，避免 provider callback 或重试把同一条逻辑通知发送两次。
      */
     public void markSent(Instant now) {
         if (status == NotificationStatus.SENT) {
@@ -100,8 +98,8 @@ public class Notification {
     }
 
     /**
-     * Records a provider failure. The aggregate decides when retry attempts are
-     * exhausted instead of leaving this business rule in a worker or listener.
+     * 记录 provider failure。是否耗尽 retry attempts 是业务规则，
+     * 因此放在 aggregate 内，而不是散落在 worker/listener。
      */
     public void recordDeliveryFailure(String error, int maxAttempts, Instant now) {
         if (status != NotificationStatus.PENDING) {

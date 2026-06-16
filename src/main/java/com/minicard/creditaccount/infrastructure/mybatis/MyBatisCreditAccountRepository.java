@@ -10,6 +10,12 @@ import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
 import org.springframework.stereotype.Repository;
 
+/**
+ * CreditAccountRepository 的 MyBatis adapter，封装账户额度表的锁定读取和持久化。
+ *
+ * <p>面试重点：真正的并发控制依赖 mapper XML 里的 SELECT ... FOR UPDATE，
+ * 但额度计算仍放在 CreditAccount aggregate 内。</p>
+ */
 @Repository
 public class MyBatisCreditAccountRepository implements CreditAccountRepository {
 
@@ -21,17 +27,15 @@ public class MyBatisCreditAccountRepository implements CreditAccountRepository {
 
     @Override
     public Optional<CreditAccount> findByIdForUpdate(UUID accountId) {
-        // The explicit FOR UPDATE SQL lives in the mapper XML. MyBatis only
-        // removes JDBC mapping boilerplate; transaction and lock semantics stay
-        // visible and are still controlled by AuthorizationService.
+        // FOR UPDATE SQL 放在 mapper XML。MyBatis 只减少 JDBC mapping 样板，
+        // transaction 和 lock 语义仍由 AuthorizationService 显式控制。
         return Optional.ofNullable(creditAccountMapper.findByIdForUpdate(accountId.toString()))
                 .map(this::toDomain);
     }
 
     @Override
     public void update(CreditAccount account) {
-        // Persist aggregate state after reserve(); do not duplicate available
-        // credit calculations in SQL.
+        // reserve() 后只持久化 aggregate state，不在 SQL 里重复计算 available credit。
         creditAccountMapper.update(new CreditAccountRow(
                 account.id().toString(),
                 account.creditLimit().amount(),

@@ -11,10 +11,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Application use case that requests a notification from an authorization event.
+ * 从授权事件创建通知请求的 application use case。
  *
- * <p>The use case is intentionally named after the business action rather than
- * Kafka consumption. Kafka is only one way this use case can be invoked.</p>
+ * <p>类名按业务动作命名，而不是按 Kafka consumption 命名。
+ * 这样 Kafka listener、后台重试或未来 admin endpoint 都可以复用同一个 use case。</p>
  */
 @Service
 public class RequestAuthorizationNotificationService {
@@ -35,6 +35,7 @@ public class RequestAuthorizationNotificationService {
 
     @Transactional
     public void request(RequestAuthorizationNotificationCommand command) {
+        // Notification 使用 sourceEventId 做 idempotency key，应对 Kafka at-least-once delivery。
         Notification notification = Notification.requestAuthorizationDecision(
                 command.sourceEventId(),
                 command.authorizationId(),
@@ -43,8 +44,8 @@ public class RequestAuthorizationNotificationService {
                 Instant.now(clock)
         );
         if (!notificationRepository.insertIfAbsent(notification)) {
-            // Returning successfully acknowledges a duplicate event. The unique
-            // source_event_id constraint protects concurrent application nodes.
+            // duplicate event 直接成功返回，相当于确认重复投递；
+            // source_event_id 唯一索引保护多实例并发消费。
             log.info("notification_request_duplicate eventId={}", command.sourceEventId());
             return;
         }

@@ -19,6 +19,12 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 授权 API controller，只负责 HTTP request/response 和参数校验。
+ *
+ * <p>面试重点：不要把业务逻辑放在 controller。idempotency、transaction boundary、
+ * row lock 和 aggregate state transition 都在 application/domain 层。</p>
+ */
 @Validated
 @RestController
 @RequestMapping("/api/authorizations")

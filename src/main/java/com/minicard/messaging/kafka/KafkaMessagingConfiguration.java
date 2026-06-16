@@ -14,15 +14,21 @@ import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.FixedBackOff;
 
+/**
+ * Kafka topic、consumer factory 和 DLT(error handling) 配置。
+ *
+ * <p>面试重点：每个 bounded context 用自己的 consumer group 和 DLT，互不影响；
+ * partition key 负责单个 aggregate 内有序，consumer concurrency 负责横向处理能力。</p>
+ */
 @Configuration
 @EnableConfigurationProperties(KafkaTopicsProperties.class)
 public class KafkaMessagingConfiguration {
 
     @Bean
     public NewTopic authorizationEventsTopic(KafkaTopicsProperties properties) {
-        // Three partitions demonstrate consumer-group parallelism. Events use
-        // authorizationId as their key, preserving order for one authorization.
-        // Local Kafka has one broker, so replication factor must be one.
+        // 3 个 partitions 用来演示 consumer-group parallelism。
+        // event key 使用 authorizationId，保证同一 authorization 的事件进入同一 partition。
+        // 本地 Kafka 只有 1 个 broker，所以 replicas 必须是 1。
         return TopicBuilder.name(properties.authorizationEvents())
                 .partitions(3)
                 .replicas(1)
@@ -31,9 +37,8 @@ public class KafkaMessagingConfiguration {
 
     @Bean
     public NewTopic authorizationLifecycleEventsTopic(KafkaTopicsProperties properties) {
-        // Lifecycle events use a separate topic until a concrete consumer needs
-        // them. Existing decision-only consumers must not receive an event
-        // contract they do not understand and incorrectly send it to their DLT.
+        // lifecycle events 先放独立 topic，避免 decision-only consumer 收到不认识的 contract
+        // 后误判为坏消息并发送到 DLT。
         return TopicBuilder.name(properties.authorizationLifecycleEvents())
                 .partitions(3)
                 .replicas(1)
@@ -57,9 +62,8 @@ public class KafkaMessagingConfiguration {
                     ConsumerFactory<Object, Object> consumerFactory,
                     KafkaTemplate<Object, Object> kafkaTemplate,
                     KafkaTopicsProperties topics
-            ) {
-        // Notification is a separate bounded context. Its listener currently
-        // needs two threads; this can scale independently from Risk consumers.
+    ) {
+        // Notification 是独立 bounded context，它的 listener 线程数可独立于 Risk 扩缩。
         return listenerFactory(
                 configurer,
                 consumerFactory,
@@ -76,10 +80,9 @@ public class KafkaMessagingConfiguration {
                     ConsumerFactory<Object, Object> consumerFactory,
                     KafkaTemplate<Object, Object> kafkaTemplate,
                     KafkaTopicsProperties topics
-            ) {
-        // Risk feature projection belongs to the Risk bounded context. Three
-        // threads consume all source partitions concurrently; a larger value
-        // would sit idle until the topic partition count grows.
+    ) {
+        // Risk feature projection 属于 Risk bounded context。
+        // concurrency=3 对齐 source topic partitions；再大也会因为 partition 数不足而空闲。
         return listenerFactory(
                 configurer,
                 consumerFactory,
@@ -102,16 +105,15 @@ public class KafkaMessagingConfiguration {
 
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
-                // Keep the original partition number so operations can correlate
-                // ordering and replay one failed partition deliberately.
+                // 保留 original partition，方便排查顺序问题并按 partition 做 replay。
                 (record, exception) -> new TopicPartition(deadLetterTopic, record.partition())
         );
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(
                 recoverer,
                 new FixedBackOff(1000L, 2L)
         );
-        // Retrying malformed JSON or an unsupported schema version cannot heal
-        // the message, so permanent contract failures go directly to the DLT.
+        // malformed JSON 或 unsupported schema version 重试也不会自愈，
+        // 所以 permanent contract failure 直接进入 DLT。
         errorHandler.addNotRetryableExceptions(EventContractException.class);
 
         factory.setCommonErrorHandler(errorHandler);
@@ -120,8 +122,7 @@ public class KafkaMessagingConfiguration {
     }
 
     private NewTopic deadLetterTopic(String topicName) {
-        // DLT partition count matches the source topic because the recoverer
-        // preserves the original partition.
+        // DLT partition 数和 source topic 对齐，因为 recoverer 会保留原 partition。
         return TopicBuilder.name(topicName)
                 .partitions(3)
                 .replicas(1)

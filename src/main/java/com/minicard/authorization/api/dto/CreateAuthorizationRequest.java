@@ -9,6 +9,12 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+/**
+ * 创建授权的 HTTP request DTO。
+ *
+ * <p>DTO 只表达 API contract 和输入校验；金额/币种进入 application 后会被转换成
+ * Money value object，避免 controller 承担业务语义。</p>
+ */
 public record CreateAuthorizationRequest(
         @NotBlank @Size(max = 100) String cardId,
         @NotNull @DecimalMin(value = "0.01") @Digits(integer = 17, fraction = 2) BigDecimal amount,

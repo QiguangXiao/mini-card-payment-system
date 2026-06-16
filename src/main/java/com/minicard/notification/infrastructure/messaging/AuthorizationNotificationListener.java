@@ -8,10 +8,10 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Kafka inbound adapter for the Notification bounded context.
+ * Notification bounded context 的 Kafka inbound adapter。
  *
- * <p>It contains no notification business rules: it translates the transport
- * contract and invokes the application use case.</p>
+ * <p>这里不放通知业务规则，只做 transport contract 转换并调用 application use case。
+ * 面试重点：adapter 薄，业务幂等和 transaction boundary 在 service/repository。</p>
  */
 @Component
 public class AuthorizationNotificationListener {
@@ -33,6 +33,7 @@ public class AuthorizationNotificationListener {
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
     public void onAuthorizationDecided(ConsumerRecord<String, String> record) {
+        // parse() 统一做 event contract validation；listener 只关心如何把事件映射成 command。
         var event = eventParser.parse(record);
         service.request(new RequestAuthorizationNotificationCommand(
                 event.eventId(),

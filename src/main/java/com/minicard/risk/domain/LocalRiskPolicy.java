@@ -9,6 +9,12 @@ import java.util.Set;
 
 import com.minicard.authorization.domain.Money;
 
+/**
+ * 本地风控策略，演示发卡行 authorization 前常见的 cheap risk checks。
+ *
+ * <p>这里故意使用可解释规则，而不是黑盒模型，方便学习系统设计时讲清楚
+ * velocity、blocked merchant、high-risk amount、cross-border 等信号。</p>
+ */
 public class LocalRiskPolicy {
 
     private final RiskVelocityRepository velocityRepository;
@@ -35,28 +41,22 @@ public class LocalRiskPolicy {
     }
 
     public RiskDecision assess(RiskAssessmentRequest request) {
-        // Merchant blacklist is a deterministic local rule. It is cheap, has no
-        // network dependency, and should short-circuit before any external call.
+        // Merchant blacklist 是确定性本地规则，没有网络依赖，应该在 external risk 前短路。
         if (blockedMerchantIds.contains(request.merchantId())) {
             return RiskDecision.decline(RiskDeclineReason.BLOCKED_MERCHANT, 100);
         }
 
-        // Velocity check demonstrates a classic card-risk algorithm: count
-        // recent attempts in a sliding time window. In production this may read
-        // from a low-latency store or stream aggregate; here it intentionally
-        // uses the database so transaction history remains easy to inspect.
+        // Velocity check 是经典风控算法：统计 sliding time window 内的近期交易次数。
+        // 生产里可用 Redis/stream aggregate；当前用 DB 让学习和排查更直观。
         Instant since = Instant.now(clock).minus(velocityWindow);
         int recentCount = velocityRepository.countRecentAuthorizations(request.cardId(), since);
-        // The current authorization has already been inserted as PENDING for
-        // audit/idempotency, so the count includes this request. Decline only
-        // when the configured maximum is exceeded.
+        // 当前 authorization 已经作为 PENDING 插入，用于 audit/idempotency，
+        // 所以 recentCount 包含本次请求；只有超过阈值才拒绝。
         if (recentCount > maxAuthorizationsPerWindow) {
             return RiskDecision.decline(RiskDeclineReason.VELOCITY_EXCEEDED, 90);
         }
 
-        // Amount thresholds are configured per currency. Comparing "500" is
-        // meaningless unless we know whether it means JPY, USD, or another
-        // currency with different scale and risk semantics.
+        // Amount threshold 按 currency 配置。只比较“500”没有意义，必须知道是 JPY 还是 USD。
         Money highRiskAmountThreshold = highRiskAmountThresholds.get(
                 request.amount().currency()
         );
@@ -65,10 +65,8 @@ public class LocalRiskPolicy {
             return RiskDecision.decline(RiskDeclineReason.HIGH_RISK_AMOUNT, 85);
         }
 
-        // Cross-border authorization is not always fraud, but it is a useful
-        // interview-friendly signal. We model it as a local decline here to make
-        // state transitions visible; a real issuer may instead add score and
-        // ask the external risk engine for the final decision.
+        // Cross-border 不一定是欺诈，但它是面试中好解释的 risk signal。
+        // 这里直接 decline 是为了让状态转换可见；真实 issuer 可能只是加分后交给模型决策。
         if (request.isCrossBorder()) {
             return RiskDecision.decline(RiskDeclineReason.GEOLOCATION_MISMATCH, 75);
         }

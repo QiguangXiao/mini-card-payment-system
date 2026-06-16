@@ -4,11 +4,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Public integration contract for an authorization's final decision.
+ * 授权最终决策的 public integration contract。
  *
- * <p>The event contains an internal card token, never a plaintext PAN. Likely
- * future consumers include cardholder notification, risk-feature analytics,
- * and operations/audit projections.</p>
+ * <p>事件只包含内部 card token，不包含明文 PAN。典型 consumer 包括持卡人通知、
+ * risk-feature analytics 和 operations/audit projection。</p>
  */
 public record AuthorizationDecidedEvent(
         UUID authorizationId,

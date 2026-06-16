@@ -5,6 +5,12 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
 
+/**
+ * 信用账户 aggregate root，负责维护总额度、已预占额度和账户状态。
+ *
+ * <p>面试重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
+ * 再调用这个 aggregate 的 reserve/release 来保护额度 invariant。</p>
+ */
 public final class CreditAccount {
 
     private final UUID id;
@@ -70,6 +76,7 @@ public final class CreditAccount {
     }
 
     public Money availableCredit() {
+        // available credit 是派生值，不单独落库，避免 creditLimit/reservedAmount/available 三者不一致。
         return creditLimit.subtract(reservedAmount);
     }
 

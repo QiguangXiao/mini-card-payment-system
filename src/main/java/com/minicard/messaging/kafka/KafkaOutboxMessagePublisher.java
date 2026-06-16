@@ -13,10 +13,10 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Kafka adapter for the Outbox application port.
+ * Outbox application port 的 Kafka adapter。
  *
- * <p>This class knows about topics, Kafka headers, and broker acknowledgements;
- * the Outbox domain remains independent from Kafka infrastructure.</p>
+ * <p>这个类知道 topic、Kafka headers 和 broker acknowledgement；
+ * Outbox domain 不依赖 Kafka infrastructure。</p>
  */
 @Component
 public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
@@ -39,8 +39,8 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
                 event.partitionKey(),
                 event.payload()
         );
-        // Headers allow routing, observability, and schema-version checks
-        // without deserializing the JSON payload first.
+        // Headers 支持 routing、observability 和 schema-version check，
+        // 消费者无需先反序列化 JSON payload 就能做基础判断。
         addHeader(record, "eventId", event.id().toString());
         addHeader(record, "eventType", event.eventType());
         addHeader(record, "eventVersion", Integer.toString(event.eventVersion()));
@@ -48,8 +48,8 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         addHeader(record, "aggregateId", event.aggregateId());
 
         try {
-            // Waiting for Kafka acknowledgement lets the Outbox row be marked
-            // PUBLISHED only after the broker accepts the event.
+            // 等待 Kafka acknowledgement 后才把 Outbox row 标记为 PUBLISHED。
+            // 这里仍不是分布式事务，所以整体语义仍是 at-least-once。
             kafkaTemplate.send(record).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

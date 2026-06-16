@@ -6,6 +6,11 @@ import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.infrastructure.external.ExternalRiskGateway;
 import org.springframework.stereotype.Service;
 
+/**
+ * 风控评估 use case，先跑本地规则，再调用模拟外部风控。
+ *
+ * <p>面试重点：risk check 放在 account row lock 之前，避免慢风控调用扩大锁等待时间。</p>
+ */
 @Service
 public class RiskAssessmentService {
 
@@ -21,16 +26,14 @@ public class RiskAssessmentService {
     }
 
     public RiskDecision assess(RiskAssessmentRequest request) {
-        // Local checks are deterministic and cheap, so they run before the
-        // simulated third-party call. This avoids external latency for obviously
-        // risky requests.
+        // Local checks 是确定性且便宜的规则，先执行可以让明显高风险请求不进入外部调用。
         RiskDecision localDecision = localRiskPolicy.assess(request);
         if (!localDecision.approved()) {
             return localDecision;
         }
 
-        // External risk is protected by timeout, circuit breaker, and fallback.
-        // In production this would call an internal/third-party risk engine.
+        // External risk 由 timeout、circuit breaker、fallback 保护。
+        // 生产环境这里通常会调用内部/第三方 risk engine。
         return externalRiskGateway.assess(request).join();
     }
 }

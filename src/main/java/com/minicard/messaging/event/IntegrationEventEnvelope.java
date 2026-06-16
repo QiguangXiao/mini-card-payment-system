@@ -4,11 +4,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Stable metadata shared by every integration event.
+ * 所有 integration event 共享的稳定 metadata 外壳。
  *
- * <p>Consumers use {@code eventId} for idempotency and {@code eventVersion} for
- * schema evolution. The payload can evolve independently from the internal
- * Authorization aggregate.</p>
+ * <p>Consumer 用 {@code eventId} 做 idempotency，用 {@code eventVersion} 做 schema evolution。
+ * payload 可以独立于内部 Authorization aggregate 演进。</p>
  */
 public record IntegrationEventEnvelope<T>(
         UUID eventId,

@@ -12,6 +12,12 @@ import com.minicard.authorization.domain.Money;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
+/**
+ * AuthorizationRepository 的 MyBatis adapter，负责 domain object 与数据库 row 的转换。
+ *
+ * <p>面试重点：idempotency claim 和 SELECT ... FOR UPDATE 由数据库保证，
+ * application service 只依赖 repository port，不依赖 MyBatis/JDBC 细节。</p>
+ */
 @Repository
 public class MyBatisAuthorizationRepository implements AuthorizationRepository {
 
@@ -30,9 +36,8 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     @Override
     public boolean claim(String idempotencyKey, Authorization authorization) {
         try {
-            // This remains an INSERT-first idempotency claim. The database
-            // unique constraint, not an in-memory check, chooses one winner
-            // across threads and application instances.
+            // INSERT-first idempotency claim：由 DB unique constraint 选择 winner，
+            // 而不是靠内存 check，因此多线程/多实例下也成立。
             authorizationMapper.insert(idempotencyKey, toRow(authorization));
             return true;
         } catch (DuplicateKeyException exception) {
@@ -42,8 +47,8 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
 
     @Override
     public Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey) {
-        // The locking read blocks a duplicate request behind the winner and
-        // then returns its final result under the same transaction.
+        // locking read 会让 duplicate request 等待 winner 完成，
+        // 然后在同一个 transaction 里读取最终结果。
         return Optional.ofNullable(
                 authorizationMapper.findByIdempotencyKeyForUpdate(idempotencyKey)
         ).map(this::toDomain);
@@ -57,12 +62,13 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
 
     @Override
     public void update(Authorization authorization) {
-        // Mapper XML updates decision columns only. Request identity remains
-        // immutable for idempotency auditing.
+        // Mapper XML 只更新 decision columns。request identity 保持 immutable，
+        // 方便 idempotency audit 和问题排查。
         authorizationMapper.update(toRow(authorization));
     }
 
     private AuthorizationRow toRow(Authorization authorization) {
+        // Infrastructure adapter 做 mapping，避免 domain object 暴露数据库列名/字符串状态。
         return new AuthorizationRow(
                 authorization.id().toString(),
                 authorization.requestFingerprint(),

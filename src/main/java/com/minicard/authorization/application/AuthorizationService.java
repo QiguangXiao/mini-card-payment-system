@@ -23,6 +23,12 @@ import com.minicard.risk.domain.RiskDeclineReason;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 授权用例的 application service，负责串起 idempotency、风控、卡状态、额度预占和事件写入。
+ *
+ * <p>面试重点：这里是 transaction boundary。Controller 不做业务决策，domain aggregate
+ * 不直接访问数据库，service 负责把多个 aggregate 和 repository 按正确顺序组合起来。</p>
+ */
 @Service
 public class AuthorizationService {
 
@@ -101,6 +107,7 @@ public class AuthorizationService {
 
     @Transactional(readOnly = true)
     public Authorization get(UUID id) {
+        // 查询用例使用 readOnly transaction，表达这里不改变业务状态，也减少误写入风险。
         return authorizationRepository.findById(id)
                 .orElseThrow(() -> new AuthorizationNotFoundException(id));
     }
@@ -194,6 +201,8 @@ public class AuthorizationService {
             Authorization existing,
             AuthorizationCommand command
     ) {
+        // 这个 guard 是 idempotency 的安全边界：相同 key + 不同请求必须拒绝，
+        // 否则客户端 bug 可能把一笔新交易错误地当成旧交易结果。
         if (!command.matches(existing)) {
             throw new IdempotencyConflictException();
         }
