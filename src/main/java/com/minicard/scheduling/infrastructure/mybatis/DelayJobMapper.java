@@ -1,6 +1,7 @@
 package com.minicard.scheduling.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -10,7 +11,15 @@ public interface DelayJobMapper {
 
     int insert(DelayJobRow job);
 
-    DelayJobRow findNextRunnableForUpdate(@Param("now") Instant now);
+    List<DelayJobRow> findRunnableBatchForUpdate(
+            @Param("now") Instant now,
+            @Param("limit") int limit
+    );
+
+    List<DelayJobRow> findStuckProcessingBatchForUpdate(
+            @Param("now") Instant now,
+            @Param("limit") int limit
+    );
 
     DelayJobRow findByIdForUpdate(@Param("id") String id);
 

@@ -11,10 +11,10 @@ import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Scheduler 基础设施：复用相同 ThreadPoolTaskScheduler 创建方式，但按机制分 worker pool。
+ * Scheduler 基础设施：复用相同 ThreadPoolTaskScheduler 创建方式，但按机制分 poller pool。
  *
  * <p>Outbox 和 DelayJob 都是 polling scheduler，所以配置方式对称。
- * 但 Kafka publication 和 delayed business action 的耗时/锁竞争不同，因此线程池隔离。</p>
+ * DelayJob 的业务 worker executor 放在 TaskExecutorConfig，避免 poller pool 和 worker pool 混在一起。</p>
  */
 @Configuration
 @EnableScheduling
@@ -29,7 +29,7 @@ public class SchedulerThreadPoolConfiguration {
 
     @Bean(name = "delayJobTaskScheduler")
     public ThreadPoolTaskScheduler delayJobTaskScheduler() {
-        // DelayJob 可能执行不同业务动作；预留小 worker pool，后续可按吞吐调整。
+        // DelayJob poller/recoverer 共用这个 scheduler；真正业务动作在 scheduledJobWorkerExecutor。
         return taskScheduler("delay-job-scheduler-", 2);
     }
 
@@ -37,7 +37,7 @@ public class SchedulerThreadPoolConfiguration {
     public TransactionOperations transactionOperations(
             PlatformTransactionManager transactionManager
     ) {
-        // TransactionOperations 让 DelayJobService 能显式拆分 claim/handle/finalize 三段事务。
+        // TransactionOperations 让 worker 能显式拆分 handle 和 finalize 的事务边界。
         return new TransactionTemplate(transactionManager);
     }
 

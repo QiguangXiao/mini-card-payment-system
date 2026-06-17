@@ -68,7 +68,7 @@
     </select>
 
     <!--
-      DelayJobService 已经锁住 job row；这里仍要锁 authorization row。
+      ScheduledJobWorker 处理的是已经 claim 的 delay job；这里仍要锁 authorization row。
       原因是 business state 才是释放 reserved credit 前的 source of truth。
     -->
     <select id="findByIdForUpdate" resultMap="authorizationRowMap">

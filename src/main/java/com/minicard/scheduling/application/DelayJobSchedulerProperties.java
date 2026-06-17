@@ -6,8 +6,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record DelayJobSchedulerProperties(
         boolean enabled,
         long fixedDelayMs,
+        long recoveryFixedDelayMs,
         int maxPerRun,
         int maxAttempts,
-        long processingTimeoutSeconds
+        long processingTimeoutSeconds,
+        int workerPoolSize,
+        int workerQueueCapacity
 ) {
 }

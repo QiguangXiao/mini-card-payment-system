@@ -1,6 +1,7 @@
 package com.minicard.scheduling.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -38,10 +39,21 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     }
 
     @Override
-    public Optional<DelayJob> findNextRunnableForUpdate(Instant now) {
-        // FOR UPDATE SKIP LOCKED 让多个 scheduler pod 可以横向扩展。
-        return Optional.ofNullable(mapper.findNextRunnableForUpdate(now))
-                .map(this::toDomain);
+    public List<DelayJob> findRunnableBatchForUpdate(Instant now, int limit) {
+        // FOR UPDATE SKIP LOCKED 让多个 scheduler pod 可以横向扩展；这里只 claim PENDING。
+        return mapper.findRunnableBatchForUpdate(now, limit)
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<DelayJob> findStuckProcessingBatchForUpdate(Instant now, int limit) {
+        // PROCESSING 超时恢复单独处理，避免正常 poller 同时承担 recovery 语义。
+        return mapper.findStuckProcessingBatchForUpdate(now, limit)
+                .stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override

@@ -59,9 +59,12 @@ delay-jobs:
   scheduler:
     enabled: true
     fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 5000
     max-per-run: 100
     max-attempts: 10
     processing-timeout-seconds: 60
+    worker-pool-size: 4
+    worker-queue-capacity: 100
 
 authorization:
   policy:

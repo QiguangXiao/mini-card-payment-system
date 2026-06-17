@@ -45,16 +45,30 @@
     </insert>
 
     <!--
-      这和 Outbox claim query 对称：按稳定顺序选择 due rows，并使用 SKIP LOCKED。
-      多个 pod 可以安全并发扫描；PROCESSING row 只有 lease 到期后才会再次 runnable。
+      poller 只 claim PENDING due rows，并在短事务内改成 PROCESSING。
+      多个 pod 并发 poll 时，SKIP LOCKED 会跳过别人已经锁住的 rows，避免重复 claim。
     -->
-    <select id="findNextRunnableForUpdate" resultMap="delayJobRowMap">
+    <select id="findRunnableBatchForUpdate" resultMap="delayJobRowMap">
         SELECT <include refid="delayJobColumns"/>
         FROM delay_jobs
-        WHERE status IN ('PENDING', 'PROCESSING')
+        WHERE status = 'PENDING'
           AND next_attempt_at &lt;= #{now}
         ORDER BY next_attempt_at, created_at, id
-        LIMIT 1
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!--
+      recovery 独立扫描 lease 已超时的 PROCESSING rows。
+      这让“正常 claim”和“宕机恢复”两个路径在面试解释时更清楚。
+    -->
+    <select id="findStuckProcessingBatchForUpdate" resultMap="delayJobRowMap">
+        SELECT <include refid="delayJobColumns"/>
+        FROM delay_jobs
+        WHERE status = 'PROCESSING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT #{limit}
         FOR UPDATE SKIP LOCKED
     </select>
 

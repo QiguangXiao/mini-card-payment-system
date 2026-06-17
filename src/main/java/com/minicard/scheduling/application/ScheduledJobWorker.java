@@ -8,6 +8,7 @@ import java.util.Map;
 
 import com.minicard.scheduling.domain.DelayJob;
 import com.minicard.scheduling.domain.DelayJobRepository;
+import com.minicard.scheduling.domain.DelayJobStatus;
 import com.minicard.scheduling.domain.DelayJobType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,15 +16,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
 /**
- * 领取到期 delay job，并分发给对应业务 handler 执行。
+ * Delay job worker，负责执行业务 handler，并由 worker 自己 finalize。
  *
- * <p>claim、business handling、final state update 故意拆成三个 transaction。
- * 这样 handler 失败时，业务写入先 rollback，然后 job attempts/lastError 再单独提交。</p>
+ * <p>面试重点：claim 已经在短事务内完成；worker 只处理已经拿到 PROCESSING lease 的 job。
+ * 成功后标 DONE，失败后按 retry policy 回到 PENDING 或进入 DEAD。</p>
  */
 @Service
-public class DelayJobService {
+public class ScheduledJobWorker {
 
-    private static final Logger log = LoggerFactory.getLogger(DelayJobService.class);
+    private static final Logger log = LoggerFactory.getLogger(ScheduledJobWorker.class);
 
     private final DelayJobRepository delayJobRepository;
     private final DelayJobSchedulerProperties properties;
@@ -31,7 +32,7 @@ public class DelayJobService {
     private final Clock clock;
     private final TransactionOperations transactionOperations;
 
-    public DelayJobService(
+    public ScheduledJobWorker(
             DelayJobRepository delayJobRepository,
             DelayJobSchedulerProperties properties,
             List<DelayJobHandler> handlers,
@@ -45,61 +46,39 @@ public class DelayJobService {
         this.transactionOperations = transactionOperations;
     }
 
-    public boolean dispatchNext() {
-        // 第一步 claim：把可运行 job 标成 PROCESSING lease，避免多个 pod 同时处理同一 job。
-        DelayJob job = claimNextRunnable();
-        if (job == null) {
-            return false;
-        }
-
-        // 第二步 dispatch：通过 jobType 找 handler。新增任务类型时，只需要新增 handler。
-        DelayJobHandler handler = handlers.get(job.jobType());
+    public void handleClaimedJob(DelayJob claimedJob) {
+        DelayJobHandler handler = handlers.get(claimedJob.jobType());
         if (handler == null) {
-            markFailed(job, "no handler registered for job type " + job.jobType(), null);
-            return true;
+            markFailed(claimedJob, "no handler registered for job type " + claimedJob.jobType(), null);
+            return;
         }
 
         try {
             // handler.handle() 执行业务 transaction，例如 authorization expiry 会释放额度并写 Outbox。
-            handler.handle(job);
-            // 第三步 finalize：业务成功后把 job 标为 DONE。
-            markDone(job);
+            handler.handle(claimedJob);
+            // 业务成功后，worker 自己 finalize，避免 poller 提前标 DONE。
+            markDone(claimedJob);
         } catch (RuntimeException exception) {
-            // 业务失败时 markFailed() 会记录 lastError，并按 retry policy 重新排队或转 DEAD。
             markFailed(
-                    job,
+                    claimedJob,
                     exception.getMessage() == null
                             ? exception.getClass().getSimpleName()
                             : exception.getMessage(),
                     exception
             );
         }
-        return true;
     }
 
-    private DelayJob claimNextRunnable() {
-        return transactionOperations.execute(status -> {
-            Instant now = Instant.now(clock);
-            // findNextRunnableForUpdate() 使用 FOR UPDATE SKIP LOCKED，
-            // 多 pod 并发扫描时会跳过别人已锁住的 row。
-            DelayJob job = delayJobRepository.findNextRunnableForUpdate(now).orElse(null);
-            if (job == null) {
-                return null;
-            }
-            // claim 先 commit，缩短 job row lock 时间，并让 handler 拥有自己的业务事务边界。
-            job.markProcessing(now, properties.processingTimeoutSeconds());
-            delayJobRepository.updateExecutionState(job);
-            return job;
-        });
+    public void markRejectedForRetry(DelayJob claimedJob, RuntimeException exception) {
+        markFailed(claimedJob, "worker pool rejected job", exception);
     }
 
     private void markDone(DelayJob claimedJob) {
         transactionOperations.executeWithoutResult(status -> {
-            // 再次 FOR UPDATE 读取 job，确保 finalize 阶段更新的是当前 DB 状态。
-            DelayJob job = delayJobRepository.findByIdForUpdate(claimedJob.id())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "claimed delay job disappeared " + claimedJob.id()
-                    ));
+            DelayJob job = lockCurrentLease(claimedJob);
+            if (job == null) {
+                return;
+            }
             job.markDone(Instant.now(clock));
             delayJobRepository.updateExecutionState(job);
             log.info(
@@ -112,13 +91,16 @@ public class DelayJobService {
         });
     }
 
-    private void markFailed(DelayJob claimedJob, String error, RuntimeException exception) {
+    private void markFailed(
+            DelayJob claimedJob,
+            String error,
+            RuntimeException exception
+    ) {
         transactionOperations.executeWithoutResult(status -> {
-            // 失败记录单独提交；这能保留故障线索，而不是跟业务 transaction 一起 rollback 掉。
-            DelayJob job = delayJobRepository.findByIdForUpdate(claimedJob.id())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "claimed delay job disappeared " + claimedJob.id()
-                    ));
+            DelayJob job = lockCurrentLease(claimedJob);
+            if (job == null) {
+                return;
+            }
             job.markFailed(error, Instant.now(clock), properties.maxAttempts());
             delayJobRepository.updateExecutionState(job);
             log.warn(
@@ -130,6 +112,26 @@ public class DelayJobService {
                     exception
             );
         });
+    }
+
+    private DelayJob lockCurrentLease(DelayJob claimedJob) {
+        DelayJob job = delayJobRepository.findByIdForUpdate(claimedJob.id())
+                .orElseThrow(() -> new IllegalStateException(
+                        "claimed delay job disappeared " + claimedJob.id()
+                ));
+        if (job.status() != DelayJobStatus.PROCESSING
+                || !job.nextAttemptAt().equals(claimedJob.nextAttemptAt())) {
+            // 旧 worker 可能在 lease 过期后才返回；此时不能覆盖新 worker/recoverer 的状态。
+            log.warn(
+                    "delay_job_lease_changed jobId={} claimedLease={} currentStatus={} currentLease={}",
+                    claimedJob.id(),
+                    claimedJob.nextAttemptAt(),
+                    job.status(),
+                    job.nextAttemptAt()
+            );
+            return null;
+        }
+        return job;
     }
 
     private Map<DelayJobType, DelayJobHandler> handlersByType(List<DelayJobHandler> handlers) {

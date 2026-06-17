@@ -376,44 +376,52 @@ PayPay Card 面试提示：
 
 入口：
 
-- `DelayJobScheduler.dispatchDueJobs()`
-- `DelayJobService.dispatchNext()`
+- `ScheduledJobPoller.pollDueJobs()`
+- `ScheduledJobClaimService.claimDueJobs()`
+- `ScheduledJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
 - `AuthorizationExpiryService.expire(authorizationId)`
 
 触发方式：
 
 - Spring `@Scheduled`
-- 使用 `delayJobTaskScheduler` worker pool
-- 和 Outbox 使用相似 scheduler 模式，但线程池隔离。
+- `delayJobTaskScheduler` 只负责 poller/recoverer 的定时触发。
+- `scheduledJobWorkerExecutor` 负责并发执行业务 job。
+- 和 Outbox 使用相似 durable queue 模式，但 DelayJob 已经拆成 poller、claim service、worker、recoverer。
 
-### 5.1 Claim job
+### 5.1 Poll and claim batch
 
 关键方法：
 
-- `DelayJobService.claimNextRunnable()`
+- `ScheduledJobPoller.pollDueJobs()`
+- `ScheduledJobClaimService.claimDueJobs()`
 
 处理：
 
-- 查询 `delay_jobs` 中到期的 `PENDING` 或 lease 已过期的 `PROCESSING`。
+- 查询 `delay_jobs` 中到期的 `PENDING`。
 - 使用 `FOR UPDATE SKIP LOCKED`。
 - 把 job 标记成 `PROCESSING`。
 - 设置 `next_attempt_at = now + processingTimeoutSeconds`。
+- claim transaction 立刻 commit。
+- commit 后，poller 再把每个 claimed job submit 给 `scheduledJobWorkerExecutor`。
 
 为什么 `PROCESSING` 是 lease：
 
 - 如果 pod claim job 后宕机，job 不能永久卡住。
-- lease 到期后，其他 pod 可以重新 claim。
+- lease 到期后，`StuckTaskRecoverer` 会把 job 恢复成可 retry 状态。
+- worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
-### 5.2 Dispatch handler
+### 5.2 Worker dispatch handler
 
 关键方法：
 
+- `ScheduledJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.jobType()`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
 
 处理：
 
+- worker 根据 `job.jobType` 找 handler。
 - `jobType()` 返回 `AUTHORIZATION_EXPIRY`。
 - `handle()` 把 `job.aggregateId` 转成 authorization id。
 - 调用 `AuthorizationExpiryService.expire(...)`。
@@ -474,11 +482,11 @@ PayPay Card 面试提示：
    - `authorizations.status = EXPIRED`。
    - `outbox_events` 新增 `authorization.expired/PENDING`。
 
-### 5.4 Mark done or failed
+### 5.4 Worker mark done or failed
 
 回到：
 
-- `DelayJobService.dispatchNext()`
+- `ScheduledJobWorker.handleClaimedJob(job)`
 
 成功：
 
@@ -495,8 +503,30 @@ PayPay Card 面试提示：
 为什么 claim、handle、mark done/fail 拆成多个 transaction：
 
 - claim 事务短，减少 job row lock 时间。
+- poller 只负责 poll + claim + submit，不负责提前标成功。
 - handler 业务事务可以独立 rollback。
 - 失败记录单独提交，避免错误信息跟业务 rollback 一起消失。
+- worker 成功后自己 finalize，保证 `DONE` 一定发生在业务处理之后。
+
+### 5.5 Recover stuck PROCESSING jobs
+
+入口：
+
+- `StuckTaskRecoverer.recoverStuckJobs()`
+
+处理：
+
+- 查询 `status = PROCESSING` 且 `next_attempt_at <= now` 的 rows。
+- 使用 `FOR UPDATE SKIP LOCKED`，多 pod recoverer 可以并发运行。
+- 调用 `DelayJob.markProcessingTimedOut(...)`。
+- 未超过最大次数：回到 `PENDING`，等待下一次 poll。
+- 超过最大次数：进入 `DEAD`，等待人工检查。
+
+为什么 recovery 单独放：
+
+- 正常 poller 只关心新到期任务。
+- recoverer 只关心 worker/pod 宕机或超时留下的 stuck lease。
+- 这让正常执行路径和故障恢复路径都更容易解释。
 
 ## 6. 核心流程四：查询授权
 
@@ -532,11 +562,11 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 | 表 | `outbox_events` | `delay_jobs` |
 | 当前例子 | `authorization.decided`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
-| 消费者 | `OutboxPublisherScheduler` | `DelayJobScheduler` |
+| 消费者 | `OutboxPublisherScheduler` | `ScheduledJobPoller` + `ScheduledJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
 | 失败处理 | retry/backoff/DEAD | retry/backoff/PROCESSING lease/DEAD |
 | 幂等重点 | consumer 用 eventId 去重 | handler 读取业务 source of truth |
-| 线程池 | `outboxTaskScheduler` | `delayJobTaskScheduler` |
+| 线程池 | `outboxTaskScheduler` | `delayJobTaskScheduler` + `scheduledJobWorkerExecutor` |
 
 一句话区分：
 

@@ -147,6 +147,12 @@ public final class DelayJob {
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
+    public void markProcessingTimedOut(Instant recoveredAt, int maxAttempts) {
+        // PROCESSING lease 超时说明 worker 可能宕机或卡住。
+        // 这里把它当作一次失败记录，交回 PENDING/DEAD 状态机，避免长期占用任务。
+        markFailed("processing lease expired", recoveredAt, maxAttempts);
+    }
+
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH
                 ? value

@@ -1,6 +1,7 @@
 package com.minicard.scheduling.domain;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -18,9 +19,14 @@ public interface DelayJobRepository {
     boolean insertIfAbsent(DelayJob job);
 
     /**
-     * 锁定下一条到期任务，通常由 FOR UPDATE SKIP LOCKED 支持多实例调度。
+     * 批量锁定到期 PENDING 任务，通常由 FOR UPDATE SKIP LOCKED 支持多实例调度。
      */
-    Optional<DelayJob> findNextRunnableForUpdate(Instant now);
+    List<DelayJob> findRunnableBatchForUpdate(Instant now, int limit);
+
+    /**
+     * 批量锁定 lease 已超时的 PROCESSING 任务，供 recoverer 恢复。
+     */
+    List<DelayJob> findStuckProcessingBatchForUpdate(Instant now, int limit);
 
     Optional<DelayJob> findByIdForUpdate(UUID id);
 
