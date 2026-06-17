@@ -109,16 +109,6 @@ public final class Authorization {
         );
     }
 
-    public void apply(AuthorizationDecision decision, Instant decisionTime) {
-        Objects.requireNonNull(decision);
-        // AuthorizationDecision 表达“批准或拒绝”，但真正修改状态的规则仍由 aggregate 维护。
-        if (decision.approved()) {
-            approve(decisionTime);
-        } else {
-            decline(decision.declineReason(), decisionTime);
-        }
-    }
-
     public void approve(Instant decisionTime) {
         // ensurePending() 防止重复决策，保护 audit trail，并禁止 DECLINED -> APPROVED 这类非法跳转。
         ensurePending("approve");
@@ -156,13 +146,13 @@ public final class Authorization {
 
     private void ensurePending(String action) {
         if (status != AuthorizationStatus.PENDING) {
-            throw new InvalidAuthorizationStateException(status, action);
+            throw new IllegalStateException("cannot " + action + " authorization in status " + status);
         }
     }
 
     private void ensureApproved(String action) {
         if (status != AuthorizationStatus.APPROVED) {
-            throw new InvalidAuthorizationStateException(status, action);
+            throw new IllegalStateException("cannot " + action + " authorization in status " + status);
         }
     }
 

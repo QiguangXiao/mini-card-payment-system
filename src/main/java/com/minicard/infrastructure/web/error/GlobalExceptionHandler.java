@@ -1,10 +1,9 @@
 package com.minicard.infrastructure.web.error;
 
 import java.time.Instant;
+import java.util.NoSuchElementException;
 
-import com.minicard.authorization.application.AuthorizationNotFoundException;
 import com.minicard.authorization.application.IdempotencyConflictException;
-import com.minicard.authorization.domain.InvalidAuthorizationStateException;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,8 +25,8 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler(AuthorizationNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNotFound(AuthorizationNotFoundException exception) {
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException exception) {
         return error(HttpStatus.NOT_FOUND, "AUTHORIZATION_NOT_FOUND", exception.getMessage());
     }
 
@@ -36,13 +35,6 @@ public class GlobalExceptionHandler {
             IdempotencyConflictException exception
     ) {
         return error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", exception.getMessage());
-    }
-
-    @ExceptionHandler(InvalidAuthorizationStateException.class)
-    public ResponseEntity<ErrorResponse> handleInvalidAuthorizationState(
-            InvalidAuthorizationStateException exception
-    ) {
-        return error(HttpStatus.CONFLICT, "INVALID_AUTHORIZATION_STATE", exception.getMessage());
     }
 
     @ExceptionHandler({

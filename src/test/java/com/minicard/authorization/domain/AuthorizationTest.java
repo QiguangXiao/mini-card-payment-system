@@ -82,7 +82,7 @@ class AuthorizationTest {
                 AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED,
                 DECIDED_AT
         ))
-                .isInstanceOf(InvalidAuthorizationStateException.class)
+                .isInstanceOf(IllegalStateException.class)
                 .hasMessage("cannot decline authorization in status APPROVED");
     }
 

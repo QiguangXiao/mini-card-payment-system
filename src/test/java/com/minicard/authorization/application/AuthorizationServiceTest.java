@@ -5,13 +5,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Currency;
+import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.minicard.authorization.domain.Authorization;
-import com.minicard.authorization.domain.AuthorizationDecision;
-import com.minicard.authorization.domain.AuthorizationDecisionPolicy;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
@@ -44,7 +44,6 @@ class AuthorizationServiceTest {
     private static final Instant NOW = Instant.parse("2026-06-07T00:00:00Z");
 
     private AuthorizationRepository authorizationRepository;
-    private AuthorizationDecisionPolicy decisionPolicy;
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
     private RiskAssessmentService riskAssessmentService;
@@ -55,7 +54,6 @@ class AuthorizationServiceTest {
     @BeforeEach
     void setUp() {
         authorizationRepository = mock(AuthorizationRepository.class);
-        decisionPolicy = mock(AuthorizationDecisionPolicy.class);
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         riskAssessmentService = mock(RiskAssessmentService.class);
@@ -64,7 +62,7 @@ class AuthorizationServiceTest {
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
                 authorizationRepository,
-                decisionPolicy,
+                new AuthorizationPolicyProperties(Map.of("JPY", new BigDecimal("100000.00"))),
                 cardRepository,
                 creditAccountRepository,
                 riskAssessmentService,
@@ -79,7 +77,6 @@ class AuthorizationServiceTest {
         arrangeNewClaim();
         CreditAccount account = activeAccount("1000.00", "0.00");
         Card card = activeCard("card-123", account.id());
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
         when(cardRepository.findById("card-123")).thenReturn(Optional.of(card));
         when(creditAccountRepository.findByIdForUpdate(account.id()))
                 .thenReturn(Optional.of(account));
@@ -101,9 +98,6 @@ class AuthorizationServiceTest {
     @Test
     void declinesWithoutReservingWhenPolicyRejectsRequest() {
         arrangeNewClaim();
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.decline(
-                AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED
-        ));
 
         Authorization result = service.authorize(command("key-1", "card-123", "200000.00"));
 
@@ -117,11 +111,26 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    void declinesUnsupportedCurrencyBeforeLoadingCard() {
+        arrangeNewClaim();
+
+        Authorization result = service.authorize(command(
+                "key-1",
+                "card-123",
+                "10.00",
+                Currency.getInstance("USD")
+        ));
+
+        assertThat(result.status()).isEqualTo(AuthorizationStatus.DECLINED);
+        assertThat(result.declineReason()).contains(AuthorizationDeclineReason.UNSUPPORTED_CURRENCY);
+        verify(cardRepository, never()).findById(any());
+    }
+
+    @Test
     void declinesWhenAvailableCreditIsInsufficient() {
         arrangeNewClaim();
         CreditAccount account = activeAccount("1000.00", "950.00");
         Card card = activeCard("card-123", account.id());
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
         when(cardRepository.findById("card-123")).thenReturn(Optional.of(card));
         when(creditAccountRepository.findByIdForUpdate(account.id()))
                 .thenReturn(Optional.of(account));
@@ -139,7 +148,6 @@ class AuthorizationServiceTest {
     @Test
     void declinesWhenCardDoesNotExist() {
         arrangeNewClaim();
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
         when(cardRepository.findById("unknown-card")).thenReturn(Optional.empty());
 
         Authorization result = service.authorize(command("key-1", "unknown-card", "100.00"));
@@ -151,7 +159,6 @@ class AuthorizationServiceTest {
     @Test
     void declinesWhenCardIsBlocked() {
         arrangeNewClaim();
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
         when(cardRepository.findById("card-blocked")).thenReturn(Optional.of(new Card(
                 "card-blocked",
                 UUID.randomUUID(),
@@ -167,7 +174,6 @@ class AuthorizationServiceTest {
     @Test
     void declinesWhenCardIsExpired() {
         arrangeNewClaim();
-        when(decisionPolicy.decide(any())).thenReturn(AuthorizationDecision.approve());
         when(cardRepository.findById("card-expired")).thenReturn(Optional.of(new Card(
                 "card-expired",
                 UUID.randomUUID(),
@@ -190,7 +196,6 @@ class AuthorizationServiceTest {
         Authorization result = service.authorize(command("key-1", "card-123", "100.0"));
 
         assertThat(result).isSameAs(existing);
-        verify(decisionPolicy, never()).decide(any());
         verify(cardRepository, never()).findById(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
@@ -223,7 +228,8 @@ class AuthorizationServiceTest {
         when(authorizationRepository.findById(id)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.get(id))
-                .isInstanceOf(AuthorizationNotFoundException.class);
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessage("authorization not found: " + id);
     }
 
     private void arrangeNewClaim() {
@@ -237,11 +243,20 @@ class AuthorizationServiceTest {
     }
 
     private AuthorizationCommand command(String key, String cardId, String amount) {
+        return command(key, cardId, amount, Currency.getInstance("JPY"));
+    }
+
+    private AuthorizationCommand command(
+            String key,
+            String cardId,
+            String amount,
+            Currency currency
+    ) {
         return new AuthorizationCommand(
                 key,
                 cardId,
                 new BigDecimal(amount),
-                Currency.getInstance("JPY"),
+                currency,
                 "merchant-123",
                 "JP",
                 "JP"

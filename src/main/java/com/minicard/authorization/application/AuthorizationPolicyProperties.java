@@ -1,4 +1,4 @@
-package com.minicard.authorization.infrastructure;
+package com.minicard.authorization.application;
 
 import java.math.BigDecimal;
 import java.util.Map;

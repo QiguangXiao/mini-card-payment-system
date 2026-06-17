@@ -2,14 +2,17 @@ package com.minicard.authorization.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Currency;
+import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import com.minicard.authorization.domain.Authorization;
-import com.minicard.authorization.domain.AuthorizationDecision;
-import com.minicard.authorization.domain.AuthorizationDecisionPolicy;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
+import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
@@ -37,7 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthorizationService {
 
     private final AuthorizationRepository authorizationRepository;
-    private final AuthorizationDecisionPolicy decisionPolicy;
+    private final Map<Currency, Money> singleTransactionLimits;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RiskAssessmentService riskAssessmentService;
@@ -47,7 +50,7 @@ public class AuthorizationService {
 
     public AuthorizationService(
             AuthorizationRepository authorizationRepository,
-            AuthorizationDecisionPolicy decisionPolicy,
+            AuthorizationPolicyProperties policyProperties,
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
             RiskAssessmentService riskAssessmentService,
@@ -56,7 +59,13 @@ public class AuthorizationService {
             Clock clock
     ) {
         this.authorizationRepository = authorizationRepository;
-        this.decisionPolicy = decisionPolicy;
+        this.singleTransactionLimits = policyProperties.singleTransactionLimits()
+                .entrySet()
+                .stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        entry -> Currency.getInstance(entry.getKey()),
+                        entry -> new Money(entry.getValue(), Currency.getInstance(entry.getKey()))
+                ));
         this.cardRepository = cardRepository;
         this.creditAccountRepository = creditAccountRepository;
         this.riskAssessmentService = riskAssessmentService;
@@ -113,7 +122,7 @@ public class AuthorizationService {
     public Authorization get(UUID id) {
         // 查询用例使用 readOnly transaction，表达这里不改变业务状态，也减少误写入风险。
         return authorizationRepository.findById(id)
-                .orElseThrow(() -> new AuthorizationNotFoundException(id));
+                .orElseThrow(() -> new NoSuchElementException("authorization not found: " + id));
     }
 
     private void decideAndReserve(
@@ -122,10 +131,9 @@ public class AuthorizationService {
             Instant now
     ) {
         // 便宜的 policy check 先执行，尽量推迟 account row lock，缩短高并发下的 critical section。
-        AuthorizationDecision decision = decisionPolicy.decide(authorization);
-        if (!decision.approved()) {
-            // apply() 让 aggregate 自己维护状态转换(state transition)，service 不直接改字段。
-            authorization.apply(decision, now);
+        AuthorizationDeclineReason localDeclineReason = checkSingleTransactionLimit(authorization);
+        if (localDeclineReason != null) {
+            authorization.decline(localDeclineReason, now);
             return;
         }
 
@@ -179,6 +187,17 @@ public class AuthorizationService {
             case CARD_BLOCKED -> AuthorizationDeclineReason.CARD_BLOCKED;
             case CARD_EXPIRED -> AuthorizationDeclineReason.CARD_EXPIRED;
         };
+    }
+
+    private AuthorizationDeclineReason checkSingleTransactionLimit(Authorization authorization) {
+        Money limit = singleTransactionLimits.get(authorization.requestedAmount().currency());
+        if (limit == null) {
+            return AuthorizationDeclineReason.UNSUPPORTED_CURRENCY;
+        }
+        if (authorization.requestedAmount().isGreaterThan(limit)) {
+            return AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED;
+        }
+        return null;
     }
 
     private AuthorizationDomainEvent toDecisionDomainEvent(Authorization authorization) {

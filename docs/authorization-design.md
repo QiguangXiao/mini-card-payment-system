@@ -12,7 +12,7 @@ but it does not yet implement capture and refund flows.
 
 `Authorization` is the aggregate root. External code cannot assign its status
 directly. A new aggregate starts as `PENDING`, and only its `approve`, `decline`,
-or `apply` behavior can produce a final decision.
+or `expire` behavior can change the lifecycle state.
 
 The aggregate protects these invariants:
 
@@ -68,16 +68,17 @@ The repository loads the account with `SELECT ... FOR UPDATE`. Concurrent
 authorizations for the same account are therefore serialized before checking
 and changing available credit, preventing overspending.
 
-## Domain Service
+## Local Decision Rules
 
-`AuthorizationDecisionPolicy` is a domain service because the decision rule does
-not naturally belong to the state of one Authorization entity. The current
-`SingleTransactionLimitPolicy` approves supported currencies within configured
-limits and declines other requests with an explicit reason.
+The configured single-transaction limits are intentionally kept as simple
+application-service logic. They are a small local rule, so the code now uses
+`AuthorizationDeclineReason` directly instead of introducing a policy interface
+and decision wrapper for one implementation.
 
-The configured limits are intentionally a demonstration rule. A production card
-issuer would normally coordinate with card, account, available-credit, fraud,
-and risk bounded contexts.
+A production issuer would normally coordinate card, account, available-credit,
+fraud, and risk bounded contexts. In this learning project, those heavier
+collaborations stay explicit in the main request flow rather than hidden behind
+extra abstractions.
 
 ## Risk Checks
 
@@ -106,7 +107,7 @@ avoiding unnecessary risk calls for missing, blocked, or expired cards.
 
 1. Atomically claim an idempotency key with a pending Authorization.
 2. Return the original result when another request already owns that key.
-3. Ask the domain policy for preliminary rules such as transaction limits.
+3. Check local preliminary rules such as transaction limits.
 4. Validate the Card and resolve its CreditAccount.
 5. Run local and external risk checks.
 6. Lock the CreditAccount and attempt to reserve available credit.

@@ -3,11 +3,11 @@ package com.minicard.authorization.api;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.application.AuthorizationService;
-import com.minicard.authorization.application.AuthorizationNotFoundException;
 import com.minicard.authorization.application.IdempotencyConflictException;
+import com.minicard.authorization.application.AuthorizationService;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationStatus;
@@ -143,7 +143,8 @@ class AuthorizationControllerTest {
     @Test
     void returnsNotFoundForUnknownAuthorization() throws Exception {
         UUID id = UUID.fromString("8f2d8907-0471-4209-9862-73e09f62cd1f");
-        when(authorizationService.get(id)).thenThrow(new AuthorizationNotFoundException(id));
+        when(authorizationService.get(id))
+                .thenThrow(new NoSuchElementException("authorization not found: " + id));
 
         mockMvc.perform(get("/api/authorizations/{id}", id))
                 .andExpect(status().isNotFound())
