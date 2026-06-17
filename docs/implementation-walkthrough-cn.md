@@ -218,7 +218,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 入口：
 
-- `DelayJobAuthorizationExpiryJobScheduler.schedule(authorization)`
+- `AuthorizationExpiryDelayJobScheduler.schedule(authorization)`
 
 处理：
 
@@ -414,9 +414,9 @@ PayPay Card 面试提示：
 
 入口：
 
-- `ScheduledJobPoller.pollDueJobs()`
-- `ScheduledJobClaimService.claimDueJobs()`
-- `ScheduledJobWorker.handleClaimedJob(job)`
+- `DelayJobPoller.pollDueJobs()`
+- `DelayJobClaimService.claimDueJobs()`
+- `DelayJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
 - `AuthorizationExpiryService.expire(authorizationId)`
 
@@ -424,15 +424,23 @@ PayPay Card 面试提示：
 
 - Spring `@Scheduled`
 - `delayJobTaskScheduler` 只负责 poller/recoverer 的定时触发。
-- `scheduledJobWorkerExecutor` 负责并发执行业务 job。
+- `delayJobWorkerExecutor` 负责并发执行业务 job。
 - 和 Outbox 使用相似 durable queue 模式，但 DelayJob 已经拆成 poller、claim service、worker、recoverer。
+
+代码结构：
+
+- `com.minicard.delayjob` 是通用 DelayJob 机制，包含 domain/application/MyBatis adapter。
+- `com.minicard.authorization.infrastructure.delayjob` 是 Authorization 使用 DelayJob 的 adapter，只负责写入到期任务。
+- `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置。
+- `com.minicard.infrastructure.async` 只放后台 worker executor 配置。
+- `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper。
 
 ### 5.1 Poll and claim batch
 
 关键方法：
 
-- `ScheduledJobPoller.pollDueJobs()`
-- `ScheduledJobClaimService.claimDueJobs()`
+- `DelayJobPoller.pollDueJobs()`
+- `DelayJobClaimService.claimDueJobs()`
 
 处理：
 
@@ -441,19 +449,19 @@ PayPay Card 面试提示：
 - 把 job 标记成 `PROCESSING`。
 - 设置 `next_attempt_at = now + processingTimeoutSeconds`。
 - claim transaction 立刻 commit。
-- commit 后，poller 再把每个 claimed job submit 给 `scheduledJobWorkerExecutor`。
+- commit 后，poller 再把每个 claimed job submit 给 `delayJobWorkerExecutor`。
 
 为什么 `PROCESSING` 是 lease：
 
 - 如果 pod claim job 后宕机，job 不能永久卡住。
-- lease 到期后，`StuckTaskRecoverer` 会把 job 恢复成可 retry 状态。
+- lease 到期后，`StuckDelayJobRecoverer` 会把 job 恢复成可 retry 状态。
 - worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
 ### 5.2 Worker dispatch handler
 
 关键方法：
 
-- `ScheduledJobWorker.handleClaimedJob(job)`
+- `DelayJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.jobType()`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
 
@@ -524,7 +532,7 @@ PayPay Card 面试提示：
 
 回到：
 
-- `ScheduledJobWorker.handleClaimedJob(job)`
+- `DelayJobWorker.handleClaimedJob(job)`
 
 成功：
 
@@ -550,7 +558,7 @@ PayPay Card 面试提示：
 
 入口：
 
-- `StuckTaskRecoverer.recoverStuckJobs()`
+- `StuckDelayJobRecoverer.recoverStuckJobs()`
 
 处理：
 
@@ -600,11 +608,11 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 | 表 | `outbox_events` | `delay_jobs` |
 | 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
-| 消费者 | `OutboxPublisherPoller` + `OutboxWorker` | `ScheduledJobPoller` + `ScheduledJobWorker` |
+| 消费者 | `OutboxPublisherPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
 | 失败处理 | retry/backoff/DEAD | retry/backoff/PROCESSING lease/DEAD |
 | 幂等重点 | consumer 用 eventId 去重 | handler 读取业务 source of truth |
-| 线程池 | `outboxTaskScheduler` + `outboxWorkerExecutor` | `delayJobTaskScheduler` + `scheduledJobWorkerExecutor` |
+| 线程池 | `outboxTaskScheduler` + `outboxWorkerExecutor` | `delayJobTaskScheduler` + `delayJobWorkerExecutor` |
 
 一句话区分：
 
