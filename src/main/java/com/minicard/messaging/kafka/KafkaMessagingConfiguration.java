@@ -36,16 +36,6 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
-    public NewTopic authorizationLifecycleEventsTopic(KafkaTopicsProperties properties) {
-        // lifecycle events 先放独立 topic，避免 decision-only consumer 收到不认识的 contract
-        // 后误判为坏消息并发送到 DLT。
-        return TopicBuilder.name(properties.authorizationLifecycleEvents())
-                .partitions(3)
-                .replicas(1)
-                .build();
-    }
-
-    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         return deadLetterTopic(properties.notificationDeadLetter());
     }

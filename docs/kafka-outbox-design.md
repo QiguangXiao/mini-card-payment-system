@@ -62,19 +62,18 @@ being applied twice.
 
 ## Event Contract
 
-Topics:
+Topic:
 
 ```text
 mini-card.authorization-events.v1
-mini-card.authorization-lifecycle-events.v1
 ```
 
 Event types:
 
 ```text
-authorization.approved -> mini-card.authorization-events.v1
-authorization.declined -> mini-card.authorization-events.v1
-authorization.expired -> mini-card.authorization-lifecycle-events.v1
+authorization.approved
+authorization.declined
+authorization.expired
 ```
 
 The envelope contains:
@@ -85,10 +84,10 @@ The envelope contains:
 - `occurredAt`: business event time
 - `payload`: authorization decision data
 
-Authorization message payload classes live under
-`messaging.contract.authorization`. This package is a shared public contract,
-not Authorization infrastructure. Producers and consumers can both depend on
-the contract without sharing each other's adapters, readers, or repositories.
+Authorization message payloads are plain JSON objects inside the envelope. The
+project intentionally does not create one Java payload class per event type yet;
+consumers use `eventType` for routing and read the fields they need from
+`JsonNode payload`.
 
 The payload represents `amount` as decimal text plus `currency`. This preserves
 financial precision across JSON storage and prevents consumers from accidentally
@@ -149,11 +148,10 @@ does not depend on the Authorization aggregate or absorb business-context
 knowledge.
 
 Consumers use the shared `IntegrationEventReader` only for transport concerns:
-JSON parsing, `eventType` routing, `eventVersion` checks, and header validation.
-Notification and Risk still choose their own handlers and commands inside their
-bounded contexts. This is the intended microservice-compatible boundary: a
-consumer depends on the message contract, not on the producer service's internal
-infrastructure package.
+JSON parsing and header validation. Notification and Risk still choose their own
+handlers and commands inside their bounded contexts. This is the intended
+microservice-compatible boundary: a consumer depends on the JSON event contract,
+not on the producer service's internal infrastructure package.
 
 ## Implemented Consumers
 

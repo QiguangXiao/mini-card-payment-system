@@ -5,9 +5,9 @@ import java.time.Instant;
 import java.util.Currency;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
-import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,7 +19,7 @@ class AuthorizationMessageMapperTest {
         Instant now = Instant.parse("2026-06-14T00:00:00Z");
         UUID eventId = UUID.randomUUID();
         UUID authorizationId = UUID.randomUUID();
-        AuthorizationMessageMapper mapper = new AuthorizationMessageMapper();
+        AuthorizationMessageMapper mapper = new AuthorizationMessageMapper(new ObjectMapper());
 
         AuthorizationMessage message = mapper.map(new AuthorizationApprovedDomainEvent(
                 authorizationId,
@@ -32,7 +32,10 @@ class AuthorizationMessageMapperTest {
         assertThat(message.eventId()).isEqualTo(eventId);
         assertThat(message.aggregateId()).isEqualTo(authorizationId);
         assertThat(message.partitionKey()).isEqualTo(authorizationId.toString());
-        assertThat(message.eventType()).isEqualTo(AuthorizationApprovedPayload.EVENT_TYPE);
-        assertThat(message.payload()).isInstanceOf(AuthorizationApprovedPayload.class);
+        assertThat(message.eventType()).isEqualTo("authorization.approved");
+        assertThat(message.payload().get("authorizationId").asText())
+                .isEqualTo(authorizationId.toString());
+        assertThat(message.payload().get("expiresAt").asText())
+                .isEqualTo(now.plusSeconds(7 * 24 * 60 * 60).toString());
     }
 }

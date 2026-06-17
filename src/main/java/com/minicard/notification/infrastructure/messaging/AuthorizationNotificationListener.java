@@ -1,7 +1,9 @@
 package com.minicard.notification.infrastructure.messaging;
 
-import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
-import com.minicard.messaging.contract.authorization.AuthorizationDeclinedPayload;
+import java.util.UUID;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
 import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
 import com.minicard.notification.application.RequestAuthorizationNotificationService;
@@ -17,6 +19,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AuthorizationNotificationListener {
+
+    private static final String AUTHORIZATION_APPROVED = "authorization.approved";
+    private static final String AUTHORIZATION_DECLINED = "authorization.declined";
 
     private final IntegrationEventReader eventReader;
     private final RequestAuthorizationNotificationService service;
@@ -37,35 +42,22 @@ public class AuthorizationNotificationListener {
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
         // 先读 eventType，再显式选择 handler。这样新增 authorization.captured 等事件时，
         // Notification 没订阅就直接跳过，不把“合法但不关心”的消息当 contract failure。
-        String eventType = eventReader.eventType(record);
-        if (AuthorizationApprovedPayload.EVENT_TYPE.equals(eventType)) {
-            var event = eventReader.read(
-                    record,
-                    AuthorizationApprovedPayload.class,
-                    AuthorizationApprovedPayload.EVENT_TYPE,
-                    AuthorizationApprovedPayload.EVENT_VERSION
-            );
-            var payload = event.payload();
+        IntegrationEvent event = eventReader.read(record);
+        JsonNode payload = event.payload();
+        if (AUTHORIZATION_APPROVED.equals(event.eventType())) {
             service.request(new RequestAuthorizationNotificationCommand(
                     event.eventId(),
-                    payload.authorizationId(),
-                    payload.cardId(),
+                    UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
+                    eventReader.requiredText(payload, "cardId"),
                     true
             ));
             return;
         }
-        if (AuthorizationDeclinedPayload.EVENT_TYPE.equals(eventType)) {
-            var event = eventReader.read(
-                    record,
-                    AuthorizationDeclinedPayload.class,
-                    AuthorizationDeclinedPayload.EVENT_TYPE,
-                    AuthorizationDeclinedPayload.EVENT_VERSION
-            );
-            var payload = event.payload();
+        if (AUTHORIZATION_DECLINED.equals(event.eventType())) {
             service.request(new RequestAuthorizationNotificationCommand(
                     event.eventId(),
-                    payload.authorizationId(),
-                    payload.cardId(),
+                    UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
+                    eventReader.requiredText(payload, "cardId"),
                     false
             ));
         }

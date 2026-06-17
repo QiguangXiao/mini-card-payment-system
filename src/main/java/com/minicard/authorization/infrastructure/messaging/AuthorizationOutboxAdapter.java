@@ -8,9 +8,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
-import com.minicard.messaging.event.IntegrationEventEnvelope;
-import com.minicard.messaging.outbox.domain.OutboxEvent;
-import com.minicard.messaging.outbox.domain.OutboxEventRepository;
+import com.minicard.messaging.event.IntegrationEvent;
+import com.minicard.messaging.outbox.OutboxEvent;
+import com.minicard.messaging.outbox.OutboxEventRepository;
 import org.springframework.stereotype.Component;
 
 /**
@@ -46,7 +46,7 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
         // eventId 属于 outbound message，不属于 domain event。
         // 由 adapter 生成后传给 mapper，确保 envelope 和 outbox row 使用同一个幂等键。
         AuthorizationMessage message = messageMapper.map(event, UUID.randomUUID());
-        IntegrationEventEnvelope<?> envelope = new IntegrationEventEnvelope<>(
+        IntegrationEvent envelope = new IntegrationEvent(
                 message.eventId(),
                 message.eventType(),
                 message.eventVersion(),
@@ -68,7 +68,7 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
         ));
     }
 
-    private String serialize(IntegrationEventEnvelope<?> envelope) {
+    private String serialize(IntegrationEvent envelope) {
         try {
             return objectMapper.writeValueAsString(envelope);
         } catch (JsonProcessingException exception) {

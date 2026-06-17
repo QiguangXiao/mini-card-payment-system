@@ -1,7 +1,7 @@
 package com.minicard.infrastructure.async;
 
 import com.minicard.delayjob.application.DelayJobSchedulerProperties;
-import com.minicard.messaging.outbox.application.OutboxPublisherProperties;
+import com.minicard.messaging.outbox.OutboxPublisherProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;

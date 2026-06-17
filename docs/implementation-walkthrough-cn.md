@@ -175,9 +175,9 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 关键顺序：
 
-1. `decisionPolicy.decide(authorization)`
+1. `AuthorizationService.checkSingleTransactionLimit(authorization)`
 
-   执行便宜的本地授权策略。
+   执行便宜的本地授权限额检查。
    这些检查放在账户锁之前，减少锁持有时间。
 
 2. `cardRepository.findById(...)`
@@ -245,17 +245,17 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 处理：
 
-- 如果结果是 `APPROVED`，先创建 `AuthorizationApprovedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 `AuthorizationApprovedPayload`，事件类型是 `authorization.approved`。
-- 如果结果是 `DECLINED`，先创建 `AuthorizationDeclinedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 `AuthorizationDeclinedPayload`，事件类型是 `authorization.declined`。
-- 创建 `IntegrationEventEnvelope`，包含 event metadata 和 payload。
+- 如果结果是 `APPROVED`，先创建 `AuthorizationApprovedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 JSON payload，事件类型是 `authorization.approved`。
+- 如果结果是 `DECLINED`，先创建 `AuthorizationDeclinedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 JSON payload，事件类型是 `authorization.declined`。
+- 创建 `IntegrationEvent`，包含 event metadata 和 JsonNode payload。
 - `eventId = UUID.randomUUID()`。
 - 写入 `outbox_events`，状态为 `PENDING`。
 
 为什么区分 domain event 和 payload：
 
 - Domain event 属于 Authorization bounded context，只表达业务事实。
-- Payload 是对外消息 contract，需要稳定 eventType/version/payload。
-- `AuthorizationMessageMapper` 负责领域事件到 payload 的纯转换。
+- payload 是对外 JSON contract，需要稳定 eventType/version/字段名，但当前不为每种消息单独建 Java payload class。
+- `AuthorizationMessageMapper` 负责领域事件到 JSON payload 的纯转换。
 - `AuthorizationOutboxAdapter` 负责生成 eventId、序列化 envelope、写 Outbox。
 - Authorization domain 不知道 Kafka、topic、headers 或 Outbox 表。
 
@@ -268,8 +268,8 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 消费者如何处理多种事件：
 
-- `IntegrationEventReader` 是共享 transport reader，只负责读取 `eventType`、反序列化指定 payload、校验 header/version。
-- Notification/Risk listener 只依赖共享 contract payload，显式处理 `authorization.approved` 和 `authorization.declined`，不引用 Authorization 的 infrastructure。
+- `IntegrationEventReader` 是共享 transport reader，只负责读取 JSON envelope、校验 header，并返回 JsonNode payload。
+- Notification/Risk listener 显式处理 `authorization.approved` 和 `authorization.declined`，直接从 payload 读取自己需要的字段。
 - 如果未来同一 topic 出现 `authorization.captured`，当前 consumer 可以直接跳过。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
@@ -309,7 +309,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 入口：
 
 - `OutboxPublisherPoller.pollPublishableEvents()`
-- `OutboxClaimService.claimPublishableEvents()`
+- `OutboxPublisherPoller.claimPublishableEvents()`
 - `OutboxWorker.publishClaimedEvent(event)`
 - `OutboxStuckEventRecoverer.recoverStuckEvents()`
 
@@ -321,9 +321,9 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 关键步骤：
 
-1. `OutboxClaimService.claimPublishableEvents()`
+1. `OutboxPublisherPoller.claimPublishableEvents()`
 
-   短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
+   poller 在短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
    MyBatis XML 使用：
 
    ```sql
@@ -386,16 +386,19 @@ curl -X POST http://localhost:8080/api/authorizations \
 当前消息相关代码分成 4 组：
 
 - `messaging/outbox`：可靠发布机制。业务事务只写 `outbox_events`，后台 publisher 再发 Kafka。
+- `messaging/outbox/mybatis`：Outbox 的 MyBatis persistence 细节。
 - `messaging/kafka`：Kafka 技术 adapter。负责 topic、headers、producer ack、consumer DLT。
 - `messaging/inbox`：消费者侧幂等机制。Kafka 是 at-least-once，所以 consumer 需要按 `eventId` 去重。
+- `messaging/inbox/mybatis`：Inbox 的 MyBatis persistence 细节。
 - 业务 bounded context 的 listener，例如：
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
   - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
 
-为什么不再保留 `messaging/consumer/...` 空目录：
+为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
 
-- `consumer` 只是旧的提前规划骨架，没有实际类。
-- 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务消费入口放回各自 bounded context。
+- Outbox 是 messaging 的 reliable delivery 机制，不是业务 aggregate。
+- `OutboxEvent` 表达的是一条待发布消息的 delivery state，不需要伪装成业务 domain。
+- 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务发送/消费入口放回各自 bounded context。
 - 面试中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
 
 PayPay Card 面试提示：

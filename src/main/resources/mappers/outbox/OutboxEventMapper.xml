@@ -2,10 +2,10 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.minicard.messaging.outbox.infrastructure.mybatis.OutboxEventMapper">
+<mapper namespace="com.minicard.messaging.outbox.mybatis.OutboxEventMapper">
 
     <resultMap id="outboxEventRowMap"
-               type="com.minicard.messaging.outbox.infrastructure.mybatis.OutboxEventRow">
+               type="com.minicard.messaging.outbox.mybatis.OutboxEventRow">
         <constructor>
             <arg column="id" javaType="java.lang.String"/>
             <arg column="aggregate_type" javaType="java.lang.String"/>

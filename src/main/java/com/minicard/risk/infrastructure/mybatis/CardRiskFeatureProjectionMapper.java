@@ -1,10 +1,16 @@
 package com.minicard.risk.infrastructure.mybatis;
 
-import com.minicard.risk.application.projection.RecordAuthorizationDecisionCommand;
+import java.time.Instant;
+
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 @Mapper
 public interface CardRiskFeatureProjectionMapper {
 
-    int upsertDecision(RecordAuthorizationDecisionCommand decision);
+    int upsertDecision(
+            @Param("cardId") String cardId,
+            @Param("status") String status,
+            @Param("decidedAt") Instant decidedAt
+    );
 }

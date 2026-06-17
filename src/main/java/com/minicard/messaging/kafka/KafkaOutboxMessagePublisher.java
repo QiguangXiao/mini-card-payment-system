@@ -2,20 +2,19 @@ package com.minicard.messaging.kafka;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import com.minicard.messaging.outbox.application.OutboxMessagePublisher;
-import com.minicard.messaging.outbox.domain.OutboxEvent;
+import com.minicard.messaging.outbox.OutboxEvent;
+import com.minicard.messaging.outbox.OutboxMessagePublisher;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Outbox application port 的 Kafka adapter。
+ * Outbox 可靠投递机制的 Kafka adapter。
  *
  * <p>这个类知道 topic、Kafka headers 和 broker acknowledgement；
- * Outbox domain 不依赖 Kafka infrastructure。</p>
+ * Outbox 自身不依赖 Kafka infrastructure。</p>
  */
 @Component
 public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
@@ -59,11 +58,9 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
     }
 
     private String topicFor(String eventType) {
-        Map<String, String> eventTypeTopics = topics.eventTypeTopics();
-        if (eventTypeTopics != null && eventTypeTopics.containsKey(eventType)) {
-            return eventTypeTopics.get(eventType);
-        }
-        throw new IllegalArgumentException("no Kafka topic configured for event type " + eventType);
+        // 当前学习项目先用一个 Authorization topic 承载多种 eventType。
+        // 什么时候拆 topic，应该由吞吐、权限、retention 等真实需求决定。
+        return topics.authorizationEvents();
     }
 
     private void addHeader(ProducerRecord<String, String> record, String name, String value) {

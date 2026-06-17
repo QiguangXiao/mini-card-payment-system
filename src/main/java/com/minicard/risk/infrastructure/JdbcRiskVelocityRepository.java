@@ -3,12 +3,11 @@ package com.minicard.risk.infrastructure;
 import java.sql.Timestamp;
 import java.time.Instant;
 
-import com.minicard.risk.domain.RiskVelocityRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public class JdbcRiskVelocityRepository implements RiskVelocityRepository {
+public class JdbcRiskVelocityRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -16,7 +15,6 @@ public class JdbcRiskVelocityRepository implements RiskVelocityRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    @Override
     public int countRecentAuthorizations(String cardId, Instant since) {
         Integer count = jdbcTemplate.queryForObject(
                 """

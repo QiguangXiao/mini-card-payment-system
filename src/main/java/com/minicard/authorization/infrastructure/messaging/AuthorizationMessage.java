@@ -3,6 +3,8 @@ package com.minicard.authorization.infrastructure.messaging;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 /**
  * AuthorizationMessageMapper 的输出。
  *
@@ -16,6 +18,6 @@ record AuthorizationMessage(
         int eventVersion,
         Instant occurredAt,
         String partitionKey,
-        Object payload
+        JsonNode payload
 ) {
 }

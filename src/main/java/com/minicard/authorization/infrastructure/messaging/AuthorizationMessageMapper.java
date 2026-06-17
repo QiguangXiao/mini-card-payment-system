@@ -2,14 +2,14 @@ package com.minicard.authorization.infrastructure.messaging;
 
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
-import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
-import com.minicard.messaging.contract.authorization.AuthorizationDeclinedPayload;
-import com.minicard.messaging.contract.authorization.AuthorizationExpiredPayload;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,6 +20,17 @@ import org.springframework.stereotype.Component;
  */
 @Component
 class AuthorizationMessageMapper {
+
+    static final String AUTHORIZATION_APPROVED = "authorization.approved";
+    static final String AUTHORIZATION_DECLINED = "authorization.declined";
+    static final String AUTHORIZATION_EXPIRED = "authorization.expired";
+    static final int EVENT_VERSION = 1;
+
+    private final ObjectMapper objectMapper;
+
+    AuthorizationMessageMapper(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     AuthorizationMessage map(AuthorizationDomainEvent event, UUID eventId) {
         if (event instanceof AuthorizationApprovedDomainEvent approved) {
@@ -38,19 +49,17 @@ class AuthorizationMessageMapper {
             AuthorizationApprovedDomainEvent event,
             UUID eventId
     ) {
-        AuthorizationApprovedPayload payload = new AuthorizationApprovedPayload(
+        ObjectNode payload = payloadBase(
                 event.authorizationId(),
                 event.cardId(),
-                amountText(event.requestedAmount()),
-                currencyCode(event.requestedAmount()),
-                event.occurredAt(),
-                event.expiresAt()
+                event.requestedAmount()
         );
+        payload.put("approvedAt", event.occurredAt().toString());
+        payload.put("expiresAt", event.expiresAt().toString());
         return message(
                 event,
                 eventId,
-                AuthorizationApprovedPayload.EVENT_TYPE,
-                AuthorizationApprovedPayload.EVENT_VERSION,
+                AUTHORIZATION_APPROVED,
                 payload
         );
     }
@@ -59,19 +68,17 @@ class AuthorizationMessageMapper {
             AuthorizationDeclinedDomainEvent event,
             UUID eventId
     ) {
-        AuthorizationDeclinedPayload payload = new AuthorizationDeclinedPayload(
+        ObjectNode payload = payloadBase(
                 event.authorizationId(),
                 event.cardId(),
-                amountText(event.requestedAmount()),
-                currencyCode(event.requestedAmount()),
-                event.declineReason().name(),
-                event.occurredAt()
+                event.requestedAmount()
         );
+        payload.put("declineReason", event.declineReason().name());
+        payload.put("declinedAt", event.occurredAt().toString());
         return message(
                 event,
                 eventId,
-                AuthorizationDeclinedPayload.EVENT_TYPE,
-                AuthorizationDeclinedPayload.EVENT_VERSION,
+                AUTHORIZATION_DECLINED,
                 payload
         );
     }
@@ -80,19 +87,17 @@ class AuthorizationMessageMapper {
             AuthorizationExpiredDomainEvent event,
             UUID eventId
     ) {
-        AuthorizationExpiredPayload payload = new AuthorizationExpiredPayload(
+        ObjectNode payload = payloadBase(
                 event.authorizationId(),
                 event.cardId(),
-                amountText(event.requestedAmount()),
-                currencyCode(event.requestedAmount()),
-                event.expiresAt(),
-                event.occurredAt()
+                event.requestedAmount()
         );
+        payload.put("expiresAt", event.expiresAt().toString());
+        payload.put("expiredAt", event.occurredAt().toString());
         return message(
                 event,
                 eventId,
-                AuthorizationExpiredPayload.EVENT_TYPE,
-                AuthorizationExpiredPayload.EVENT_VERSION,
+                AUTHORIZATION_EXPIRED,
                 payload
         );
     }
@@ -101,18 +106,26 @@ class AuthorizationMessageMapper {
             AuthorizationDomainEvent event,
             UUID eventId,
             String eventType,
-            int eventVersion,
-            Object payload
+            JsonNode payload
     ) {
         return new AuthorizationMessage(
                 eventId,
                 event.authorizationId(),
                 eventType,
-                eventVersion,
+                EVENT_VERSION,
                 event.occurredAt(),
                 event.authorizationId().toString(),
                 payload
         );
+    }
+
+    private ObjectNode payloadBase(UUID authorizationId, String cardId, Money requestedAmount) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("authorizationId", authorizationId.toString());
+        payload.put("cardId", cardId);
+        payload.put("amount", amountText(requestedAmount));
+        payload.put("currency", currencyCode(requestedAmount));
+        return payload;
     }
 
     private String amountText(Money money) {

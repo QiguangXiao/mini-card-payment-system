@@ -84,12 +84,10 @@ extra abstractions.
 
 `RiskAssessmentService` coordinates two risk layers:
 
-- `LocalRiskPolicy` performs deterministic rules inside the service boundary:
-  blocked merchant, recent authorization velocity, high amount per currency,
-  and country mismatch.
-- `SimulatedExternalRiskGateway` models a third-party or separate internal risk
-  engine and is protected by Resilience4j timeout, circuit breaker, and
-  fallback.
+- Local checks run directly inside `RiskAssessmentService`: blocked merchant,
+  recent authorization velocity, high amount per currency, and country mismatch.
+- `ExternalRiskService` calls a simulated third-party risk API through Feign and
+  protects that call with Resilience4j circuit breaker fallback.
 
 The current fallback is fail-closed: if external risk is unavailable, the
 authorization is declined with `RISK_EXTERNAL_UNAVAILABLE`. That is conservative
@@ -178,9 +176,8 @@ MyBatis concerns, mutable persistence conventions, and SQL mapping outside the
 domain model.
 
 `JdbcRiskVelocityRepository` intentionally remains a small JdbcTemplate example
-for comparing direct JDBC-style mapping with MyBatis. Both approaches keep SQL
-explicit; MyBatis is used where repeated mappings and multiple operations make
-the additional mapper structure worthwhile.
+for a simple velocity query; most other database access in the project uses
+MyBatis.
 
 `schema.sql` is currently used only for this early local-development stage.
 A production system should replace it with versioned schema migrations before

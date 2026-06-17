@@ -1,10 +1,11 @@
 package com.minicard.risk.infrastructure.messaging;
 
-import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
-import com.minicard.messaging.contract.authorization.AuthorizationDeclinedPayload;
+import java.time.Instant;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
-import com.minicard.risk.application.projection.AuthorizationRiskFeatureProjectionService;
-import com.minicard.risk.application.projection.RecordAuthorizationDecisionCommand;
+import com.minicard.risk.application.RiskFeatureProjectionService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -18,12 +19,15 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuthorizationRiskFeatureListener {
 
+    private static final String AUTHORIZATION_APPROVED = "authorization.approved";
+    private static final String AUTHORIZATION_DECLINED = "authorization.declined";
+
     private final IntegrationEventReader eventReader;
-    private final AuthorizationRiskFeatureProjectionService projectionService;
+    private final RiskFeatureProjectionService projectionService;
 
     public AuthorizationRiskFeatureListener(
             IntegrationEventReader eventReader,
-            AuthorizationRiskFeatureProjectionService projectionService
+            RiskFeatureProjectionService projectionService
     ) {
         this.eventReader = eventReader;
         this.projectionService = projectionService;
@@ -37,37 +41,24 @@ public class AuthorizationRiskFeatureListener {
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
         // Listener 显式处理自己关心的事件类型；未来新增 authorization.captured 时，
         // 未订阅的 consumer 可以直接跳过，不会把“合法但不关心”的事件送进 DLT。
-        String eventType = eventReader.eventType(record);
-        if (AuthorizationApprovedPayload.EVENT_TYPE.equals(eventType)) {
-            var event = eventReader.read(
-                    record,
-                    AuthorizationApprovedPayload.class,
-                    AuthorizationApprovedPayload.EVENT_TYPE,
-                    AuthorizationApprovedPayload.EVENT_VERSION
-            );
-            var payload = event.payload();
-            projectionService.project(new RecordAuthorizationDecisionCommand(
+        IntegrationEvent event = eventReader.read(record);
+        JsonNode payload = event.payload();
+        if (AUTHORIZATION_APPROVED.equals(event.eventType())) {
+            projectionService.project(
                     event.eventId(),
-                    payload.cardId(),
+                    eventReader.requiredText(payload, "cardId"),
                     "APPROVED",
-                    payload.approvedAt()
-            ));
+                    Instant.parse(eventReader.requiredText(payload, "approvedAt"))
+            );
             return;
         }
-        if (AuthorizationDeclinedPayload.EVENT_TYPE.equals(eventType)) {
-            var event = eventReader.read(
-                    record,
-                    AuthorizationDeclinedPayload.class,
-                    AuthorizationDeclinedPayload.EVENT_TYPE,
-                    AuthorizationDeclinedPayload.EVENT_VERSION
-            );
-            var payload = event.payload();
-            projectionService.project(new RecordAuthorizationDecisionCommand(
+        if (AUTHORIZATION_DECLINED.equals(event.eventType())) {
+            projectionService.project(
                     event.eventId(),
-                    payload.cardId(),
+                    eventReader.requiredText(payload, "cardId"),
                     "DECLINED",
-                    payload.declinedAt()
-            ));
+                    Instant.parse(eventReader.requiredText(payload, "declinedAt"))
+            );
         }
     }
 }

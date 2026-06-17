@@ -14,10 +14,8 @@ import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
-import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
-import com.minicard.messaging.contract.authorization.AuthorizationDeclinedPayload;
-import com.minicard.messaging.outbox.domain.OutboxEvent;
-import com.minicard.messaging.outbox.domain.OutboxEventRepository;
+import com.minicard.messaging.outbox.OutboxEvent;
+import com.minicard.messaging.outbox.OutboxEventRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -47,9 +45,9 @@ class AuthorizationOutboxAdapterTest {
 
         OutboxEvent event = insertedEvent(repository);
         JsonNode payload = objectMapper.readTree(event.payload());
-        assertThat(event.eventType()).isEqualTo(AuthorizationApprovedPayload.EVENT_TYPE);
+        assertThat(event.eventType()).isEqualTo("authorization.approved");
         assertThat(payload.get("eventType").asText())
-                .isEqualTo(AuthorizationApprovedPayload.EVENT_TYPE);
+                .isEqualTo("authorization.approved");
         assertThat(payload.get("payload").has("expiresAt")).isTrue();
         assertThat(payload.get("payload").has("declineReason")).isFalse();
     }
@@ -69,9 +67,9 @@ class AuthorizationOutboxAdapterTest {
 
         OutboxEvent event = insertedEvent(repository);
         JsonNode payload = objectMapper.readTree(event.payload());
-        assertThat(event.eventType()).isEqualTo(AuthorizationDeclinedPayload.EVENT_TYPE);
+        assertThat(event.eventType()).isEqualTo("authorization.declined");
         assertThat(payload.get("eventType").asText())
-                .isEqualTo(AuthorizationDeclinedPayload.EVENT_TYPE);
+                .isEqualTo("authorization.declined");
         assertThat(payload.get("payload").get("declineReason").asText())
                 .isEqualTo("INSUFFICIENT_AVAILABLE_CREDIT");
         assertThat(payload.get("payload").has("expiresAt")).isFalse();
@@ -80,7 +78,7 @@ class AuthorizationOutboxAdapterTest {
     private AuthorizationOutboxAdapter adapter(OutboxEventRepository repository) {
         return new AuthorizationOutboxAdapter(
                 repository,
-                new AuthorizationMessageMapper(),
+                new AuthorizationMessageMapper(objectMapper),
                 objectMapper,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
