@@ -1,6 +1,7 @@
 package com.minicard.messaging.outbox.domain;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,9 +16,14 @@ public interface OutboxEventRepository {
     void insert(OutboxEvent event);
 
     /**
-     * 领取下一条可发布事件并加 row lock，通常由 FOR UPDATE SKIP LOCKED 实现。
+     * 批量领取待发布事件并加 row lock，通常由 FOR UPDATE SKIP LOCKED 实现。
      */
-    Optional<OutboxEvent> findNextPublishableForUpdate(Instant now);
+    List<OutboxEvent> findPublishableBatchForUpdate(Instant now, int limit);
+
+    /**
+     * 批量领取 lease 已超时的 PROCESSING 事件，供 recoverer 恢复。
+     */
+    List<OutboxEvent> findStuckProcessingBatchForUpdate(Instant now, int limit);
 
     Optional<OutboxEvent> findByIdForUpdate(UUID id);
 

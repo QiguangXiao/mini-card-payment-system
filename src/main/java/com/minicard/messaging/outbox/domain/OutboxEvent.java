@@ -162,6 +162,12 @@ public final class OutboxEvent {
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
+    public void markProcessingTimedOut(Instant recoveredAt, int maxAttempts) {
+        // PROCESSING lease 超时通常表示 publisher worker 宕机或卡住。
+        // 恢复路径按一次失败处理，让 retry/backoff/DEAD 状态机统一承接故障。
+        markFailed("outbox processing lease expired", recoveredAt, maxAttempts);
+    }
+
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH
                 ? value

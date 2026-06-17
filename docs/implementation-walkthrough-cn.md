@@ -239,14 +239,30 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 入口：
 
-- `OutboxAuthorizationDecisionEventPublisher.append(authorization)`
+- `AuthorizationService.toDecisionDomainEvent(authorization)`
+- `AuthorizationDomainEventPublisher.append(event)`
+- `OutboxAuthorizationDomainEventPublisher.append(event)`
 
 处理：
 
-- 创建 `AuthorizationDecidedEvent` payload。
+- 如果结果是 `APPROVED`，先创建 `AuthorizationApprovedDomainEvent`，再映射成 `AuthorizationApprovedIntegrationEvent`，事件类型是 `authorization.approved`。
+- 如果结果是 `DECLINED`，先创建 `AuthorizationDeclinedDomainEvent`，再映射成 `AuthorizationDeclinedIntegrationEvent`，事件类型是 `authorization.declined`。
 - 创建 `IntegrationEventEnvelope`，包含 event metadata 和 payload。
 - `eventId = UUID.randomUUID()`。
 - 写入 `outbox_events`，状态为 `PENDING`。
+
+为什么区分 domain event 和 integration event：
+
+- Domain event 属于 Authorization bounded context，只表达业务事实。
+- Integration event 是对外消息 contract，需要稳定 eventType/version/payload。
+- Outbox adapter 负责两者映射，Authorization domain 不知道 Kafka、topic、headers 或 Outbox 表。
+
+为什么 approved/declined 拆成不同 event type：
+
+- `APPROVED` 和 `DECLINED` 是不同业务事实，不应该靠 `isDeclined` 或 status 字段让 consumer 猜。
+- Consumer 可以按 `eventType` 只处理自己关心的事件。
+- 未来新增 capture、reversal、reconciliation 时，可以继续增加明确事件类型。
+- 不同事件的 payload 可以不同，例如 declined 有 `declineReason`，approved 有 `expiresAt`。
 
 为什么不在这里直接发 Kafka：
 
@@ -277,25 +293,28 @@ curl -X POST http://localhost:8080/api/authorizations \
 - `authorizations`：新行 `PENDING -> APPROVED` 或 `DECLINED`。
 - `credit_accounts`：如果批准，`reserved_amount` 增加。
 - `delay_jobs`：如果批准，新增 `AUTHORIZATION_EXPIRY/PENDING`。
-- `outbox_events`：新增 `authorization.decided/PENDING`。
+- `outbox_events`：新增 `authorization.approved/PENDING` 或 `authorization.declined/PENDING`。
 
 ## 4. 核心流程二：Outbox 发布消息
 
 入口：
 
-- `OutboxPublisherScheduler.publishPendingEvents()`
-- `OutboxPublisherService.publishBatch()`
+- `OutboxPublisherPoller.pollPublishableEvents()`
+- `OutboxClaimService.claimPublishableEvents()`
+- `OutboxWorker.publishClaimedEvent(event)`
+- `OutboxStuckEventRecoverer.recoverStuckEvents()`
 
 触发方式：
 
 - Spring `@Scheduled`
-- 使用 `outboxTaskScheduler` worker pool
+- `outboxTaskScheduler` 只负责 poller/recoverer 的定时触发。
+- `outboxWorkerExecutor` 负责并发等待 Kafka acknowledgement。
 
 关键步骤：
 
-1. `claimNextPublishable()`
+1. `OutboxClaimService.claimPublishableEvents()`
 
-   短事务内调用 `findNextPublishableForUpdate(now)`。
+   短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
    MyBatis XML 使用：
 
    ```sql
@@ -311,17 +330,22 @@ curl -X POST http://localhost:8080/api/authorizations \
 
    这一步提交后，DB row lock 释放。
 
-2. `messagePublisher.publish(event, timeout)`
+2. `OutboxPublisherPoller` submit worker
+
+   claim transaction commit 后，poller 把每条 `PROCESSING` event 提交给 `outboxWorkerExecutor`。
+   poller 不直接发 Kafka，也不提前 mark published。
+
+3. `OutboxWorker.publishClaimedEvent(event)`
 
    在事务外把已保存的 JSON payload 发布到 Kafka。
    这样等待 broker acknowledgement 时，不会长时间持有 MySQL row lock。
 
-3. `markPublished(event)`
+4. `markPublished(event)`
 
    重新开启短事务，`findByIdForUpdate(event.id)` 锁住当前 row。
    如果 row 仍然是同一个 `PROCESSING` lease，就调用 `event.markPublished(...)`。
 
-4. `markFailed(event, error, exception)`
+5. `markFailed(event, error, exception)`
 
    发布失败时也重新开启短事务。
    如果 row 仍然是同一个 `PROCESSING` lease，就调用 `event.markFailed(...)`：
@@ -331,10 +355,15 @@ curl -X POST http://localhost:8080/api/authorizations \
    - 未达最大次数时回到 `PENDING`
    - 达到最大次数后进入 `DEAD`
 
-5. stale lease 防护
+6. stale lease 防护
 
    `PROCESSING` 的 `next_attempt_at` 被当作轻量 lease token。
    如果 publisher 太慢，lease 过期后事件被另一个实例重新领取，旧 publisher 的迟到结果不会覆盖新状态。
+
+7. `OutboxStuckEventRecoverer.recoverStuckEvents()`
+
+   独立扫描 `status = PROCESSING` 且 lease 已超时的 rows。
+   未达最大次数时回到 `PENDING`，达到最大次数后进入 `DEAD`。
 
 重要语义：
 
@@ -560,13 +589,13 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.decided`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
-| 消费者 | `OutboxPublisherScheduler` | `ScheduledJobPoller` + `ScheduledJobWorker` |
+| 消费者 | `OutboxPublisherPoller` + `OutboxWorker` | `ScheduledJobPoller` + `ScheduledJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
 | 失败处理 | retry/backoff/DEAD | retry/backoff/PROCESSING lease/DEAD |
 | 幂等重点 | consumer 用 eventId 去重 | handler 读取业务 source of truth |
-| 线程池 | `outboxTaskScheduler` | `delayJobTaskScheduler` + `scheduledJobWorkerExecutor` |
+| 线程池 | `outboxTaskScheduler` + `outboxWorkerExecutor` | `delayJobTaskScheduler` + `scheduledJobWorkerExecutor` |
 
 一句话区分：
 
@@ -616,7 +645,8 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 一个 authorization 可以产生多个事件：
 
-- `authorization.decided`
+- `authorization.approved`
+- `authorization.declined`
 - `authorization.expired`
 
 所以 event id 是事件本身的唯一标识，authorization id 是 aggregate 标识。
@@ -649,7 +679,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 ### `scheduler = "delayJobTaskScheduler"`
 
 指定使用哪个 `ThreadPoolTaskScheduler` bean。
-这让 Outbox 和 DelayJob 使用不同 worker pool。
+这让 Outbox 和 DelayJob 使用不同 scheduler/worker pool。
 
 ### `@Bean`
 

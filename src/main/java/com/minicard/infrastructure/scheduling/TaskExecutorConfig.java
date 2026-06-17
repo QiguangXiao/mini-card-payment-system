@@ -1,6 +1,7 @@
 package com.minicard.infrastructure.scheduling;
 
 import com.minicard.scheduling.application.DelayJobSchedulerProperties;
+import com.minicard.messaging.outbox.application.OutboxPublisherProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -13,6 +14,20 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
  */
 @Configuration
 public class TaskExecutorConfig {
+
+    @Bean(name = "outboxWorkerExecutor")
+    public ThreadPoolTaskExecutor outboxWorkerExecutor(
+            OutboxPublisherProperties properties
+    ) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("outbox-worker-");
+        executor.setCorePoolSize(properties.workerPoolSize());
+        executor.setMaxPoolSize(properties.workerPoolSize());
+        executor.setQueueCapacity(properties.workerQueueCapacity());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
 
     @Bean(name = "scheduledJobWorkerExecutor")
     public ThreadPoolTaskExecutor scheduledJobWorkerExecutor(

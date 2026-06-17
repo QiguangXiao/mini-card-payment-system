@@ -9,6 +9,10 @@ import com.minicard.authorization.domain.AuthorizationDecision;
 import com.minicard.authorization.domain.AuthorizationDecisionPolicy;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
+import com.minicard.authorization.domain.AuthorizationStatus;
+import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardAuthorizationFailure;
 import com.minicard.card.domain.CardAuthorizationResult;
@@ -37,7 +41,7 @@ public class AuthorizationService {
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RiskAssessmentService riskAssessmentService;
-    private final AuthorizationDecisionEventPublisher eventPublisher;
+    private final AuthorizationDomainEventPublisher eventPublisher;
     private final AuthorizationExpiryJobScheduler expiryJobScheduler;
     private final Clock clock;
 
@@ -47,7 +51,7 @@ public class AuthorizationService {
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
             RiskAssessmentService riskAssessmentService,
-            AuthorizationDecisionEventPublisher eventPublisher,
+            AuthorizationDomainEventPublisher eventPublisher,
             AuthorizationExpiryJobScheduler expiryJobScheduler,
             Clock clock
     ) {
@@ -99,9 +103,9 @@ public class AuthorizationService {
             // 只要额度 hold 生效，就一定有一个未来释放额度的 durable plan。
             expiryJobScheduler.schedule(persisted);
         }
-        // Outbox row 也在同一 MySQL transaction 写入；这里不直接发 Kafka，
-        // 因为 broker/network failure 不应该破坏主交易，只需要后续可恢复发布。
-        eventPublisher.append(persisted);
+        // 发布 Authorization domain event；基础设施 adapter 会映射成 Outbox integration event。
+        // 这里不直接发 Kafka，因为 broker/network failure 不应该破坏主交易。
+        eventPublisher.append(toDecisionDomainEvent(persisted));
         return persisted;
     }
 
@@ -175,6 +179,36 @@ public class AuthorizationService {
             case CARD_BLOCKED -> AuthorizationDeclineReason.CARD_BLOCKED;
             case CARD_EXPIRED -> AuthorizationDeclineReason.CARD_EXPIRED;
         };
+    }
+
+    private AuthorizationDomainEvent toDecisionDomainEvent(Authorization authorization) {
+        Instant decidedAt = authorization.decidedAt()
+                .orElseThrow(() -> new IllegalStateException("decided authorization missing decidedAt"));
+        if (authorization.status() == AuthorizationStatus.APPROVED) {
+            return new AuthorizationApprovedDomainEvent(
+                    authorization.id(),
+                    authorization.cardId(),
+                    authorization.requestedAmount(),
+                    decidedAt,
+                    authorization.expiresAt()
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "approved authorization missing expiresAt"
+                            ))
+            );
+        }
+        if (authorization.status() == AuthorizationStatus.DECLINED) {
+            return new AuthorizationDeclinedDomainEvent(
+                    authorization.id(),
+                    authorization.cardId(),
+                    authorization.requestedAmount(),
+                    authorization.declineReason()
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "declined authorization missing declineReason"
+                            )),
+                    decidedAt
+            );
+        }
+        throw new IllegalStateException("unsupported decision status " + authorization.status());
     }
 
     private AuthorizationDeclineReason mapFailure(CreditReservationFailure failure) {

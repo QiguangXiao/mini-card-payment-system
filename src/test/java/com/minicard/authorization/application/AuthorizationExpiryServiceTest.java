@@ -12,6 +12,8 @@ import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.card.domain.CardStatus;
@@ -19,6 +21,7 @@ import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,8 +41,8 @@ class AuthorizationExpiryServiceTest {
         AuthorizationRepository authorizationRepository = mock(AuthorizationRepository.class);
         CardRepository cardRepository = mock(CardRepository.class);
         CreditAccountRepository accountRepository = mock(CreditAccountRepository.class);
-        AuthorizationExpiryEventPublisher eventPublisher =
-                mock(AuthorizationExpiryEventPublisher.class);
+        AuthorizationDomainEventPublisher eventPublisher =
+                mock(AuthorizationDomainEventPublisher.class);
         Authorization authorization = approvedAuthorization();
         CreditAccount account = account();
         Card card = new Card("card-123", account.id(), CardStatus.ACTIVE);
@@ -65,7 +68,11 @@ class AuthorizationExpiryServiceTest {
         var order = inOrder(accountRepository, authorizationRepository, eventPublisher);
         order.verify(accountRepository).update(account);
         order.verify(authorizationRepository).update(authorization);
-        order.verify(eventPublisher).append(authorization);
+        ArgumentCaptor<AuthorizationDomainEvent> event =
+                ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
+        order.verify(eventPublisher).append(event.capture());
+        assertThat(event.getValue()).isInstanceOf(AuthorizationExpiredDomainEvent.class);
+        assertThat(event.getValue().authorizationId()).isEqualTo(authorization.id());
     }
 
     @Test
@@ -73,8 +80,8 @@ class AuthorizationExpiryServiceTest {
         AuthorizationRepository authorizationRepository = mock(AuthorizationRepository.class);
         CardRepository cardRepository = mock(CardRepository.class);
         CreditAccountRepository accountRepository = mock(CreditAccountRepository.class);
-        AuthorizationExpiryEventPublisher eventPublisher =
-                mock(AuthorizationExpiryEventPublisher.class);
+        AuthorizationDomainEventPublisher eventPublisher =
+                mock(AuthorizationDomainEventPublisher.class);
         Authorization authorization = declinedAuthorization();
         when(authorizationRepository.findByIdForUpdate(authorization.id()))
                 .thenReturn(Optional.of(authorization));

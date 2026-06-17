@@ -50,16 +50,30 @@
     </insert>
 
     <!--
-      SKIP LOCKED 允许多个 application instance 并发 claim，而不会处理同一条可用 row。
-      PENDING 是首次发布；PROCESSING 且 next_attempt_at 到期表示上一个 publisher lease 超时。
+      poller 只 claim PENDING due rows，并在短事务内改成 PROCESSING。
+      SKIP LOCKED 允许多个 application instance 并发 claim，不会处理同一条 row。
     -->
-    <select id="findNextPublishableForUpdate" resultMap="outboxEventRowMap">
+    <select id="findPublishableBatchForUpdate" resultMap="outboxEventRowMap">
         SELECT <include refid="outboxColumns"/>
         FROM outbox_events
-        WHERE status IN ('PENDING', 'PROCESSING')
+        WHERE status = 'PENDING'
           AND next_attempt_at &lt;= #{now}
         ORDER BY created_at, id
-        LIMIT 1
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!--
+      recovery 独立扫描 lease 超时的 PROCESSING rows。
+      这样正常 publication path 和 stuck event recovery path 边界更清楚。
+    -->
+    <select id="findStuckProcessingBatchForUpdate" resultMap="outboxEventRowMap">
+        SELECT <include refid="outboxColumns"/>
+        FROM outbox_events
+        WHERE status = 'PROCESSING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY created_at, id
+        LIMIT #{limit}
         FOR UPDATE SKIP LOCKED
     </select>
 

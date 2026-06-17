@@ -16,6 +16,8 @@ import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
+import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.card.domain.CardStatus;
@@ -26,6 +28,7 @@ import com.minicard.risk.application.RiskAssessmentService;
 import com.minicard.risk.domain.RiskDecision;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,7 +48,7 @@ class AuthorizationServiceTest {
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
     private RiskAssessmentService riskAssessmentService;
-    private AuthorizationDecisionEventPublisher eventPublisher;
+    private AuthorizationDomainEventPublisher eventPublisher;
     private AuthorizationExpiryJobScheduler expiryJobScheduler;
     private AuthorizationService service;
 
@@ -56,7 +59,7 @@ class AuthorizationServiceTest {
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         riskAssessmentService = mock(RiskAssessmentService.class);
-        eventPublisher = mock(AuthorizationDecisionEventPublisher.class);
+        eventPublisher = mock(AuthorizationDomainEventPublisher.class);
         expiryJobScheduler = mock(AuthorizationExpiryJobScheduler.class);
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
@@ -88,7 +91,11 @@ class AuthorizationServiceTest {
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(result);
         verify(expiryJobScheduler).schedule(result);
-        verify(eventPublisher).append(result);
+        ArgumentCaptor<AuthorizationDomainEvent> event =
+                ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
+        verify(eventPublisher).append(event.capture());
+        assertThat(event.getValue()).isInstanceOf(AuthorizationApprovedDomainEvent.class);
+        assertThat(event.getValue().authorizationId()).isEqualTo(result.id());
     }
 
     @Test
