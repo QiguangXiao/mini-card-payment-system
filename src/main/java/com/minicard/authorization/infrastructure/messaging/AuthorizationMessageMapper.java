@@ -7,9 +7,9 @@ import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
-import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationApprovedPayload;
-import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationDeclinedPayload;
-import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationExpiredPayload;
+import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
+import com.minicard.messaging.contract.authorization.AuthorizationDeclinedPayload;
+import com.minicard.messaging.contract.authorization.AuthorizationExpiredPayload;
 import org.springframework.stereotype.Component;
 
 /**

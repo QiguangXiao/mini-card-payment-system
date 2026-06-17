@@ -7,7 +7,7 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
-import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationApprovedPayload;
+import com.minicard.messaging.contract.authorization.AuthorizationApprovedPayload;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

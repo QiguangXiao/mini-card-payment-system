@@ -268,8 +268,8 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 消费者如何处理多种事件：
 
-- `AuthorizationMessageReader` 只负责读取 `eventType`、反序列化指定 payload、校验 header/version。
-- Notification/Risk listener 显式处理 `authorization.approved` 和 `authorization.declined`。
+- `IntegrationEventReader` 是共享 transport reader，只负责读取 `eventType`、反序列化指定 payload、校验 header/version。
+- Notification/Risk listener 只依赖共享 contract payload，显式处理 `authorization.approved` 和 `authorization.declined`，不引用 Authorization 的 infrastructure。
 - 如果未来同一 topic 出现 `authorization.captured`，当前 consumer 可以直接跳过。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 

@@ -62,16 +62,19 @@ being applied twice.
 
 ## Event Contract
 
-Topic:
+Topics:
 
 ```text
 mini-card.authorization-events.v1
+mini-card.authorization-lifecycle-events.v1
 ```
 
-Event type:
+Event types:
 
 ```text
-authorization.decided
+authorization.approved -> mini-card.authorization-events.v1
+authorization.declined -> mini-card.authorization-events.v1
+authorization.expired -> mini-card.authorization-lifecycle-events.v1
 ```
 
 The envelope contains:
@@ -81,6 +84,11 @@ The envelope contains:
 - `eventVersion`: schema evolution
 - `occurredAt`: business event time
 - `payload`: authorization decision data
+
+Authorization message payload classes live under
+`messaging.contract.authorization`. This package is a shared public contract,
+not Authorization infrastructure. Producers and consumers can both depend on
+the contract without sharing each other's adapters, readers, or repositories.
 
 The payload represents `amount` as decimal text plus `currency`. This preserves
 financial precision across JSON storage and prevents consumers from accidentally
@@ -92,7 +100,7 @@ key and remain ordered.
 
 ## Publisher Concurrency
 
-The publisher loads rows with:
+The publisher claims rows with:
 
 ```sql
 SELECT ...
@@ -103,15 +111,15 @@ LIMIT ?
 FOR UPDATE SKIP LOCKED
 ```
 
-`SKIP LOCKED` allows multiple application instances to poll without selecting
-the same rows. After a publication failure, the current batch stops so newer
-events do not overtake the failed event. Failed events use capped exponential
-backoff and become `DEAD` after the configured maximum attempts.
+`SKIP LOCKED` allows multiple application instances to claim different rows.
+The claim transaction marks rows as `PROCESSING` and sets `next_attempt_at` as a
+short lease deadline. Kafka publication then happens outside the database row
+lock, and a final transaction marks the row `PUBLISHED`.
 
-Holding an Outbox row lock while waiting for Kafka acknowledgement is simple and
-safe for this learning project. A higher-throughput production implementation
-could claim rows in a short transaction, use leases, and publish concurrently
-per partition key.
+If a publisher crashes after claiming, the lease expires and the stuck-event
+recoverer moves the row back through the normal retry/backoff state machine.
+Failed events use capped exponential backoff and become `DEAD` after the
+configured maximum attempts.
 
 ## Messaging Package Boundary
 
@@ -120,9 +128,10 @@ contracts, not business consumers:
 
 ```text
 messaging
-├── event       versioned integration event contracts
+├── contract    public message payload contracts shared by producers/consumers
+├── event       shared integration event envelope
 ├── inbox       shared consumer idempotency mechanism
-├── kafka       Kafka configuration and adapters shared across contexts
+├── kafka       Kafka configuration, publisher adapter, and transport reader
 └── outbox      reliable event publication mechanism
 ```
 
@@ -138,6 +147,13 @@ Authorization-specific event translation lives in
 `authorization.infrastructure.messaging`. The shared Outbox mechanism therefore
 does not depend on the Authorization aggregate or absorb business-context
 knowledge.
+
+Consumers use the shared `IntegrationEventReader` only for transport concerns:
+JSON parsing, `eventType` routing, `eventVersion` checks, and header validation.
+Notification and Risk still choose their own handlers and commands inside their
+bounded contexts. This is the intended microservice-compatible boundary: a
+consumer depends on the message contract, not on the producer service's internal
+infrastructure package.
 
 ## Implemented Consumers
 
