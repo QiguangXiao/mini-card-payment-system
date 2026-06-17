@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
+import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.creditaccount.domain.CreditAccount;
@@ -28,14 +29,14 @@ public class AuthorizationExpiryService {
     private final AuthorizationRepository authorizationRepository;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final AuthorizationExpiryEventPublisher eventPublisher;
+    private final AuthorizationDomainEventPublisher eventPublisher;
     private final Clock clock;
 
     public AuthorizationExpiryService(
             AuthorizationRepository authorizationRepository,
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
-            AuthorizationExpiryEventPublisher eventPublisher,
+            AuthorizationDomainEventPublisher eventPublisher,
             Clock clock
     ) {
         this.authorizationRepository = authorizationRepository;
@@ -94,7 +95,19 @@ public class AuthorizationExpiryService {
         // 任何一步失败都会 rollback，避免释放额度但状态/事件缺失。
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
-        eventPublisher.append(authorization);
+        eventPublisher.append(new AuthorizationExpiredDomainEvent(
+                authorization.id(),
+                authorization.cardId(),
+                authorization.requestedAmount(),
+                authorization.expiresAt()
+                        .orElseThrow(() -> new IllegalStateException(
+                                "expired authorization missing expiresAt"
+                        )),
+                authorization.expiredAt()
+                        .orElseThrow(() -> new IllegalStateException(
+                                "expired authorization missing expiredAt"
+                        ))
+        ));
         log.info(
                 "authorization_expired authorizationId={} accountId={} amount={} currency={}",
                 authorization.id(),

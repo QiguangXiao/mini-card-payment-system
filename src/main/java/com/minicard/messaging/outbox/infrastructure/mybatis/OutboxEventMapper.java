@@ -1,6 +1,7 @@
 package com.minicard.messaging.outbox.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -9,7 +10,15 @@ public interface OutboxEventMapper {
 
     int insert(OutboxEventRow event);
 
-    OutboxEventRow findNextPublishableForUpdate(@Param("now") Instant now);
+    List<OutboxEventRow> findPublishableBatchForUpdate(
+            @Param("now") Instant now,
+            @Param("limit") int limit
+    );
+
+    List<OutboxEventRow> findStuckProcessingBatchForUpdate(
+            @Param("now") Instant now,
+            @Param("limit") int limit
+    );
 
     OutboxEventRow findByIdForUpdate(@Param("id") String id);
 

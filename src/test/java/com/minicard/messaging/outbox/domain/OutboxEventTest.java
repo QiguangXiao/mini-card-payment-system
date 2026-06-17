@@ -54,10 +54,10 @@ class OutboxEventTest {
                 UUID.randomUUID(),
                 "Authorization",
                 UUID.randomUUID().toString(),
-                "authorization.decided",
+                "authorization.approved",
                 1,
                 UUID.randomUUID().toString(),
-                "{\"eventType\":\"authorization.decided\"}",
+                "{\"eventType\":\"authorization.approved\"}",
                 NOW
         );
     }

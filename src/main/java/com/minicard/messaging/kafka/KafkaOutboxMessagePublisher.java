@@ -2,10 +2,9 @@ package com.minicard.messaging.kafka;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import com.minicard.messaging.event.AuthorizationDecidedEvent;
-import com.minicard.messaging.event.AuthorizationExpiredEvent;
 import com.minicard.messaging.outbox.application.OutboxMessagePublisher;
 import com.minicard.messaging.outbox.domain.OutboxEvent;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -60,11 +59,9 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
     }
 
     private String topicFor(String eventType) {
-        if (AuthorizationDecidedEvent.EVENT_TYPE.equals(eventType)) {
-            return topics.authorizationEvents();
-        }
-        if (AuthorizationExpiredEvent.EVENT_TYPE.equals(eventType)) {
-            return topics.authorizationLifecycleEvents();
+        Map<String, String> eventTypeTopics = topics.eventTypeTopics();
+        if (eventTypeTopics != null && eventTypeTopics.containsKey(eventType)) {
+            return eventTypeTopics.get(eventType);
         }
         throw new IllegalArgumentException("no Kafka topic configured for event type " + eventType);
     }

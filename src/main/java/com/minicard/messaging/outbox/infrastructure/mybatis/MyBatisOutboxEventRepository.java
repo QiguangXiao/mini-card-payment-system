@@ -1,6 +1,7 @@
 package com.minicard.messaging.outbox.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -30,10 +31,21 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
     }
 
     @Override
-    public Optional<OutboxEvent> findNextPublishableForUpdate(Instant now) {
+    public List<OutboxEvent> findPublishableBatchForUpdate(Instant now, int limit) {
         // mapper 使用 FOR UPDATE SKIP LOCKED，支持多个 publisher 实例并行领取不同事件。
-        return Optional.ofNullable(mapper.findNextPublishableForUpdate(now))
-                .map(this::toDomain);
+        return mapper.findPublishableBatchForUpdate(now, limit)
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<OutboxEvent> findStuckProcessingBatchForUpdate(Instant now, int limit) {
+        // recovery 单独扫描 PROCESSING lease，避免正常 poller 混入故障恢复语义。
+        return mapper.findStuckProcessingBatchForUpdate(now, limit)
+                .stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override

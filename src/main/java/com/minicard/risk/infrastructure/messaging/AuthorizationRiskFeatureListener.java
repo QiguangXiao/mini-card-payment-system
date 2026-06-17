@@ -1,6 +1,6 @@
 package com.minicard.risk.infrastructure.messaging;
 
-import com.minicard.messaging.kafka.AuthorizationEventParser;
+import com.minicard.authorization.infrastructure.messaging.AuthorizationEventParser;
 import com.minicard.risk.application.projection.AuthorizationRiskFeatureProjectionService;
 import com.minicard.risk.application.projection.RecordAuthorizationDecisionCommand;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -32,15 +32,15 @@ public class AuthorizationRiskFeatureListener {
             groupId = "${messaging.consumers.risk-feature.group-id}",
             containerFactory = "riskFeatureKafkaListenerContainerFactory"
     )
-    public void onAuthorizationDecided(ConsumerRecord<String, String> record) {
+    public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
         // Adapter 只翻译 transport input。idempotency 和 transaction boundary
         // 属于 projection application service。
-        var event = eventParser.parse(record);
+        var event = eventParser.parseDecisionEvent(record);
         projectionService.project(new RecordAuthorizationDecisionCommand(
                 event.eventId(),
-                event.payload().cardId(),
-                event.payload().status(),
-                event.payload().decidedAt()
+                event.cardId(),
+                event.status(),
+                event.decidedAt()
         ));
     }
 }
