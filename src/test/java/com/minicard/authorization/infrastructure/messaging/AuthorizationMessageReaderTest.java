@@ -18,13 +18,25 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class AuthorizationEventParserTest {
+class AuthorizationMessageReaderTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
-    private final AuthorizationEventParser parser = new AuthorizationEventParser(objectMapper);
+    private final AuthorizationMessageReader reader = new AuthorizationMessageReader(objectMapper);
 
     @Test
-    void parsesApprovedDecisionEventWithMatchingHeaders() throws Exception {
+    void readsEventTypeBeforeConsumerChoosesHandler() throws Exception {
+        IntegrationEventEnvelope<AuthorizationExpiredPayload> event = expiredEvent();
+        ConsumerRecord<String, String> record = record(
+                objectMapper.writeValueAsString(event),
+                event.eventId(),
+                event.eventType()
+        );
+
+        assertThat(reader.eventType(record)).isEqualTo(AuthorizationExpiredPayload.EVENT_TYPE);
+    }
+
+    @Test
+    void readsApprovedEventWithMatchingHeaders() throws Exception {
         IntegrationEventEnvelope<AuthorizationApprovedPayload> event = approvedEvent(1);
         ConsumerRecord<String, String> record = record(
                 objectMapper.writeValueAsString(event),
@@ -32,16 +44,16 @@ class AuthorizationEventParserTest {
                 event.eventType()
         );
 
-        AuthorizationDecisionMessage parsed = parser.parseDecisionEvent(record);
+        IntegrationEventEnvelope<AuthorizationApprovedPayload> parsed =
+                reader.readApproved(record);
 
         assertThat(parsed.eventId()).isEqualTo(event.eventId());
         assertThat(parsed.eventType()).isEqualTo(AuthorizationApprovedPayload.EVENT_TYPE);
-        assertThat(parsed.status()).isEqualTo("APPROVED");
-        assertThat(parsed.approved()).isTrue();
+        assertThat(parsed.payload().authorizationId()).isEqualTo(event.payload().authorizationId());
     }
 
     @Test
-    void parsesDeclinedDecisionEventWithMatchingHeaders() throws Exception {
+    void readsDeclinedEventWithMatchingHeaders() throws Exception {
         IntegrationEventEnvelope<AuthorizationDeclinedPayload> event = declinedEvent(1);
         ConsumerRecord<String, String> record = record(
                 objectMapper.writeValueAsString(event),
@@ -49,12 +61,12 @@ class AuthorizationEventParserTest {
                 event.eventType()
         );
 
-        AuthorizationDecisionMessage parsed = parser.parseDecisionEvent(record);
+        IntegrationEventEnvelope<AuthorizationDeclinedPayload> parsed =
+                reader.readDeclined(record);
 
         assertThat(parsed.eventId()).isEqualTo(event.eventId());
         assertThat(parsed.eventType()).isEqualTo(AuthorizationDeclinedPayload.EVENT_TYPE);
-        assertThat(parsed.status()).isEqualTo("DECLINED");
-        assertThat(parsed.approved()).isFalse();
+        assertThat(parsed.payload().declineReason()).isEqualTo("INSUFFICIENT_AVAILABLE_CREDIT");
     }
 
     @Test
@@ -66,37 +78,23 @@ class AuthorizationEventParserTest {
                 event.eventType()
         );
 
-        assertThatThrownBy(() -> parser.parseDecisionEvent(record))
+        assertThatThrownBy(() -> reader.readApproved(record))
                 .isInstanceOf(EventContractException.class)
                 .hasMessage("unsupported authorization event version 99");
     }
 
     @Test
-    void rejectsLifecycleEventWhenConsumerExpectsDecisionEvent() throws Exception {
-        Instant now = Instant.parse("2026-06-14T00:00:00Z");
-        IntegrationEventEnvelope<AuthorizationExpiredPayload> event = new IntegrationEventEnvelope<>(
-                UUID.randomUUID(),
-                AuthorizationExpiredPayload.EVENT_TYPE,
-                AuthorizationExpiredPayload.EVENT_VERSION,
-                now,
-                new AuthorizationExpiredPayload(
-                        UUID.randomUUID(),
-                        "card-123",
-                        "100.00",
-                        "JPY",
-                        now,
-                        now
-                )
-        );
+    void rejectsWrongReaderForLifecycleEvent() throws Exception {
+        IntegrationEventEnvelope<AuthorizationExpiredPayload> event = expiredEvent();
         ConsumerRecord<String, String> record = record(
                 objectMapper.writeValueAsString(event),
                 event.eventId(),
                 event.eventType()
         );
 
-        assertThatThrownBy(() -> parser.parseDecisionEvent(record))
+        assertThatThrownBy(() -> reader.readApproved(record))
                 .isInstanceOf(EventContractException.class)
-                .hasMessage("unsupported authorization decision event type authorization.expired");
+                .hasMessage("unsupported event type authorization.expired");
     }
 
     private IntegrationEventEnvelope<AuthorizationApprovedPayload> approvedEvent(int version) {
@@ -130,6 +128,24 @@ class AuthorizationEventParserTest {
                         "100.00",
                         "JPY",
                         "INSUFFICIENT_AVAILABLE_CREDIT",
+                        now
+                )
+        );
+    }
+
+    private IntegrationEventEnvelope<AuthorizationExpiredPayload> expiredEvent() {
+        Instant now = Instant.parse("2026-06-14T00:00:00Z");
+        return new IntegrationEventEnvelope<>(
+                UUID.randomUUID(),
+                AuthorizationExpiredPayload.EVENT_TYPE,
+                AuthorizationExpiredPayload.EVENT_VERSION,
+                now,
+                new AuthorizationExpiredPayload(
+                        UUID.randomUUID(),
+                        "card-123",
+                        "100.00",
+                        "JPY",
+                        now,
                         now
                 )
         );

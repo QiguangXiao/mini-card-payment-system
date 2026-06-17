@@ -1,6 +1,8 @@
 package com.minicard.risk.infrastructure.messaging;
 
-import com.minicard.authorization.infrastructure.messaging.AuthorizationEventParser;
+import com.minicard.authorization.infrastructure.messaging.AuthorizationMessageReader;
+import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationApprovedPayload;
+import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationDeclinedPayload;
 import com.minicard.risk.application.projection.AuthorizationRiskFeatureProjectionService;
 import com.minicard.risk.application.projection.RecordAuthorizationDecisionCommand;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -16,14 +18,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuthorizationRiskFeatureListener {
 
-    private final AuthorizationEventParser eventParser;
+    private final AuthorizationMessageReader messageReader;
     private final AuthorizationRiskFeatureProjectionService projectionService;
 
     public AuthorizationRiskFeatureListener(
-            AuthorizationEventParser eventParser,
+            AuthorizationMessageReader messageReader,
             AuthorizationRiskFeatureProjectionService projectionService
     ) {
-        this.eventParser = eventParser;
+        this.messageReader = messageReader;
         this.projectionService = projectionService;
     }
 
@@ -33,14 +35,29 @@ public class AuthorizationRiskFeatureListener {
             containerFactory = "riskFeatureKafkaListenerContainerFactory"
     )
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
-        // Adapter 只翻译 transport input。idempotency 和 transaction boundary
-        // 属于 projection application service。
-        var event = eventParser.parseDecisionEvent(record);
-        projectionService.project(new RecordAuthorizationDecisionCommand(
-                event.eventId(),
-                event.cardId(),
-                event.status(),
-                event.decidedAt()
-        ));
+        // Listener 显式处理自己关心的事件类型；未来新增 authorization.captured 时，
+        // 未订阅的 consumer 可以直接跳过，不会把“合法但不关心”的事件送进 DLT。
+        String eventType = messageReader.eventType(record);
+        if (AuthorizationApprovedPayload.EVENT_TYPE.equals(eventType)) {
+            var event = messageReader.readApproved(record);
+            var payload = event.payload();
+            projectionService.project(new RecordAuthorizationDecisionCommand(
+                    event.eventId(),
+                    payload.cardId(),
+                    "APPROVED",
+                    payload.approvedAt()
+            ));
+            return;
+        }
+        if (AuthorizationDeclinedPayload.EVENT_TYPE.equals(eventType)) {
+            var event = messageReader.readDeclined(record);
+            var payload = event.payload();
+            projectionService.project(new RecordAuthorizationDecisionCommand(
+                    event.eventId(),
+                    payload.cardId(),
+                    "DECLINED",
+                    payload.declinedAt()
+            ));
+        }
     }
 }

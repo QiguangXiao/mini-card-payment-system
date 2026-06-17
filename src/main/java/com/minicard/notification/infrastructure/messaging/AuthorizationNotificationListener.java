@@ -1,6 +1,8 @@
 package com.minicard.notification.infrastructure.messaging;
 
-import com.minicard.authorization.infrastructure.messaging.AuthorizationEventParser;
+import com.minicard.authorization.infrastructure.messaging.AuthorizationMessageReader;
+import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationApprovedPayload;
+import com.minicard.authorization.infrastructure.messaging.payload.AuthorizationDeclinedPayload;
 import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
 import com.minicard.notification.application.RequestAuthorizationNotificationService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -16,14 +18,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuthorizationNotificationListener {
 
-    private final AuthorizationEventParser eventParser;
+    private final AuthorizationMessageReader messageReader;
     private final RequestAuthorizationNotificationService service;
 
     public AuthorizationNotificationListener(
-            AuthorizationEventParser eventParser,
+            AuthorizationMessageReader messageReader,
             RequestAuthorizationNotificationService service
     ) {
-        this.eventParser = eventParser;
+        this.messageReader = messageReader;
         this.service = service;
     }
 
@@ -33,13 +35,29 @@ public class AuthorizationNotificationListener {
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
-        // parser 只接受 notification 关心的 decision events：authorization.approved / authorization.declined。
-        var event = eventParser.parseDecisionEvent(record);
-        service.request(new RequestAuthorizationNotificationCommand(
-                event.eventId(),
-                event.authorizationId(),
-                event.cardId(),
-                event.approved()
-        ));
+        // 先读 eventType，再显式选择 handler。这样新增 authorization.captured 等事件时，
+        // Notification 没订阅就直接跳过，不把“合法但不关心”的消息当 contract failure。
+        String eventType = messageReader.eventType(record);
+        if (AuthorizationApprovedPayload.EVENT_TYPE.equals(eventType)) {
+            var event = messageReader.readApproved(record);
+            var payload = event.payload();
+            service.request(new RequestAuthorizationNotificationCommand(
+                    event.eventId(),
+                    payload.authorizationId(),
+                    payload.cardId(),
+                    true
+            ));
+            return;
+        }
+        if (AuthorizationDeclinedPayload.EVENT_TYPE.equals(eventType)) {
+            var event = messageReader.readDeclined(record);
+            var payload = event.payload();
+            service.request(new RequestAuthorizationNotificationCommand(
+                    event.eventId(),
+                    payload.authorizationId(),
+                    payload.cardId(),
+                    false
+            ));
+        }
     }
 }

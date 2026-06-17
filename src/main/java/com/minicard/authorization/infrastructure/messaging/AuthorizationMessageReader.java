@@ -15,19 +15,19 @@ import org.apache.kafka.common.header.Header;
 import org.springframework.stereotype.Component;
 
 /**
- * Authorization message contract parser。
+ * Authorization message reader。
  *
- * <p>Parser 属于 Authorization 的 messaging adapter，而不是通用 Kafka client。
- * Kafka infrastructure 只负责运输字符串；这里负责 Authorization payload schema validation。</p>
+ * <p>Reader 负责 transport contract parsing/validation：JSON、eventId header、
+ * eventType header、eventVersion。Listener 负责决定自己关心哪些明确事件类型。</p>
  */
 @Component
-public class AuthorizationEventParser {
+public class AuthorizationMessageReader {
 
     private final ObjectMapper objectMapper;
     private final JavaType approvedEventType;
     private final JavaType declinedEventType;
 
-    public AuthorizationEventParser(ObjectMapper objectMapper) {
+    public AuthorizationMessageReader(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
         this.approvedEventType = objectMapper.getTypeFactory().constructParametricType(
                 IntegrationEventEnvelope.class,
@@ -39,29 +39,47 @@ public class AuthorizationEventParser {
         );
     }
 
-    public AuthorizationDecisionMessage parseDecisionEvent(
+    public String eventType(ConsumerRecord<String, String> record) {
+        try {
+            // 只读取 envelope 的 eventType，让 consumer 能先判断是否感兴趣；
+            // 不感兴趣的合法事件不应该被当成坏消息送进 DLT。
+            JsonNode root = objectMapper.readTree(record.value());
+            return requiredText(root, "eventType");
+        } catch (JsonProcessingException exception) {
+            throw new EventContractException("authorization event JSON is invalid", exception);
+        }
+    }
+
+    public IntegrationEventEnvelope<AuthorizationApprovedPayload> readApproved(
             ConsumerRecord<String, String> record
     ) {
         try {
-            JsonNode root = objectMapper.readTree(record.value());
-            String eventType = requiredText(root, "eventType");
-            if (AuthorizationApprovedPayload.EVENT_TYPE.equals(eventType)) {
-                IntegrationEventEnvelope<AuthorizationApprovedPayload> event =
-                        objectMapper.readValue(record.value(), approvedEventType);
-                validate(record, event, AuthorizationApprovedPayload.EVENT_TYPE,
-                        AuthorizationApprovedPayload.EVENT_VERSION);
-                return AuthorizationDecisionMessage.approved(event.eventId(), event.payload());
-            }
-            if (AuthorizationDeclinedPayload.EVENT_TYPE.equals(eventType)) {
-                IntegrationEventEnvelope<AuthorizationDeclinedPayload> event =
-                        objectMapper.readValue(record.value(), declinedEventType);
-                validate(record, event, AuthorizationDeclinedPayload.EVENT_TYPE,
-                        AuthorizationDeclinedPayload.EVENT_VERSION);
-                return AuthorizationDecisionMessage.declined(event.eventId(), event.payload());
-            }
-            throw new EventContractException("unsupported authorization decision event type " + eventType);
+            // 先校验 eventType 再按具体 payload 反序列化。
+            // 否则把 expired payload 当 approved 读时，会得到低层 Jackson 字段错误，语义不够清楚。
+            requireEventType(record, AuthorizationApprovedPayload.EVENT_TYPE);
+            IntegrationEventEnvelope<AuthorizationApprovedPayload> event =
+                    objectMapper.readValue(record.value(), approvedEventType);
+            validate(record, event, AuthorizationApprovedPayload.EVENT_TYPE,
+                    AuthorizationApprovedPayload.EVENT_VERSION);
+            return event;
         } catch (JsonProcessingException exception) {
-            throw new EventContractException("authorization event JSON is invalid", exception);
+            throw new EventContractException("authorization approved event JSON is invalid", exception);
+        }
+    }
+
+    public IntegrationEventEnvelope<AuthorizationDeclinedPayload> readDeclined(
+            ConsumerRecord<String, String> record
+    ) {
+        try {
+            // 和 readApproved() 一样，先检查 eventType，再进入 typed payload parsing。
+            requireEventType(record, AuthorizationDeclinedPayload.EVENT_TYPE);
+            IntegrationEventEnvelope<AuthorizationDeclinedPayload> event =
+                    objectMapper.readValue(record.value(), declinedEventType);
+            validate(record, event, AuthorizationDeclinedPayload.EVENT_TYPE,
+                    AuthorizationDeclinedPayload.EVENT_VERSION);
+            return event;
+        } catch (JsonProcessingException exception) {
+            throw new EventContractException("authorization declined event JSON is invalid", exception);
         }
     }
 
@@ -106,5 +124,16 @@ public class AuthorizationEventParser {
             throw new EventContractException(fieldName + " is required");
         }
         return value.asText();
+    }
+
+    private void requireEventType(
+            ConsumerRecord<String, String> record,
+            String expectedEventType
+    ) throws JsonProcessingException {
+        JsonNode root = objectMapper.readTree(record.value());
+        String actualEventType = requiredText(root, "eventType");
+        if (!expectedEventType.equals(actualEventType)) {
+            throw new EventContractException("unsupported event type " + actualEventType);
+        }
     }
 }

@@ -266,6 +266,13 @@ curl -X POST http://localhost:8080/api/authorizations \
 - 未来新增 capture、reversal、reconciliation 时，可以继续增加明确事件类型。
 - 不同事件的 payload 可以不同，例如 declined 有 `declineReason`，approved 有 `expiresAt`。
 
+消费者如何处理多种事件：
+
+- `AuthorizationMessageReader` 只负责读取 `eventType`、反序列化指定 payload、校验 header/version。
+- Notification/Risk listener 显式处理 `authorization.approved` 和 `authorization.declined`。
+- 如果未来同一 topic 出现 `authorization.captured`，当前 consumer 可以直接跳过。
+- “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
+
 为什么不在这里直接发 Kafka：
 
 - 如果业务事务成功但 Kafka 发布失败，会丢事件。
