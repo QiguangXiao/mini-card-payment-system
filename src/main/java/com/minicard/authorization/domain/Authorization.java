@@ -2,9 +2,16 @@ package com.minicard.authorization.domain;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+
+import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
 
 /**
  * 授权 aggregate root，表达一笔 card authorization 从 PENDING 到 APPROVED/DECLINED/EXPIRED 的生命周期。
@@ -32,6 +39,9 @@ public final class Authorization {
     private Instant expiresAt;
     // expiredAt 表示 scheduler 实际完成释放的时间，可能晚于 expiresAt；定时任务是 eventual execution。
     private Instant expiredAt;
+    // Domain event buffer 只存在于内存中：状态转换在哪里发生，业务事实就在哪里产生。
+    // Repository restore 出来的历史对象不会重新发布事件，避免 replay/查询造成重复消息。
+    private final List<AuthorizationDomainEvent> domainEvents = new ArrayList<>();
 
     private Authorization(
             UUID id,
@@ -117,6 +127,14 @@ public final class Authorization {
         decidedAt = Objects.requireNonNull(decisionTime);
         expiresAt = decisionTime.plus(HOLD_DURATION);
         expiredAt = null;
+        // APPROVED 事件由 aggregate 自己记录，不让 application service 反向推断 domain fact。
+        domainEvents.add(new AuthorizationApprovedDomainEvent(
+                id,
+                cardId,
+                requestedAmount,
+                decidedAt,
+                expiresAt
+        ));
     }
 
     public void decline(AuthorizationDeclineReason reason, Instant decisionTime) {
@@ -127,6 +145,14 @@ public final class Authorization {
         decidedAt = Objects.requireNonNull(decisionTime);
         expiresAt = null;
         expiredAt = null;
+        // DECLINED 是一次真实业务决策；事件跟随状态转换生成，符合 DDD domain event 语义。
+        domainEvents.add(new AuthorizationDeclinedDomainEvent(
+                id,
+                cardId,
+                requestedAmount,
+                declineReason,
+                decidedAt
+        ));
     }
 
     public void expire(Instant expiryTime) {
@@ -138,10 +164,26 @@ public final class Authorization {
         }
         status = AuthorizationStatus.EXPIRED;
         expiredAt = actualExpiryTime;
+        // EXPIRED 事件记录“额度 hold 已释放对应的授权已过期”，后续由 Outbox 可靠发布。
+        domainEvents.add(new AuthorizationExpiredDomainEvent(
+                id,
+                cardId,
+                requestedAmount,
+                expiresAt,
+                expiredAt
+        ));
     }
 
     public boolean isPending() {
         return status == AuthorizationStatus.PENDING;
+    }
+
+    public List<AuthorizationDomainEvent> pullDomainEvents() {
+        // Application service 在同一 transaction 内保存 aggregate 后调用这里。
+        // 返回 copy 并清空，避免同一个对象被重复 append 到 Outbox。
+        List<AuthorizationDomainEvent> events = List.copyOf(domainEvents);
+        domainEvents.clear();
+        return events;
     }
 
     private void ensurePending(String action) {

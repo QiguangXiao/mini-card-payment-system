@@ -19,14 +19,14 @@ public class OutboxWorker {
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxMessagePublisher messagePublisher;
-    private final OutboxPublisherProperties properties;
+    private final OutboxProperties properties;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
 
     public OutboxWorker(
             OutboxEventRepository outboxEventRepository,
             OutboxMessagePublisher messagePublisher,
-            OutboxPublisherProperties properties,
+            OutboxProperties properties,
             Clock clock,
             TransactionOperations transactionOperations
     ) {

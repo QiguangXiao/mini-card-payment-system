@@ -1,6 +1,6 @@
 package com.minicard.infrastructure.scheduler;
 
-import com.minicard.delayjob.application.DelayJobSchedulerProperties;
+import com.minicard.delayjob.DelayJobProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +15,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties(DelayJobSchedulerProperties.class)
+@EnableConfigurationProperties(DelayJobProperties.class)
 public class PollingSchedulerConfiguration {
 
     @Bean(name = "outboxTaskScheduler")

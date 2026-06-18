@@ -1,9 +1,9 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "delay-jobs.scheduler")
-public record DelayJobSchedulerProperties(
+public record DelayJobProperties(
         boolean enabled,
         long fixedDelayMs,
         long recoveryFixedDelayMs,

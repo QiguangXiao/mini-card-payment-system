@@ -98,8 +98,8 @@ class OutboxWorkerTest {
         return event;
     }
 
-    private OutboxPublisherProperties properties() {
-        return new OutboxPublisherProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
+    private OutboxProperties properties() {
+        return new OutboxProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
     }
 
     private OutboxEvent copy(OutboxEvent source) {

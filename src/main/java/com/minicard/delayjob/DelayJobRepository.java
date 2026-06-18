@@ -1,4 +1,4 @@
-package com.minicard.delayjob.domain;
+package com.minicard.delayjob;
 
 import java.time.Instant;
 import java.util.List;

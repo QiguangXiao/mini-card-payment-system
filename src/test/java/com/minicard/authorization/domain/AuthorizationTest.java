@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Currency;
 
+import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,18 +37,26 @@ class AuthorizationTest {
         assertThat(authorization.decidedAt()).contains(DECIDED_AT);
         assertThat(authorization.expiresAt()).contains(DECIDED_AT.plusSeconds(7 * 24 * 60 * 60));
         assertThat(authorization.expiredAt()).isEmpty();
+        assertThat(authorization.pullDomainEvents())
+                .singleElement()
+                .isInstanceOf(AuthorizationApprovedDomainEvent.class);
+        assertThat(authorization.pullDomainEvents()).isEmpty();
     }
 
     @Test
     void expiresApprovedAuthorizationAtOrAfterDeadline() {
         Authorization authorization = authorization();
         authorization.approve(DECIDED_AT);
+        authorization.pullDomainEvents();
         Instant expiryTime = DECIDED_AT.plusSeconds(7 * 24 * 60 * 60);
 
         authorization.expire(expiryTime);
 
         assertThat(authorization.status()).isEqualTo(AuthorizationStatus.EXPIRED);
         assertThat(authorization.expiredAt()).contains(expiryTime);
+        assertThat(authorization.pullDomainEvents())
+                .singleElement()
+                .isInstanceOf(AuthorizationExpiredDomainEvent.class);
     }
 
     @Test
@@ -71,6 +82,9 @@ class AuthorizationTest {
         assertThat(authorization.declineReason())
                 .contains(AuthorizationDeclineReason.SINGLE_TRANSACTION_LIMIT_EXCEEDED);
         assertThat(authorization.decidedAt()).contains(DECIDED_AT);
+        assertThat(authorization.pullDomainEvents())
+                .singleElement()
+                .isInstanceOf(AuthorizationDeclinedDomainEvent.class);
     }
 
     @Test

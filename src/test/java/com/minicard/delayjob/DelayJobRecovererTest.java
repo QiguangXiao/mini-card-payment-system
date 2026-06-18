@@ -1,4 +1,4 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -6,10 +6,6 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
-import com.minicard.delayjob.domain.DelayJobStatus;
-import com.minicard.delayjob.domain.DelayJobType;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -17,7 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class StuckDelayJobRecovererTest {
+class DelayJobRecovererTest {
 
     private static final Instant NOW = Instant.parse("2026-06-08T00:00:00Z");
 
@@ -27,9 +23,9 @@ class StuckDelayJobRecovererTest {
         DelayJob job = job();
         job.markProcessing(NOW.minusSeconds(120), 60);
         when(repository.findStuckProcessingBatchForUpdate(NOW, 100)).thenReturn(List.of(job));
-        StuckDelayJobRecoverer recoverer = new StuckDelayJobRecoverer(
+        DelayJobRecoverer recoverer = new DelayJobRecoverer(
                 repository,
-                new DelayJobSchedulerProperties(true, 1000, 5000, 100, 3, 60, 4, 100),
+                new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 

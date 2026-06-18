@@ -11,10 +11,7 @@ import java.util.stream.Collectors;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
-import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
-import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
-import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardAuthorizationFailure;
@@ -112,9 +109,9 @@ public class AuthorizationService {
             // 只要额度 hold 生效，就一定有一个未来释放额度的 durable plan。
             expiryJobScheduler.schedule(persisted);
         }
-        // 发布 Authorization domain event；基础设施 adapter 会映射成 Outbox message payload。
-        // 这里不直接发 Kafka，因为 broker/network failure 不应该破坏主交易。
-        eventPublisher.append(toDecisionDomainEvent(persisted));
+        // Domain event 已在 approve()/decline() 状态转换时产生。
+        // Service 只负责在同一 transaction boundary 内把事实交给 Outbox adapter。
+        publishDomainEvents(persisted);
         return persisted;
     }
 
@@ -200,36 +197,6 @@ public class AuthorizationService {
         return null;
     }
 
-    private AuthorizationDomainEvent toDecisionDomainEvent(Authorization authorization) {
-        Instant decidedAt = authorization.decidedAt()
-                .orElseThrow(() -> new IllegalStateException("decided authorization missing decidedAt"));
-        if (authorization.status() == AuthorizationStatus.APPROVED) {
-            return new AuthorizationApprovedDomainEvent(
-                    authorization.id(),
-                    authorization.cardId(),
-                    authorization.requestedAmount(),
-                    decidedAt,
-                    authorization.expiresAt()
-                            .orElseThrow(() -> new IllegalStateException(
-                                    "approved authorization missing expiresAt"
-                            ))
-            );
-        }
-        if (authorization.status() == AuthorizationStatus.DECLINED) {
-            return new AuthorizationDeclinedDomainEvent(
-                    authorization.id(),
-                    authorization.cardId(),
-                    authorization.requestedAmount(),
-                    authorization.declineReason()
-                            .orElseThrow(() -> new IllegalStateException(
-                                    "declined authorization missing declineReason"
-                            )),
-                    decidedAt
-            );
-        }
-        throw new IllegalStateException("unsupported decision status " + authorization.status());
-    }
-
     private AuthorizationDeclineReason mapFailure(CreditReservationFailure failure) {
         return switch (failure) {
             case ACCOUNT_BLOCKED -> AuthorizationDeclineReason.CREDIT_ACCOUNT_BLOCKED;
@@ -248,6 +215,14 @@ public class AuthorizationService {
             case EXTERNAL_RISK_DECLINED -> AuthorizationDeclineReason.RISK_EXTERNAL_DECLINED;
             case EXTERNAL_RISK_UNAVAILABLE -> AuthorizationDeclineReason.RISK_EXTERNAL_UNAVAILABLE;
         };
+    }
+
+    private void publishDomainEvents(Authorization authorization) {
+        for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
+            // 这里仍然是同一个 DB transaction：Outbox row 和 authorization 状态一起 commit。
+            // Kafka publish 由后台 outbox worker 完成，主交易不用等待 broker。
+            eventPublisher.append(event);
+        }
     }
 
     private void assertSameIdempotentRequest(

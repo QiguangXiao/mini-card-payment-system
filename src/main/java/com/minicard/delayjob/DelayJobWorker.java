@@ -1,4 +1,4 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -6,10 +6,6 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
-import com.minicard.delayjob.domain.DelayJobStatus;
-import com.minicard.delayjob.domain.DelayJobType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -27,14 +23,14 @@ public class DelayJobWorker {
     private static final Logger log = LoggerFactory.getLogger(DelayJobWorker.class);
 
     private final DelayJobRepository delayJobRepository;
-    private final DelayJobSchedulerProperties properties;
+    private final DelayJobProperties properties;
     private final Map<DelayJobType, DelayJobHandler> handlers;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
 
     public DelayJobWorker(
             DelayJobRepository delayJobRepository,
-            DelayJobSchedulerProperties properties,
+            DelayJobProperties properties,
             List<DelayJobHandler> handlers,
             Clock clock,
             TransactionOperations transactionOperations

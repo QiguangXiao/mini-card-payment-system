@@ -1,4 +1,4 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -7,10 +7,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
-import com.minicard.delayjob.domain.DelayJobStatus;
-import com.minicard.delayjob.domain.DelayJobType;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
@@ -104,8 +100,8 @@ class DelayJobWorkerTest {
         return job;
     }
 
-    private DelayJobSchedulerProperties properties() {
-        return new DelayJobSchedulerProperties(true, 1000, 5000, 100, 3, 60, 4, 100);
+    private DelayJobProperties properties() {
+        return new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100);
     }
 
     private TransactionOperations transactionOperations() {

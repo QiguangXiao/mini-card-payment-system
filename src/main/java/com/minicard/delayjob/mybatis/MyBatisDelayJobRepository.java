@@ -1,14 +1,14 @@
-package com.minicard.delayjob.infrastructure.mybatis;
+package com.minicard.delayjob.mybatis;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
-import com.minicard.delayjob.domain.DelayJobStatus;
-import com.minicard.delayjob.domain.DelayJobType;
+import com.minicard.delayjob.DelayJob;
+import com.minicard.delayjob.DelayJobRepository;
+import com.minicard.delayjob.DelayJobStatus;
+import com.minicard.delayjob.DelayJobType;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 

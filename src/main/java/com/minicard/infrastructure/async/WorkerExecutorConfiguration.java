@@ -1,7 +1,7 @@
 package com.minicard.infrastructure.async;
 
-import com.minicard.delayjob.application.DelayJobSchedulerProperties;
-import com.minicard.messaging.outbox.OutboxPublisherProperties;
+import com.minicard.delayjob.DelayJobProperties;
+import com.minicard.messaging.outbox.OutboxProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -17,7 +17,7 @@ public class WorkerExecutorConfiguration {
 
     @Bean(name = "outboxWorkerExecutor")
     public ThreadPoolTaskExecutor outboxWorkerExecutor(
-            OutboxPublisherProperties properties
+            OutboxProperties properties
     ) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("outbox-worker-");
@@ -31,7 +31,7 @@ public class WorkerExecutorConfiguration {
 
     @Bean(name = "delayJobWorkerExecutor")
     public ThreadPoolTaskExecutor delayJobWorkerExecutor(
-            DelayJobSchedulerProperties properties
+            DelayJobProperties properties
     ) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("delay-job-worker-");

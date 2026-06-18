@@ -8,9 +8,9 @@ import java.util.Currency;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.Money;
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
-import com.minicard.delayjob.domain.DelayJobType;
+import com.minicard.delayjob.DelayJob;
+import com.minicard.delayjob.DelayJobRepository;
+import com.minicard.delayjob.DelayJobType;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 

@@ -108,6 +108,7 @@ class AuthorizationExpiryServiceTest {
                 APPROVED_AT
         );
         authorization.approve(APPROVED_AT);
+        authorization.pullDomainEvents();
         return authorization;
     }
 
@@ -122,6 +123,7 @@ class AuthorizationExpiryServiceTest {
                 com.minicard.authorization.domain.AuthorizationDeclineReason.CARD_BLOCKED,
                 APPROVED_AT
         );
+        authorization.pullDomainEvents();
         return authorization;
     }
 

@@ -1,11 +1,9 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,17 +23,17 @@ import org.springframework.transaction.annotation.Transactional;
         name = "enabled",
         havingValue = "true"
 )
-public class StuckDelayJobRecoverer {
+public class DelayJobRecoverer {
 
-    private static final Logger log = LoggerFactory.getLogger(StuckDelayJobRecoverer.class);
+    private static final Logger log = LoggerFactory.getLogger(DelayJobRecoverer.class);
 
     private final DelayJobRepository delayJobRepository;
-    private final DelayJobSchedulerProperties properties;
+    private final DelayJobProperties properties;
     private final Clock clock;
 
-    public StuckDelayJobRecoverer(
+    public DelayJobRecoverer(
             DelayJobRepository delayJobRepository,
-            DelayJobSchedulerProperties properties,
+            DelayJobProperties properties,
             Clock clock
     ) {
         this.delayJobRepository = delayJobRepository;

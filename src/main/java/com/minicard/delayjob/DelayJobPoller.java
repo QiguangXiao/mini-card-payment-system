@@ -1,8 +1,7 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.util.List;
 
-import com.minicard.delayjob.domain.DelayJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -28,16 +27,16 @@ public class DelayJobPoller {
 
     private static final Logger log = LoggerFactory.getLogger(DelayJobPoller.class);
 
-    private final DelayJobClaimService claimService;
+    private final DelayJobClaimer claimer;
     private final DelayJobWorker worker;
     private final TaskExecutor delayJobWorkerExecutor;
 
     public DelayJobPoller(
-            DelayJobClaimService claimService,
+            DelayJobClaimer claimer,
             DelayJobWorker worker,
             @Qualifier("delayJobWorkerExecutor") TaskExecutor delayJobWorkerExecutor
     ) {
-        this.claimService = claimService;
+        this.claimer = claimer;
         this.worker = worker;
         this.delayJobWorkerExecutor = delayJobWorkerExecutor;
     }
@@ -47,7 +46,7 @@ public class DelayJobPoller {
             scheduler = "delayJobTaskScheduler"
     )
     public void pollDueJobs() {
-        List<DelayJob> jobs = claimService.claimDueJobs();
+        List<DelayJob> jobs = claimer.claimDueJobs();
         for (DelayJob job : jobs) {
             try {
                 // commit 后才 submit 给 worker pool；worker 会重新校验 PROCESSING lease 后再 finalize。

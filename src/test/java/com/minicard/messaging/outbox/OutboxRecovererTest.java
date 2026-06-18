@@ -13,7 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class OutboxStuckEventRecovererTest {
+class OutboxRecovererTest {
 
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");
 
@@ -23,7 +23,7 @@ class OutboxStuckEventRecovererTest {
         OutboxEvent event = pendingEvent();
         event.markProcessing(NOW.minusSeconds(60), 30);
         when(repository.findStuckProcessingBatchForUpdate(NOW, 10)).thenReturn(List.of(event));
-        OutboxStuckEventRecoverer recoverer = new OutboxStuckEventRecoverer(
+        OutboxRecoverer recoverer = new OutboxRecoverer(
                 repository,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC)
@@ -50,7 +50,7 @@ class OutboxStuckEventRecovererTest {
         );
     }
 
-    private OutboxPublisherProperties properties() {
-        return new OutboxPublisherProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
+    private OutboxProperties properties() {
+        return new OutboxProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
     }
 }

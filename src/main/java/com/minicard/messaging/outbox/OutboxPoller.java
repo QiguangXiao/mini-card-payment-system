@@ -25,20 +25,20 @@ import org.springframework.transaction.support.TransactionOperations;
         name = "enabled",
         havingValue = "true"
 )
-public class OutboxPublisherPoller {
+public class OutboxPoller {
 
-    private static final Logger log = LoggerFactory.getLogger(OutboxPublisherPoller.class);
+    private static final Logger log = LoggerFactory.getLogger(OutboxPoller.class);
 
     private final OutboxEventRepository outboxEventRepository;
-    private final OutboxPublisherProperties properties;
+    private final OutboxProperties properties;
     private final Clock clock;
     private final OutboxWorker worker;
     private final TaskExecutor outboxWorkerExecutor;
     private final TransactionOperations transactionOperations;
 
-    public OutboxPublisherPoller(
+    public OutboxPoller(
             OutboxEventRepository outboxEventRepository,
-            OutboxPublisherProperties properties,
+            OutboxProperties properties,
             Clock clock,
             OutboxWorker worker,
             @Qualifier("outboxWorkerExecutor") TaskExecutor outboxWorkerExecutor,

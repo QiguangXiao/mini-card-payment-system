@@ -20,17 +20,17 @@ import org.springframework.transaction.annotation.Transactional;
         name = "enabled",
         havingValue = "true"
 )
-public class OutboxStuckEventRecoverer {
+public class OutboxRecoverer {
 
-    private static final Logger log = LoggerFactory.getLogger(OutboxStuckEventRecoverer.class);
+    private static final Logger log = LoggerFactory.getLogger(OutboxRecoverer.class);
 
     private final OutboxEventRepository outboxEventRepository;
-    private final OutboxPublisherProperties properties;
+    private final OutboxProperties properties;
     private final Clock clock;
 
-    public OutboxStuckEventRecoverer(
+    public OutboxRecoverer(
             OutboxEventRepository outboxEventRepository,
-            OutboxPublisherProperties properties,
+            OutboxProperties properties,
             Clock clock
     ) {
         this.outboxEventRepository = outboxEventRepository;

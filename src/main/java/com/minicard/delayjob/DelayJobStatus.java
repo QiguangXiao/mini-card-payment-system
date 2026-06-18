@@ -1,4 +1,4 @@
-package com.minicard.delayjob.domain;
+package com.minicard.delayjob;
 
 public enum DelayJobStatus {
     PENDING,

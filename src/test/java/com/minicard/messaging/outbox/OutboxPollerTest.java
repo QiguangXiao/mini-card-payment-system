@@ -17,7 +17,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class OutboxPublisherPollerTest {
+class OutboxPollerTest {
 
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");
 
@@ -27,7 +27,7 @@ class OutboxPublisherPollerTest {
         OutboxWorker worker = mock(OutboxWorker.class);
         OutboxEvent event = pendingEvent();
         when(repository.findPublishableBatchForUpdate(NOW, 10)).thenReturn(List.of(event));
-        OutboxPublisherPoller poller = new OutboxPublisherPoller(
+        OutboxPoller poller = new OutboxPoller(
                 repository,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -57,8 +57,8 @@ class OutboxPublisherPollerTest {
         );
     }
 
-    private OutboxPublisherProperties properties() {
-        return new OutboxPublisherProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
+    private OutboxProperties properties() {
+        return new OutboxProperties(true, 1000, 5000, 10, 5000, 30, 3, 4, 100);
     }
 
     private TransactionOperations immediateTransactions() {

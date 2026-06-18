@@ -239,25 +239,32 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 入口：
 
-- `AuthorizationService.toDecisionDomainEvent(authorization)`
+- `Authorization.approve(...)` / `Authorization.decline(...)`
+- `AuthorizationService.publishDomainEvents(authorization)`
 - `AuthorizationDomainEventPublisher.append(event)`
 - `AuthorizationOutboxAdapter.append(event)`
 
 处理：
 
-- 如果结果是 `APPROVED`，先创建 `AuthorizationApprovedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 JSON payload，事件类型是 `authorization.approved`。
-- 如果结果是 `DECLINED`，先创建 `AuthorizationDeclinedDomainEvent`，再由 `AuthorizationMessageMapper` 映射成 JSON payload，事件类型是 `authorization.declined`。
+- 如果结果是 `APPROVED`，`Authorization.approve(...)` 在状态变成 `APPROVED` 的同一处记录 `AuthorizationApprovedDomainEvent`。
+- 如果结果是 `DECLINED`，`Authorization.decline(...)` 在状态变成 `DECLINED` 的同一处记录 `AuthorizationDeclinedDomainEvent`。
+- `AuthorizationService` 保存 authorization 后调用 `authorization.pullDomainEvents()`，把领域事实交给 `AuthorizationDomainEventPublisher`。
 - 创建 `IntegrationEvent`，包含 event metadata 和 JsonNode payload。
-- `eventId = UUID.randomUUID()`。
+- `eventId = UUID.randomUUID()`，由 `AuthorizationOutboxAdapter` 生成，因为它是 outbound message id，不是 authorization aggregate id。
 - 写入 `outbox_events`，状态为 `PENDING`。
 
 为什么区分 domain event 和 payload：
 
 - Domain event 属于 Authorization bounded context，只表达业务事实。
 - payload 是对外 JSON contract，需要稳定 eventType/version/字段名，但当前不为每种消息单独建 Java payload class。
-- `AuthorizationMessageMapper` 负责领域事件到 JSON payload 的纯转换。
-- `AuthorizationOutboxAdapter` 负责生成 eventId、序列化 envelope、写 Outbox。
+- `AuthorizationOutboxAdapter` 负责生成 eventId、映射 eventType/payload、序列化 envelope、写 Outbox。
 - Authorization domain 不知道 Kafka、topic、headers 或 Outbox 表。
+
+为什么不在 service 里 new domain event：
+
+- DDD 的关键是“状态转换在哪里发生，业务事实就在哪里产生”。
+- 如果 service 根据 `authorization.status()` 反推事件，service 就在猜 domain 已经发生的事实，边界会变模糊。
+- 当前做法是 aggregate 负责产生 `domain event`，application service 负责 transaction boundary、repository 调用顺序和 Outbox 发布意图。
 
 为什么 approved/declined 拆成不同 event type：
 
@@ -308,10 +315,10 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 入口：
 
-- `OutboxPublisherPoller.pollPublishableEvents()`
-- `OutboxPublisherPoller.claimPublishableEvents()`
+- `OutboxPoller.pollPublishableEvents()`
+- `OutboxPoller.claimPublishableEvents()`
 - `OutboxWorker.publishClaimedEvent(event)`
-- `OutboxStuckEventRecoverer.recoverStuckEvents()`
+- `OutboxRecoverer.recoverStuckEvents()`
 
 触发方式：
 
@@ -321,7 +328,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 关键步骤：
 
-1. `OutboxPublisherPoller.claimPublishableEvents()`
+1. `OutboxPoller.claimPublishableEvents()`
 
    poller 在短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
    MyBatis XML 使用：
@@ -339,7 +346,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 
    这一步提交后，DB row lock 释放。
 
-2. `OutboxPublisherPoller` submit worker
+2. `OutboxPoller` submit worker
 
    claim transaction commit 后，poller 把每条 `PROCESSING` event 提交给 `outboxWorkerExecutor`。
    poller 不直接发 Kafka，也不提前 mark published。
@@ -369,7 +376,7 @@ curl -X POST http://localhost:8080/api/authorizations \
    `PROCESSING` 的 `next_attempt_at` 被当作轻量 lease token。
    如果 publisher 太慢，lease 过期后事件被另一个实例重新领取，旧 publisher 的迟到结果不会覆盖新状态。
 
-7. `OutboxStuckEventRecoverer.recoverStuckEvents()`
+7. `OutboxRecoverer.recoverStuckEvents()`
 
    独立扫描 `status = PROCESSING` 且 lease 已超时的 rows。
    未达最大次数时回到 `PENDING`，达到最大次数后进入 `DEAD`。
@@ -383,7 +390,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 ### 4.1 消息可靠性结构说明
 
-当前消息相关代码分成 4 组：
+当前消息相关代码分成 5 组：
 
 - `messaging/outbox`：可靠发布机制。业务事务只写 `outbox_events`，后台 publisher 再发 Kafka。
 - `messaging/outbox/mybatis`：Outbox 的 MyBatis persistence 细节。
@@ -418,7 +425,7 @@ PayPay Card 面试提示：
 入口：
 
 - `DelayJobPoller.pollDueJobs()`
-- `DelayJobClaimService.claimDueJobs()`
+- `DelayJobClaimer.claimDueJobs()`
 - `DelayJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
 - `AuthorizationExpiryService.expire(authorizationId)`
@@ -428,22 +435,29 @@ PayPay Card 面试提示：
 - Spring `@Scheduled`
 - `delayJobTaskScheduler` 只负责 poller/recoverer 的定时触发。
 - `delayJobWorkerExecutor` 负责并发执行业务 job。
-- 和 Outbox 使用相似 durable queue 模式，但 DelayJob 已经拆成 poller、claim service、worker、recoverer。
+- 和 Outbox 使用相似 durable queue 模式，但 DelayJob 只保留必要职责：poller、claimer、worker、recoverer。
 
 代码结构：
 
-- `com.minicard.delayjob` 是通用 DelayJob 机制，包含 domain/application/MyBatis adapter。
+- `com.minicard.delayjob` 是通用 DelayJob 机制，包含任务状态机、repository port、poller、claimer、worker、recoverer、handler interface。
+- `com.minicard.delayjob.mybatis` 是 DelayJob 的 MyBatis persistence 细节。
 - `com.minicard.authorization.infrastructure.delayjob` 是 Authorization 使用 DelayJob 的 adapter，只负责写入到期任务。
 - `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置。
 - `com.minicard.infrastructure.async` 只放后台 worker executor 配置。
 - `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper。
+
+为什么 DelayJob 不再拆 `domain/application/infrastructure`：
+
+- DelayJob 在这个项目里不是业务 bounded context，而是 database-backed delayed work queue。
+- `DelayJob` 的状态机很重要，但它描述的是执行计划的 lease/retry/DONE/DEAD，不是信用卡业务规则。
+- 包结构压平后，业务领域仍在 `authorization/card/creditaccount`，共享机制则直接放在 `delayjob`。
 
 ### 5.1 Poll and claim batch
 
 关键方法：
 
 - `DelayJobPoller.pollDueJobs()`
-- `DelayJobClaimService.claimDueJobs()`
+- `DelayJobClaimer.claimDueJobs()`
 
 处理：
 
@@ -457,7 +471,7 @@ PayPay Card 面试提示：
 为什么 `PROCESSING` 是 lease：
 
 - 如果 pod claim job 后宕机，job 不能永久卡住。
-- lease 到期后，`StuckDelayJobRecoverer` 会把 job 恢复成可 retry 状态。
+- lease 到期后，`DelayJobRecoverer` 会把 job 恢复成可 retry 状态。
 - worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
 ### 5.2 Worker dispatch handler
@@ -521,7 +535,7 @@ PayPay Card 面试提示：
 7. `authorization.expire(now)`
 
    状态从 `APPROVED` 变成 `EXPIRED`。
-   设置 `expiredAt = now`。
+   设置 `expiredAt = now`，并在 aggregate 内记录 `AuthorizationExpiredDomainEvent`。
 
 8. 保存 account、authorization，并写 expired Outbox event
 
@@ -529,7 +543,7 @@ PayPay Card 面试提示：
 
    - `credit_accounts.reserved_amount` 减少。
    - `authorizations.status = EXPIRED`。
-   - `outbox_events` 新增 `authorization.expired/PENDING`。
+   - `AuthorizationExpiryService` 从 aggregate 拉取 domain event，`outbox_events` 新增 `authorization.expired/PENDING`。
 
 ### 5.4 Worker mark done or failed
 
@@ -561,7 +575,7 @@ PayPay Card 面试提示：
 
 入口：
 
-- `StuckDelayJobRecoverer.recoverStuckJobs()`
+- `DelayJobRecoverer.recoverStuckJobs()`
 
 处理：
 
@@ -611,7 +625,7 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 | 表 | `outbox_events` | `delay_jobs` |
 | 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
-| 消费者 | `OutboxPublisherPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
+| 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
 | 失败处理 | retry/backoff/DEAD | retry/backoff/PROCESSING lease/DEAD |
 | 幂等重点 | consumer 用 eventId 去重 | handler 读取业务 source of truth |

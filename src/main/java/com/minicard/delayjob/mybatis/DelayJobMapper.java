@@ -1,4 +1,4 @@
-package com.minicard.delayjob.infrastructure.mybatis;
+package com.minicard.delayjob.mybatis;
 
 import java.time.Instant;
 import java.util.List;

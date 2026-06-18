@@ -2,9 +2,9 @@ package com.minicard.authorization.application;
 
 import java.util.UUID;
 
-import com.minicard.delayjob.application.DelayJobHandler;
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobType;
+import com.minicard.delayjob.DelayJobHandler;
+import com.minicard.delayjob.DelayJob;
+import com.minicard.delayjob.DelayJobType;
 import org.springframework.stereotype.Component;
 
 /**

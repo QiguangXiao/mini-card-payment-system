@@ -1,11 +1,9 @@
-package com.minicard.delayjob.application;
+package com.minicard.delayjob;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import com.minicard.delayjob.domain.DelayJob;
-import com.minicard.delayjob.domain.DelayJobType;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SyncTaskExecutor;
 
@@ -17,7 +15,7 @@ class DelayJobPollerTest {
 
     @Test
     void submitsClaimedJobsToWorkerExecutor() {
-        DelayJobClaimService claimService = mock(DelayJobClaimService.class);
+        DelayJobClaimer claimer = mock(DelayJobClaimer.class);
         DelayJobWorker worker = mock(DelayJobWorker.class);
         DelayJob job = DelayJob.pending(
                 UUID.randomUUID(),
@@ -27,16 +25,16 @@ class DelayJobPollerTest {
                 Instant.parse("2026-06-08T00:00:00Z"),
                 Instant.parse("2026-06-08T00:00:00Z")
         );
-        when(claimService.claimDueJobs()).thenReturn(List.of(job));
+        when(claimer.claimDueJobs()).thenReturn(List.of(job));
         DelayJobPoller poller = new DelayJobPoller(
-                claimService,
+                claimer,
                 worker,
                 new SyncTaskExecutor()
         );
 
         poller.pollDueJobs();
 
-        verify(claimService).claimDueJobs();
+        verify(claimer).claimDueJobs();
         verify(worker).handleClaimedJob(job);
     }
 }

@@ -6,7 +6,7 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
-import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.creditaccount.domain.CreditAccount;
@@ -95,19 +95,7 @@ public class AuthorizationExpiryService {
         // 任何一步失败都会 rollback，避免释放额度但状态/事件缺失。
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
-        eventPublisher.append(new AuthorizationExpiredDomainEvent(
-                authorization.id(),
-                authorization.cardId(),
-                authorization.requestedAmount(),
-                authorization.expiresAt()
-                        .orElseThrow(() -> new IllegalStateException(
-                                "expired authorization missing expiresAt"
-                        )),
-                authorization.expiredAt()
-                        .orElseThrow(() -> new IllegalStateException(
-                                "expired authorization missing expiredAt"
-                        ))
-        ));
+        publishDomainEvents(authorization);
         log.info(
                 "authorization_expired authorizationId={} accountId={} amount={} currency={}",
                 authorization.id(),
@@ -115,5 +103,13 @@ public class AuthorizationExpiryService {
                 authorization.requestedAmount().amount(),
                 authorization.requestedAmount().currency().getCurrencyCode()
         );
+    }
+
+    private void publishDomainEvents(Authorization authorization) {
+        for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
+            // expire() 产生业务事实，Outbox adapter 负责 durable publish intent。
+            // 这样过期状态和 expired event 仍处在同一个 transaction boundary。
+            eventPublisher.append(event);
+        }
     }
 }
