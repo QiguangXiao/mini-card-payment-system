@@ -7,6 +7,7 @@ import java.util.Currency;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,6 +58,22 @@ class AuthorizationTest {
         assertThat(authorization.pullDomainEvents())
                 .singleElement()
                 .isInstanceOf(AuthorizationExpiredDomainEvent.class);
+    }
+
+    @Test
+    void postsApprovedAuthorizationBeforeDeadline() {
+        Authorization authorization = authorization();
+        authorization.approve(DECIDED_AT);
+        authorization.pullDomainEvents();
+        Instant postedAt = DECIDED_AT.plusSeconds(60);
+
+        authorization.post(postedAt);
+
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.POSTED);
+        assertThat(authorization.postedAt()).contains(postedAt);
+        assertThat(authorization.pullDomainEvents())
+                .singleElement()
+                .isInstanceOf(AuthorizationPostedDomainEvent.class);
     }
 
     @Test

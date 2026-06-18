@@ -40,7 +40,7 @@ public class AuthorizationNotificationListener {
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
-        // 先读 eventType，再显式选择 handler。这样新增 authorization.captured 等事件时，
+        // 先读 eventType，再显式选择 handler。这样新增 authorization.posted 等事件时，
         // Notification 没订阅就直接跳过，不把“合法但不关心”的消息当 contract failure。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();

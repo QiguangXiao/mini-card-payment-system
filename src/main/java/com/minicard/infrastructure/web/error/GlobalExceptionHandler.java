@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 
 import com.minicard.authorization.application.IdempotencyConflictException;
+import com.minicard.transaction.application.PresentmentConflictException;
+import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +37,20 @@ public class GlobalExceptionHandler {
             IdempotencyConflictException exception
     ) {
         return error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", exception.getMessage());
+    }
+
+    @ExceptionHandler(PresentmentConflictException.class)
+    public ResponseEntity<ErrorResponse> handlePresentmentConflict(
+            PresentmentConflictException exception
+    ) {
+        return error(HttpStatus.CONFLICT, "PRESENTMENT_CONFLICT", exception.getMessage());
+    }
+
+    @ExceptionHandler(PresentmentRejectedException.class)
+    public ResponseEntity<ErrorResponse> handlePresentmentRejected(
+            PresentmentRejectedException exception
+    ) {
+        return error(HttpStatus.CONFLICT, "PRESENTMENT_REJECTED", exception.getMessage());
     }
 
     @ExceptionHandler({

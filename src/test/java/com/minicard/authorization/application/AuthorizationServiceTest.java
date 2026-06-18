@@ -288,6 +288,7 @@ class AuthorizationServiceTest {
                 NOW,
                 NOW,
                 NOW.plusSeconds(7 * 24 * 60 * 60),
+                null,
                 null
         );
     }

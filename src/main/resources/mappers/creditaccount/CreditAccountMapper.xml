@@ -10,6 +10,7 @@
             <arg column="id" javaType="java.lang.String"/>
             <arg column="credit_limit" javaType="java.math.BigDecimal"/>
             <arg column="reserved_amount" javaType="java.math.BigDecimal"/>
+            <arg column="posted_balance" javaType="java.math.BigDecimal"/>
             <arg column="currency" javaType="java.lang.String"/>
             <arg column="status" javaType="java.lang.String"/>
         </constructor>
@@ -20,7 +21,7 @@
       It serializes concurrent credit reservations for the same account.
     -->
     <select id="findByIdForUpdate" resultMap="creditAccountRowMap">
-        SELECT id, credit_limit, reserved_amount, currency, status
+        SELECT id, credit_limit, reserved_amount, posted_balance, currency, status
         FROM credit_accounts
         WHERE id = #{accountId}
         FOR UPDATE
@@ -29,6 +30,7 @@
     <update id="update">
         UPDATE credit_accounts
         SET reserved_amount = #{reservedAmount},
+            posted_balance = #{postedBalance},
             status = #{status}
         WHERE id = #{id}
     </update>

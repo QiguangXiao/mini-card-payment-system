@@ -17,13 +17,14 @@
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="decided_at" javaType="java.time.Instant"/>
             <arg column="expires_at" javaType="java.time.Instant"/>
+            <arg column="posted_at" javaType="java.time.Instant"/>
             <arg column="expired_at" javaType="java.time.Instant"/>
         </constructor>
     </resultMap>
 
     <sql id="authorizationColumns">
         id, request_fingerprint, card_id, amount, currency, status,
-        decline_reason, created_at, decided_at, expires_at, expired_at
+        decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
     </sql>
 
     <select id="findById" resultMap="authorizationRowMap">
@@ -39,7 +40,7 @@
     <insert id="insert">
         INSERT INTO authorizations (
             id, idempotency_key, request_fingerprint, card_id, amount, currency,
-            status, decline_reason, created_at, decided_at, expires_at, expired_at
+            status, decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
         ) VALUES (
             #{authorization.id},
             #{idempotencyKey},
@@ -52,6 +53,7 @@
             #{authorization.createdAt},
             #{authorization.decidedAt,jdbcType=TIMESTAMP},
             #{authorization.expiresAt,jdbcType=TIMESTAMP},
+            #{authorization.postedAt,jdbcType=TIMESTAMP},
             #{authorization.expiredAt,jdbcType=TIMESTAMP}
         )
     </insert>
@@ -84,6 +86,7 @@
             decline_reason = #{declineReason,jdbcType=VARCHAR},
             decided_at = #{decidedAt,jdbcType=TIMESTAMP},
             expires_at = #{expiresAt,jdbcType=TIMESTAMP},
+            posted_at = #{postedAt,jdbcType=TIMESTAMP},
             expired_at = #{expiredAt,jdbcType=TIMESTAMP}
         WHERE id = #{id}
     </update>

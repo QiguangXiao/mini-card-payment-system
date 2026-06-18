@@ -40,6 +40,7 @@ public class MyBatisCreditAccountRepository implements CreditAccountRepository {
                 account.id().toString(),
                 account.creditLimit().amount(),
                 account.reservedAmount().amount(),
+                account.postedBalance().amount(),
                 account.creditLimit().currency().getCurrencyCode(),
                 account.status().name()
         ));
@@ -51,6 +52,7 @@ public class MyBatisCreditAccountRepository implements CreditAccountRepository {
                 UUID.fromString(row.id()),
                 new Money(row.creditLimit(), currency),
                 new Money(row.reservedAmount(), currency),
+                new Money(row.postedBalance(), currency),
                 CreditAccountStatus.valueOf(row.status())
         );
     }

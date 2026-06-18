@@ -14,6 +14,7 @@ public record AuthorizationRow(
         Instant createdAt,
         Instant decidedAt,
         Instant expiresAt,
+        Instant postedAt,
         Instant expiredAt
 ) {
 }

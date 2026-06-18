@@ -15,6 +15,7 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
 import org.junit.jupiter.api.Test;
@@ -96,6 +97,27 @@ class AuthorizationOutboxAdapterTest {
                 .isEqualTo("authorization.expired");
         assertThat(payload.get("payload").get("expiredAt").asText())
                 .isEqualTo(NOW.plusSeconds(1).toString());
+    }
+
+    @Test
+    void postedDomainEventWritesPostedOutboxMessage() throws Exception {
+        OutboxEventRepository repository = mock(OutboxEventRepository.class);
+        AuthorizationOutboxAdapter adapter = adapter(repository);
+
+        adapter.append(new AuthorizationPostedDomainEvent(
+                UUID.randomUUID(),
+                "card-123",
+                money(),
+                NOW
+        ));
+
+        OutboxEvent event = insertedEvent(repository);
+        JsonNode payload = objectMapper.readTree(event.payload());
+        assertThat(event.eventType()).isEqualTo("authorization.posted");
+        assertThat(payload.get("eventType").asText())
+                .isEqualTo("authorization.posted");
+        assertThat(payload.get("payload").get("postedAt").asText())
+                .isEqualTo(NOW.toString());
     }
 
     private AuthorizationOutboxAdapter adapter(OutboxEventRepository repository) {

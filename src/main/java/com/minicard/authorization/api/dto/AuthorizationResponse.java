@@ -22,6 +22,7 @@ public record AuthorizationResponse(
         Instant createdAt,
         Instant decidedAt,
         Instant expiresAt,
+        Instant postedAt,
         Instant expiredAt
 ) {
 
@@ -37,6 +38,7 @@ public record AuthorizationResponse(
                 authorization.createdAt(),
                 authorization.decidedAt().orElse(null),
                 authorization.expiresAt().orElse(null),
+                authorization.postedAt().orElse(null),
                 authorization.expiredAt().orElse(null)
         );
     }

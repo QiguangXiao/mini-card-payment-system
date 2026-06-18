@@ -6,6 +6,7 @@ public record CreditAccountRow(
         String id,
         BigDecimal creditLimit,
         BigDecimal reservedAmount,
+        BigDecimal postedBalance,
         String currency,
         String status
 ) {

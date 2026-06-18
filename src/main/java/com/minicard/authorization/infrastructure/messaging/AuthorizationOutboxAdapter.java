@@ -14,6 +14,7 @@ import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
@@ -33,6 +34,7 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
     private static final String AUTHORIZATION_APPROVED = "authorization.approved";
     private static final String AUTHORIZATION_DECLINED = "authorization.declined";
     private static final String AUTHORIZATION_EXPIRED = "authorization.expired";
+    private static final String AUTHORIZATION_POSTED = "authorization.posted";
     private static final int EVENT_VERSION = 1;
 
     private final OutboxEventRepository outboxEventRepository;
@@ -88,6 +90,9 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
         if (event instanceof AuthorizationExpiredDomainEvent) {
             return AUTHORIZATION_EXPIRED;
         }
+        if (event instanceof AuthorizationPostedDomainEvent) {
+            return AUTHORIZATION_POSTED;
+        }
         throw new IllegalArgumentException("unsupported authorization domain event " + event.getClass());
     }
 
@@ -120,6 +125,15 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
             );
             payload.put("expiresAt", expired.expiresAt().toString());
             payload.put("expiredAt", expired.occurredAt().toString());
+            return payload;
+        }
+        if (event instanceof AuthorizationPostedDomainEvent posted) {
+            ObjectNode payload = payloadBase(
+                    posted.authorizationId(),
+                    posted.cardId(),
+                    posted.requestedAmount()
+            );
+            payload.put("postedAt", posted.occurredAt().toString());
             return payload;
         }
         throw new IllegalArgumentException("unsupported authorization domain event " + event.getClass());

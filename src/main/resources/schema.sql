@@ -2,12 +2,14 @@ CREATE TABLE IF NOT EXISTS credit_accounts (
     id CHAR(36) PRIMARY KEY,
     credit_limit DECIMAL(19, 2) NOT NULL,
     reserved_amount DECIMAL(19, 2) NOT NULL,
+    posted_balance DECIMAL(19, 2) NOT NULL,
     currency CHAR(3) NOT NULL,
     status VARCHAR(20) NOT NULL,
     CONSTRAINT chk_credit_accounts_limit_positive CHECK (credit_limit > 0),
     CONSTRAINT chk_credit_accounts_reserved_non_negative CHECK (reserved_amount >= 0),
-    CONSTRAINT chk_credit_accounts_reserved_within_limit CHECK (
-        reserved_amount <= credit_limit
+    CONSTRAINT chk_credit_accounts_posted_non_negative CHECK (posted_balance >= 0),
+    CONSTRAINT chk_credit_accounts_used_within_limit CHECK (
+        reserved_amount + posted_balance <= credit_limit
     )
 );
 
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS authorizations (
     created_at TIMESTAMP(6) NOT NULL,
     decided_at TIMESTAMP(6) NULL,
     expires_at TIMESTAMP(6) NULL,
+    posted_at TIMESTAMP(6) NULL,
     expired_at TIMESTAMP(6) NULL,
     CONSTRAINT uk_authorizations_idempotency_key UNIQUE (idempotency_key),
     INDEX idx_authorizations_card_created_at (card_id, created_at),
@@ -38,14 +41,45 @@ CREATE TABLE IF NOT EXISTS authorizations (
     CONSTRAINT chk_authorizations_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_authorizations_decision_state CHECK (
         (status = 'PENDING' AND decline_reason IS NULL AND decided_at IS NULL
-            AND expires_at IS NULL AND expired_at IS NULL)
+            AND expires_at IS NULL AND posted_at IS NULL AND expired_at IS NULL)
         OR (status = 'APPROVED' AND decline_reason IS NULL AND decided_at IS NOT NULL
-            AND expires_at IS NOT NULL AND expired_at IS NULL)
+            AND expires_at IS NOT NULL AND posted_at IS NULL AND expired_at IS NULL)
+        OR (status = 'POSTED' AND decline_reason IS NULL AND decided_at IS NOT NULL
+            AND expires_at IS NOT NULL AND posted_at IS NOT NULL AND expired_at IS NULL
+            AND posted_at <= expires_at)
         OR (status = 'DECLINED' AND decline_reason IS NOT NULL AND decided_at IS NOT NULL
-            AND expires_at IS NULL AND expired_at IS NULL)
+            AND expires_at IS NULL AND posted_at IS NULL AND expired_at IS NULL)
         OR (status = 'EXPIRED' AND decline_reason IS NULL AND decided_at IS NOT NULL
-            AND expires_at IS NOT NULL AND expired_at IS NOT NULL
+            AND expires_at IS NOT NULL AND posted_at IS NULL AND expired_at IS NOT NULL
             AND expired_at >= expires_at)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS card_transactions (
+    id CHAR(36) PRIMARY KEY,
+    network_transaction_id VARCHAR(100) NOT NULL,
+    authorization_id CHAR(36) NOT NULL,
+    card_id VARCHAR(100) NOT NULL,
+    credit_account_id CHAR(36) NOT NULL,
+    amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    presentment_received_at TIMESTAMP(6) NOT NULL,
+    posted_at TIMESTAMP(6) NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_card_transactions_network_transaction UNIQUE (network_transaction_id),
+    INDEX idx_card_transactions_authorization (authorization_id),
+    INDEX idx_card_transactions_card_posted_at (card_id, posted_at),
+    CONSTRAINT fk_card_transactions_authorization FOREIGN KEY (authorization_id)
+        REFERENCES authorizations (id),
+    CONSTRAINT fk_card_transactions_credit_account FOREIGN KEY (credit_account_id)
+        REFERENCES credit_accounts (id),
+    CONSTRAINT chk_card_transactions_amount_positive CHECK (amount > 0),
+    CONSTRAINT chk_card_transactions_status CHECK (status IN ('PENDING', 'POSTED')),
+    CONSTRAINT chk_card_transactions_posting_state CHECK (
+        (status = 'PENDING' AND posted_at IS NULL)
+        OR (status = 'POSTED' AND posted_at IS NOT NULL)
     )
 );
 
@@ -125,12 +159,12 @@ CREATE TABLE IF NOT EXISTS card_risk_features (
 );
 
 INSERT IGNORE INTO credit_accounts (
-    id, credit_limit, reserved_amount, currency, status
+    id, credit_limit, reserved_amount, posted_balance, currency, status
 ) VALUES
-    ('11111111-1111-1111-1111-111111111111', 100000.00, 0.00, 'JPY', 'ACTIVE'),
-    ('22222222-2222-2222-2222-222222222222', 5000.00, 0.00, 'JPY', 'ACTIVE'),
-    ('33333333-3333-3333-3333-333333333333', 100000.00, 0.00, 'JPY', 'BLOCKED'),
-    ('44444444-4444-4444-4444-444444444444', 1000.00, 0.00, 'USD', 'ACTIVE');
+    ('11111111-1111-1111-1111-111111111111', 100000.00, 0.00, 0.00, 'JPY', 'ACTIVE'),
+    ('22222222-2222-2222-2222-222222222222', 5000.00, 0.00, 0.00, 'JPY', 'ACTIVE'),
+    ('33333333-3333-3333-3333-333333333333', 100000.00, 0.00, 0.00, 'JPY', 'BLOCKED'),
+    ('44444444-4444-4444-4444-444444444444', 1000.00, 0.00, 0.00, 'USD', 'ACTIVE');
 
 INSERT IGNORE INTO cards (id, credit_account_id, status) VALUES
     ('card-123', '11111111-1111-1111-1111-111111111111', 'ACTIVE'),

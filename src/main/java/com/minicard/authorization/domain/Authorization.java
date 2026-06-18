@@ -12,9 +12,10 @@ import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationExpiredDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 
 /**
- * 授权 aggregate root，表达一笔 card authorization 从 PENDING 到 APPROVED/DECLINED/EXPIRED 的生命周期。
+ * 授权 aggregate root，表达一笔 card authorization 从 PENDING 到 APPROVED/POSTED/DECLINED/EXPIRED 的生命周期。
  *
  * <p>面试重点：状态转换(state transition)放在 domain 内部，service 只能调用
  * approve/decline/expire 这些业务行为，不能绕过 invariant 直接改字段。</p>
@@ -37,6 +38,8 @@ public final class Authorization {
     private Instant decidedAt;
     // expiresAt 是显式 business deadline，不从 decidedAt 动态重算，方便 audit/replay。
     private Instant expiresAt;
+    // postedAt 表示 issuer 已收到 presentment 并把交易 posted to account。
+    private Instant postedAt;
     // expiredAt 表示 scheduler 实际完成释放的时间，可能晚于 expiresAt；定时任务是 eventual execution。
     private Instant expiredAt;
     // Domain event buffer 只存在于内存中：状态转换在哪里发生，业务事实就在哪里产生。
@@ -53,6 +56,7 @@ public final class Authorization {
             Instant createdAt,
             Instant decidedAt,
             Instant expiresAt,
+            Instant postedAt,
             Instant expiredAt
     ) {
         this.id = Objects.requireNonNull(id);
@@ -67,6 +71,7 @@ public final class Authorization {
         this.createdAt = Objects.requireNonNull(createdAt);
         this.decidedAt = decidedAt;
         this.expiresAt = expiresAt;
+        this.postedAt = postedAt;
         this.expiredAt = expiredAt;
         validateDecisionState();
     }
@@ -89,6 +94,7 @@ public final class Authorization {
                 createdAt,
                 null,
                 null,
+                null,
                 null
         );
     }
@@ -103,6 +109,7 @@ public final class Authorization {
             Instant createdAt,
             Instant decidedAt,
             Instant expiresAt,
+            Instant postedAt,
             Instant expiredAt
     ) {
         return new Authorization(
@@ -115,6 +122,7 @@ public final class Authorization {
                 createdAt,
                 decidedAt,
                 expiresAt,
+                postedAt,
                 expiredAt
         );
     }
@@ -126,6 +134,7 @@ public final class Authorization {
         declineReason = null;
         decidedAt = Objects.requireNonNull(decisionTime);
         expiresAt = decisionTime.plus(HOLD_DURATION);
+        postedAt = null;
         expiredAt = null;
         // APPROVED 事件由 aggregate 自己记录，不让 application service 反向推断 domain fact。
         domainEvents.add(new AuthorizationApprovedDomainEvent(
@@ -144,6 +153,7 @@ public final class Authorization {
         declineReason = Objects.requireNonNull(reason);
         decidedAt = Objects.requireNonNull(decisionTime);
         expiresAt = null;
+        postedAt = null;
         expiredAt = null;
         // DECLINED 是一次真实业务决策；事件跟随状态转换生成，符合 DDD domain event 语义。
         domainEvents.add(new AuthorizationDeclinedDomainEvent(
@@ -171,6 +181,25 @@ public final class Authorization {
                 requestedAmount,
                 expiresAt,
                 expiredAt
+        ));
+    }
+
+    public void post(Instant postingTime) {
+        // POSTED 是 issuer 视角：presentment 到达后，这笔授权从“占额度”变成“已入账交易”。
+        ensureApproved("post");
+        Instant actualPostingTime = Objects.requireNonNull(postingTime);
+        if (actualPostingTime.isAfter(expiresAt)) {
+            throw new IllegalStateException("authorization cannot be posted after expiresAt");
+        }
+        status = AuthorizationStatus.POSTED;
+        postedAt = actualPostingTime;
+        expiredAt = null;
+        // POSTED 事件同样由 aggregate 产生，service 只负责事务内持久化和交给 Outbox。
+        domainEvents.add(new AuthorizationPostedDomainEvent(
+                id,
+                cardId,
+                requestedAmount,
+                postedAt
         ));
     }
 
@@ -202,22 +231,28 @@ public final class Authorization {
         // restore() 从 DB 还原时也会跑这段 validation，避免脏数据绕过 domain invariant。
         if (status == AuthorizationStatus.PENDING
                 && (declineReason != null || decidedAt != null
-                || expiresAt != null || expiredAt != null)) {
+                || expiresAt != null || postedAt != null || expiredAt != null)) {
             throw new IllegalArgumentException("pending authorization cannot have a decision");
         }
         if (status == AuthorizationStatus.APPROVED
                 && (declineReason != null || decidedAt == null
-                || expiresAt == null || expiredAt != null)) {
+                || expiresAt == null || postedAt != null || expiredAt != null)) {
             throw new IllegalArgumentException("approved authorization has invalid decision data");
+        }
+        if (status == AuthorizationStatus.POSTED
+                && (declineReason != null || decidedAt == null
+                || expiresAt == null || postedAt == null || expiredAt != null
+                || postedAt.isAfter(expiresAt))) {
+            throw new IllegalArgumentException("posted authorization has invalid posting data");
         }
         if (status == AuthorizationStatus.DECLINED
                 && (declineReason == null || decidedAt == null
-                || expiresAt != null || expiredAt != null)) {
+                || expiresAt != null || postedAt != null || expiredAt != null)) {
             throw new IllegalArgumentException("declined authorization requires decision data");
         }
         if (status == AuthorizationStatus.EXPIRED
                 && (declineReason != null || decidedAt == null
-                || expiresAt == null || expiredAt == null
+                || expiresAt == null || postedAt != null || expiredAt == null
                 || expiredAt.isBefore(expiresAt))) {
             throw new IllegalArgumentException("expired authorization has invalid expiry data");
         }
@@ -264,6 +299,10 @@ public final class Authorization {
 
     public Optional<Instant> expiresAt() {
         return Optional.ofNullable(expiresAt);
+    }
+
+    public Optional<Instant> postedAt() {
+        return Optional.ofNullable(postedAt);
     }
 
     public Optional<Instant> expiredAt() {

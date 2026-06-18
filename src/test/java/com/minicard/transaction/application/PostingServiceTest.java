@@ -1,0 +1,207 @@
+package com.minicard.transaction.application;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Currency;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+
+import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
+import com.minicard.authorization.domain.Authorization;
+import com.minicard.authorization.domain.AuthorizationRepository;
+import com.minicard.authorization.domain.AuthorizationStatus;
+import com.minicard.authorization.domain.Money;
+import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
+import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
+import com.minicard.card.domain.Card;
+import com.minicard.card.domain.CardRepository;
+import com.minicard.card.domain.CardStatus;
+import com.minicard.creditaccount.domain.CreditAccount;
+import com.minicard.creditaccount.domain.CreditAccountRepository;
+import com.minicard.creditaccount.domain.CreditAccountStatus;
+import com.minicard.transaction.domain.CardTransaction;
+import com.minicard.transaction.domain.CardTransactionRepository;
+import com.minicard.transaction.domain.CardTransactionStatus;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class PostingServiceTest {
+
+    private static final Instant NOW = Instant.parse("2026-06-19T00:00:00Z");
+
+    private CardTransactionRepository transactionRepository;
+    private AuthorizationRepository authorizationRepository;
+    private CardRepository cardRepository;
+    private CreditAccountRepository creditAccountRepository;
+    private AuthorizationDomainEventPublisher eventPublisher;
+    private PostingService service;
+
+    @BeforeEach
+    void setUp() {
+        transactionRepository = mock(CardTransactionRepository.class);
+        authorizationRepository = mock(AuthorizationRepository.class);
+        cardRepository = mock(CardRepository.class);
+        creditAccountRepository = mock(CreditAccountRepository.class);
+        eventPublisher = mock(AuthorizationDomainEventPublisher.class);
+        service = new PostingService(
+                transactionRepository,
+                authorizationRepository,
+                cardRepository,
+                creditAccountRepository,
+                eventPublisher,
+                Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+    }
+
+    @Test
+    void postsApprovedAuthorizationIntoCardTransaction() {
+        UUID accountId = UUID.randomUUID();
+        Authorization authorization = approvedAuthorization("card-123", "100.00");
+        CreditAccount account = account(accountId, "1000.00", "100.00", "0.00");
+        arrangeNewPresentment();
+        when(authorizationRepository.findByIdForUpdate(authorization.id()))
+                .thenReturn(Optional.of(authorization));
+        when(cardRepository.findById("card-123"))
+                .thenReturn(Optional.of(new Card("card-123", accountId, CardStatus.ACTIVE)));
+        when(creditAccountRepository.findByIdForUpdate(accountId)).thenReturn(Optional.of(account));
+
+        CardTransaction transaction = service.post(command(authorization.id(), "100.00"));
+
+        assertThat(transaction.status()).isEqualTo(CardTransactionStatus.POSTED);
+        assertThat(authorization.status()).isEqualTo(AuthorizationStatus.POSTED);
+        assertThat(account.reservedAmount().amount()).isEqualByComparingTo("0.00");
+        assertThat(account.postedBalance().amount()).isEqualByComparingTo("100.00");
+        verify(creditAccountRepository).update(account);
+        verify(authorizationRepository).update(authorization);
+        verify(transactionRepository).update(transaction);
+        ArgumentCaptor<AuthorizationDomainEvent> event =
+                ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
+        verify(eventPublisher).append(event.capture());
+        assertThat(event.getValue()).isInstanceOf(AuthorizationPostedDomainEvent.class);
+    }
+
+    @Test
+    void returnsExistingPostedTransactionForIdempotentRetry() {
+        UUID accountId = UUID.randomUUID();
+        Authorization authorization = approvedAuthorization("card-123", "100.00");
+        CardTransaction existing = postedTransaction(authorization.id(), accountId);
+        when(authorizationRepository.findByIdForUpdate(authorization.id()))
+                .thenReturn(Optional.of(authorization));
+        when(cardRepository.findById("card-123"))
+                .thenReturn(Optional.of(new Card("card-123", accountId, CardStatus.ACTIVE)));
+        when(transactionRepository.claim(any())).thenReturn(false);
+        when(transactionRepository.findByNetworkTransactionIdForUpdate("ntx-001"))
+                .thenReturn(Optional.of(existing));
+
+        CardTransaction result = service.post(command(authorization.id(), "100.00"));
+
+        assertThat(result).isSameAs(existing);
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(authorizationRepository, never()).update(any());
+        verify(transactionRepository, never()).update(any());
+        verify(eventPublisher, never()).append(any());
+    }
+
+    @Test
+    void rejectsPresentmentWhenAuthorizationIsNotApproved() {
+        UUID authorizationId = UUID.randomUUID();
+        Authorization authorization = Authorization.restore(
+                authorizationId,
+                "fingerprint",
+                "card-123",
+                money("100.00"),
+                AuthorizationStatus.EXPIRED,
+                null,
+                NOW.minusSeconds(10),
+                NOW.minusSeconds(9),
+                NOW.minusSeconds(1),
+                null,
+                NOW
+        );
+        arrangeNewPresentment();
+        when(authorizationRepository.findByIdForUpdate(authorizationId))
+                .thenReturn(Optional.of(authorization));
+        when(cardRepository.findById("card-123"))
+                .thenReturn(Optional.of(new Card("card-123", UUID.randomUUID(), CardStatus.ACTIVE)));
+
+        assertThatThrownBy(() -> service.post(command(authorizationId, "100.00")))
+                .isInstanceOf(PresentmentRejectedException.class)
+                .hasMessageContaining("authorization must be APPROVED");
+    }
+
+    private void arrangeNewPresentment() {
+        AtomicReference<CardTransaction> claimed = new AtomicReference<>();
+        when(transactionRepository.claim(any())).thenAnswer(invocation -> {
+            claimed.set(invocation.getArgument(0));
+            return true;
+        });
+        when(transactionRepository.findByNetworkTransactionIdForUpdate("ntx-001"))
+                .thenAnswer(invocation -> Optional.of(claimed.get()));
+    }
+
+    private PostPresentmentCommand command(UUID authorizationId, String amount) {
+        return new PostPresentmentCommand(
+                "ntx-001",
+                authorizationId,
+                new BigDecimal(amount),
+                Currency.getInstance("JPY")
+        );
+    }
+
+    private Authorization approvedAuthorization(String cardId, String amount) {
+        Authorization authorization = Authorization.request(
+                "fingerprint",
+                cardId,
+                money(amount),
+                NOW.minusSeconds(10)
+        );
+        authorization.approve(NOW.minusSeconds(9));
+        authorization.pullDomainEvents();
+        return authorization;
+    }
+
+    private CreditAccount account(
+            UUID id,
+            String limit,
+            String reserved,
+            String posted
+    ) {
+        return CreditAccount.restore(
+                id,
+                money(limit),
+                money(reserved),
+                money(posted),
+                CreditAccountStatus.ACTIVE
+        );
+    }
+
+    private CardTransaction postedTransaction(UUID authorizationId, UUID accountId) {
+        CardTransaction transaction = CardTransaction.pending(
+                "ntx-001",
+                authorizationId,
+                "card-123",
+                accountId,
+                money("100.00"),
+                NOW.minusSeconds(1)
+        );
+        transaction.markPosted(NOW);
+        return transaction;
+    }
+
+    private Money money(String amount) {
+        return new Money(new BigDecimal(amount), Currency.getInstance("JPY"));
+    }
+}

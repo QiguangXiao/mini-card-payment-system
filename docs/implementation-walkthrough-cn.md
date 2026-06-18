@@ -34,6 +34,7 @@
 - `request_fingerprint`：由 `AuthorizationCommand.requestFingerprint()` 计算，用来判断重试请求是否完全相同。
 - `status`：`PENDING`、`APPROVED`、`DECLINED`、`EXPIRED`。
 - `expires_at`：授权批准后生成的 7 天后过期时间。
+- `posted_at`：presentment 入账后，授权从 hold 变成 posted transaction 的时间。
 - `expired_at`：定时任务实际完成过期处理的时间。
 
 ### `credit_accounts`
@@ -42,11 +43,35 @@
 
 核心字段：
 
-- `credit_limit_amount`：总额度。
-- `reserved_amount`：已预占但尚未 capture 或释放的额度。
+- `credit_limit`：总额度。
+- `reserved_amount`：已预占但尚未 posting 或释放的额度。
+- `posted_balance`：已经入账、会进入未来账单的消费余额。
 - `status`：账户是否可用。
 
-当前授权只做 reserve/release，不做 capture。
+当前额度公式：
+
+```text
+availableCredit = creditLimit - reservedAmount - postedBalance
+```
+
+授权阶段增加 `reservedAmount`；presentment posting 阶段把金额从 `reservedAmount` 移到 `postedBalance`。
+
+### `card_transactions`
+
+保存持卡人可见的交易流水。
+
+核心字段：
+
+- `id`：card transaction id，由 `CardTransaction.pending(...)` 内部生成 UUID。
+- `network_transaction_id`：外部网络/clearing 侧交易 id，也是 presentment 幂等键。
+- `authorization_id`：对应原授权。
+- `card_id` / `credit_account_id`：方便查询卡片明细和账户明细。
+- `amount` / `currency`：入账金额。
+- `status`：`PENDING`、`POSTED`。
+- `presentment_received_at`：系统收到 presentment 的时间。
+- `posted_at`：完成账户入账的时间。
+
+这里的 `CardTransaction` 是用户流水，不是完整会计 ledger。
 
 ### `delay_jobs`
 
@@ -270,14 +295,14 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 - `APPROVED` 和 `DECLINED` 是不同业务事实，不应该靠 `isDeclined` 或 status 字段让 consumer 猜。
 - Consumer 可以按 `eventType` 只处理自己关心的事件。
-- 未来新增 capture、reversal、reconciliation 时，可以继续增加明确事件类型。
+- 未来新增 posted、reversal、reconciliation 时，可以继续增加明确事件类型。
 - 不同事件的 payload 可以不同，例如 declined 有 `declineReason`，approved 有 `expiresAt`。
 
 消费者如何处理多种事件：
 
 - `IntegrationEventReader` 是共享 transport reader，只负责读取 JSON envelope、校验 header，并返回 JsonNode payload。
 - Notification/Risk listener 显式处理 `authorization.approved` 和 `authorization.declined`，直接从 payload 读取自己需要的字段。
-- 如果未来同一 topic 出现 `authorization.captured`，当前 consumer 可以直接跳过。
+- 如果未来同一 topic 出现 `authorization.posted`，当前 consumer 可以直接跳过。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
 为什么不在这里直接发 Kafka：
@@ -311,7 +336,135 @@ curl -X POST http://localhost:8080/api/authorizations \
 - `delay_jobs`：如果批准，新增 `AUTHORIZATION_EXPIRY/PENDING`。
 - `outbox_events`：新增 `authorization.approved/PENDING` 或 `authorization.declined/PENDING`。
 
-## 4. 核心流程二：Outbox 发布消息
+## 4. 核心流程二：Presentment Posting 交易入账
+
+当前业务目标：
+
+- 授权批准只是 hold 额度，真实信用卡后台还需要处理商户/网络提交的 presentment。
+- 在 issuer 视角，这一步最准确的名字是 posting：把交易 posted to account。
+- 本项目 API 使用 `Presentment` 命名输入，用 `PostingService` 表达发卡行入账用例。
+
+示例请求：
+
+```bash
+curl -X POST http://localhost:8080/api/presentments \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "networkTransactionId": "ntx-001",
+    "authorizationId": "fb6933e2-20ea-4268-b1c2-21c6705b1884",
+    "amount": 1000.00,
+    "currency": "JPY"
+  }'
+```
+
+入口：
+
+- `PresentmentController.postPresentment(...)`
+- `PostPresentmentCommand`
+- `PostingService.post(command)`
+- `CardTransactionRepository.claim(transaction)`
+- `Authorization.post(now)`
+- `CreditAccount.postAuthorized(amount)`
+
+### 4.1 为什么叫 Presentment + Posting
+
+- `Presentment`：外部网络/商户把已授权交易正式提交给发卡行。
+- `Posting`：发卡行把这笔交易计入持卡人账户，形成用户可见的 `CardTransaction`。
+- `Capture` 更偏商户/收单侧语言，不适合作为 PayPay Card issuer backend 的主模块名。
+- `Settlement` 是资金清算，不等于持卡人账户入账，本阶段不把它混进来。
+
+### 4.2 PostingService transaction boundary
+
+关键顺序：
+
+1. `authorizationRepository.findByIdForUpdate(authorizationId)`
+
+   先锁住 authorization row。
+   这样同一笔授权不会被两个不同 presentment 同时 posted。
+
+2. `CardTransaction.pending(...)`
+
+   创建 `PENDING` 交易流水，`id = UUID.randomUUID()`。
+   这里的 `networkTransactionId` 是外部网络交易 id，也是 presentment idempotency key。
+
+3. `transactionRepository.claim(transaction)`
+
+   先插入 `card_transactions`，依赖 `network_transaction_id` 唯一索引抢占幂等所有权。
+   如果 duplicate retry 已经存在同一条 posted transaction，就直接返回已有结果，不重复改余额。
+
+4. 校验 authorization
+
+   当前阶段只支持 full presentment：
+
+   - authorization 必须是 `APPROVED`。
+   - presentment amount/currency 必须等于 authorization amount/currency。
+
+   partial presentment 会引入 remaining hold，后续可以扩展，但现在先不提前复杂化。
+
+5. `creditAccountRepository.findByIdForUpdate(accountId)`
+
+   锁住账户 row。
+   这让 posting 和新的 authorization reserve 在同一个账户上串行化。
+
+6. `account.postAuthorized(amount)`
+
+   状态变化：
+
+   ```text
+   reservedAmount -= amount
+   postedBalance += amount
+   ```
+
+   注意 available credit 不会因为 full posting 改变，因为它只是从 hold 额度变成已入账余额：
+
+   ```text
+   before: creditLimit - reservedAmount - postedBalance
+   after : creditLimit - (reservedAmount - amount) - (postedBalance + amount)
+   ```
+
+7. `authorization.post(now)`
+
+   状态变化：
+
+   ```text
+   APPROVED -> POSTED
+   postedAt = now
+   ```
+
+   `Authorization` aggregate 自己记录 `AuthorizationPostedDomainEvent`。
+
+8. `transaction.markPosted(now)`
+
+   状态变化：
+
+   ```text
+   CardTransaction PENDING -> POSTED
+   postedAt = now
+   ```
+
+9. 同一事务内提交
+
+   - `credit_accounts.reserved_amount` 减少。
+   - `credit_accounts.posted_balance` 增加。
+   - `authorizations.status = POSTED`。
+   - `card_transactions.status = POSTED`。
+   - `outbox_events` 新增 `authorization.posted/PENDING`。
+
+为什么这一阶段不做完整 ledger：
+
+- `CardTransaction` 是用户流水，用于 APP 明细、账单和客服查询。
+- `Ledger` 是内部会计账本，通常需要 double-entry、accounting account、journal balance 校验。
+- `Reconciliation` 是把内部记录和外部文件/资金清算结果对比，发现 missing/duplicate/amount mismatch。
+- 现在先把 posted transaction 和账户余额做对，后续再基于它增加 minimal ledger 和 reconciliation。
+
+PayPay Card 面试提示：
+
+- issuer backend 里 authorization 和 posting 是两段生命周期，不能混成一个状态。
+- `networkTransactionId` 是外部幂等键，能防止 presentment retry 造成 double posting。
+- `Authorization` row lock 防止同一授权被多次入账；`CreditAccount` row lock 防止账户余额并发错算。
+- 本阶段把 settlement 留到后面，是因为 settlement 处理资金清算，不是用户账户入账。
+
+## 5. 核心流程三：Outbox 发布消息
 
 入口：
 
@@ -388,7 +541,7 @@ curl -X POST http://localhost:8080/api/authorizations \
 - 下游 consumer 必须用 `eventId` 做幂等。
 - `processingTimeoutSeconds` 应大于正常 Kafka send timeout，避免健康 publisher 被过早认为失联。
 
-### 4.1 消息可靠性结构说明
+### 5.1 消息可靠性结构说明
 
 当前消息相关代码分成 5 组：
 
@@ -416,11 +569,11 @@ PayPay Card 面试提示：
 - `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
 - `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
 
-## 5. 核心流程三：DelayJob 自动过期授权
+## 6. 核心流程四：DelayJob 自动过期授权
 
 当前业务目标：
 
-- 7 天内没有 capture 的 approved authorization，需要自动撤销 hold，并恢复额度。
+- 7 天内没有 posting 的 approved authorization，需要自动撤销 hold，并恢复额度。
 
 入口：
 
@@ -452,7 +605,7 @@ PayPay Card 面试提示：
 - `DelayJob` 的状态机很重要，但它描述的是执行计划的 lease/retry/DONE/DEAD，不是信用卡业务规则。
 - 包结构压平后，业务领域仍在 `authorization/card/creditaccount`，共享机制则直接放在 `delayjob`。
 
-### 5.1 Poll and claim batch
+### 6.1 Poll and claim batch
 
 关键方法：
 
@@ -474,7 +627,7 @@ PayPay Card 面试提示：
 - lease 到期后，`DelayJobRecoverer` 会把 job 恢复成可 retry 状态。
 - worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
-### 5.2 Worker dispatch handler
+### 6.2 Worker dispatch handler
 
 关键方法：
 
@@ -495,7 +648,7 @@ PayPay Card 面试提示：
 - 新增 handler。
 - 新增业务 scheduler adapter。
 
-### 5.3 Business transaction
+### 6.3 Business transaction
 
 入口：
 
@@ -545,7 +698,7 @@ PayPay Card 面试提示：
    - `authorizations.status = EXPIRED`。
    - `AuthorizationExpiryService` 从 aggregate 拉取 domain event，`outbox_events` 新增 `authorization.expired/PENDING`。
 
-### 5.4 Worker mark done or failed
+### 6.4 Worker mark done or failed
 
 回到：
 
@@ -571,7 +724,7 @@ PayPay Card 面试提示：
 - 失败记录单独提交，避免错误信息跟业务 rollback 一起消失。
 - worker 成功后自己 finalize，保证 `DONE` 一定发生在业务处理之后。
 
-### 5.5 Recover stuck PROCESSING jobs
+### 6.5 Recover stuck PROCESSING jobs
 
 入口：
 
@@ -591,7 +744,7 @@ PayPay Card 面试提示：
 - recoverer 只关心 worker/pod 宕机或超时留下的 stuck lease。
 - 这让正常执行路径和故障恢复路径都更容易解释。
 
-## 6. 核心流程四：查询授权
+## 7. 核心流程五：查询授权
 
 示例请求：
 
@@ -615,15 +768,16 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 这个接口适合观察状态变化：
 
 - 创建后可能是 `APPROVED`。
+- presentment posting 后会变成 `POSTED`。
 - 7 天过期任务执行后会变成 `EXPIRED`。
 
-## 7. Outbox vs DelayJob 对比
+## 8. Outbox vs DelayJob 对比
 
 | 项目 | Outbox | DelayJob |
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
 | 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
@@ -636,7 +790,7 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 - Outbox 表保存“我要告诉别人发生了什么”。
 - DelayJob 表保存“未来我要自己做一件业务动作”。
 
-## 8. 面试容易追问的点
+## 9. 面试容易追问的点
 
 ### 为什么不用 Java `synchronized` 控制额度？
 
@@ -659,8 +813,18 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 ### 为什么 delay job 表不能直接代表授权是否过期？
 
 因为 delay job 是执行计划，不是业务事实。
-真正的业务事实在 `authorizations.status` 和 `credit_accounts.reserved_amount`。
+真正的业务事实在 `authorizations.status`、`credit_accounts.reserved_amount` 和 `credit_accounts.posted_balance`。
 job 可以失败、重试、被人工修复，但业务表必须始终是 source of truth。
+
+### 流水、ledger、对账是一个东西吗？
+
+不是。
+
+- `CardTransaction` 是用户流水，回答“持卡人看到哪笔消费”。
+- `Ledger` 是内部会计账本，回答“财务科目怎样借贷变化”。
+- `Reconciliation` 是运营/批处理流程，回答“内部记录和外部文件/资金结果是否一致”。
+
+当前阶段先做 `CardTransaction`，因为没有 posted transaction 就没有账单、还款、ledger 和对账的可靠基础。
 
 ### 为什么 Outbox 和 DelayJob 分开？
 
@@ -681,11 +845,12 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 - `authorization.approved`
 - `authorization.declined`
+- `authorization.posted`
 - `authorization.expired`
 
 所以 event id 是事件本身的唯一标识，authorization id 是 aggregate 标识。
 
-## 9. Spring 和 MyBatis 语法速查
+## 10. Spring 和 MyBatis 语法速查
 
 ### `@RestController`
 
@@ -698,7 +863,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 ### `@Transactional`
 
 声明事务边界。
-当前最关键的是 `AuthorizationService.authorize()` 和 `AuthorizationExpiryService.expire()`。
+当前最关键的是 `AuthorizationService.authorize()`、`PostingService.post()` 和 `AuthorizationExpiryService.expire()`。
 
 ### `@Transactional(readOnly = true)`
 
@@ -740,14 +905,14 @@ FOR UPDATE SKIP LOCKED
 `FOR UPDATE` 锁住选中的 row。
 `SKIP LOCKED` 让并发 worker 跳过别人已经锁住的 row。
 
-## 10. 后续学习建议
+## 11. 后续学习建议
 
 当前实现已经适合学习面试核心点。
 如果继续扩展，建议按这个顺序：
 
 1. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
-2. 增加 capture 流程，让 approved authorization 可以被正式入账。
-3. 增加 reservation ledger，记录每次 reserve/release/capture 的明细。
+2. 增加 minimal ledger，记录 posting 对内部会计账本的影响。
+3. 增加 reconciliation，对比内部 posted transaction 和外部清算/资金文件。
 4. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
 5. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
 6. 补充少量并发测试，验证同账户多个授权不会超额。

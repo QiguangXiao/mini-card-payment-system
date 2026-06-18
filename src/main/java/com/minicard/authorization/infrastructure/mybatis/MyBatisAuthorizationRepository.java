@@ -80,6 +80,7 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
                 authorization.createdAt(),
                 authorization.decidedAt().orElse(null),
                 authorization.expiresAt().orElse(null),
+                authorization.postedAt().orElse(null),
                 authorization.expiredAt().orElse(null)
         );
     }
@@ -95,6 +96,7 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
                 row.createdAt(),
                 row.decidedAt(),
                 row.expiresAt(),
+                row.postedAt(),
                 row.expiredAt()
         );
     }
