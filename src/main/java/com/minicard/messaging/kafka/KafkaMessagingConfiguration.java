@@ -36,6 +36,16 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
+    public NewTopic transactionEventsTopic(KafkaTopicsProperties properties) {
+        // CardTransaction 是用户可见交易流水；单独 topic 让未来 notification 微服务
+        // 可以只订阅交易事实，不需要理解 authorization 内部生命周期。
+        return TopicBuilder.name(properties.transactionEvents())
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         return deadLetterTopic(properties.notificationDeadLetter());
     }

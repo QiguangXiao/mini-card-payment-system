@@ -13,6 +13,20 @@ class NotificationTest {
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");
 
     @Test
+    void createsPostedNotificationTypeFromAuthorizationEvent() {
+        Notification notification = Notification.requestFromAuthorizationEvent(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "card-123",
+                NotificationType.CARD_TRANSACTION_POSTED,
+                NOW
+        );
+
+        assertThat(notification.type()).isEqualTo(NotificationType.CARD_TRANSACTION_POSTED);
+        assertThat(notification.status()).isEqualTo(NotificationStatus.PENDING);
+    }
+
+    @Test
     void exhaustsDeliveryAttemptsInsideAggregate() {
         Notification notification = notification();
 
@@ -38,11 +52,11 @@ class NotificationTest {
     }
 
     private Notification notification() {
-        return Notification.requestAuthorizationDecision(
+        return Notification.requestFromAuthorizationEvent(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 "card-123",
-                true,
+                NotificationType.AUTHORIZATION_APPROVED,
                 NOW
         );
     }

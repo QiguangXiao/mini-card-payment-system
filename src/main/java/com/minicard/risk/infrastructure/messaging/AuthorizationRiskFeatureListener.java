@@ -33,8 +33,8 @@ public class AuthorizationRiskFeatureListener {
             containerFactory = "riskFeatureKafkaListenerContainerFactory"
     )
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
-        // Listener 显式处理自己关心的事件类型；未来新增 authorization.posted 时，
-        // 未订阅的 consumer 可以直接跳过，不会把“合法但不关心”的事件送进 DLT。
+        // Listener 显式处理自己关心的事件类型；authorization.posted 等合法但无关的事件
+        // 直接跳过，不会把“不感兴趣”误判成坏消息送进 DLT。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {

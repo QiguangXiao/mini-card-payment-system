@@ -5,8 +5,10 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import com.minicard.notification.domain.Notification;
 import com.minicard.notification.domain.NotificationRepository;
+import com.minicard.notification.domain.NotificationType;
 import org.junit.jupiter.api.Test;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -21,12 +23,16 @@ class RequestAuthorizationNotificationServiceTest {
 
     @Test
     void duplicateDeliveryDoesNotCreateAnotherNotification() {
+        ConsumerInboxRepository inboxRepository = mock(ConsumerInboxRepository.class);
         NotificationRepository repository = mock(NotificationRepository.class);
-        when(repository.insertIfAbsent(any(Notification.class)))
+        when(inboxRepository.claim(any(), any(), any()))
                 .thenReturn(true)
                 .thenReturn(false);
+        when(repository.insertIfAbsent(any(Notification.class)))
+                .thenReturn(true);
         RequestAuthorizationNotificationService service =
                 new RequestAuthorizationNotificationService(
+                        inboxRepository,
                         repository,
                         Clock.fixed(NOW, ZoneOffset.UTC)
                 );
@@ -35,9 +41,10 @@ class RequestAuthorizationNotificationServiceTest {
         service.request(command);
         service.request(command);
 
-        // The unique source_event_id constraint is the real concurrency boundary;
-        // both deliveries may attempt INSERT, but only one aggregate is created.
-        verify(repository, times(2)).insertIfAbsent(any(Notification.class));
+        // Inbox claim 是第一道 consumer-side idempotency 边界；
+        // duplicate delivery 不会继续创建第二条 notification request。
+        verify(inboxRepository, times(2)).claim(any(), any(), any());
+        verify(repository, times(1)).insertIfAbsent(any(Notification.class));
     }
 
     private RequestAuthorizationNotificationCommand approvedCommand() {
@@ -45,7 +52,7 @@ class RequestAuthorizationNotificationServiceTest {
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 "card-123",
-                true
+                NotificationType.AUTHORIZATION_APPROVED
         );
     }
 }

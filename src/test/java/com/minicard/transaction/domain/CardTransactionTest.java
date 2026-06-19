@@ -6,6 +6,7 @@ import java.util.Currency;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
+import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,6 +23,10 @@ class CardTransactionTest {
 
         assertThat(transaction.status()).isEqualTo(CardTransactionStatus.POSTED);
         assertThat(transaction.postedAt()).isEqualTo(NOW.plusSeconds(1));
+        assertThat(transaction.pullDomainEvents())
+                .hasSize(1)
+                .first()
+                .isInstanceOf(CardTransactionPostedDomainEvent.class);
     }
 
     @Test

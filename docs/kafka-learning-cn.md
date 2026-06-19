@@ -288,12 +288,17 @@ spring:
 
 ## 5. Topic 和 partition 配置
 
-### 5.1 authorization events topic
+### 5.1 authorization / transaction events topics
 
 代码：
 
 ```java
 TopicBuilder.name(properties.authorizationEvents())
+        .partitions(3)
+        .replicas(1)
+        .build();
+
+TopicBuilder.name(properties.transactionEvents())
         .partitions(3)
         .replicas(1)
         .build();
@@ -305,16 +310,24 @@ TopicBuilder.name(properties.authorizationEvents())
 messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
+    transaction-events: mini-card.transaction-events.v1
 ```
 
 作用：
 
-- 所有 authorization lifecycle events 先放在一个 topic。
-- 当前事件包括：
+- authorization lifecycle events 放在 authorization topic：
   - `authorization.approved`
   - `authorization.declined`
   - `authorization.posted`
   - `authorization.expired`
+- 用户可见交易流水事件放在 transaction topic：
+  - `card_transaction.posted`
+
+为什么拆出 transaction topic：
+
+- `authorization.posted` 表达授权 hold 被 presentment 消耗。
+- `card_transaction.posted` 表达用户可见交易已经入账，Notification 更应该消费这个事实。
+- 生产中 Notification 很可能是独立微服务；它可以订阅 authorization decision 和 transaction posted 两类 contract，而不依赖本工程里的 domain class。
 
 为什么 topic 名带 `.v1`：
 
@@ -446,7 +459,7 @@ errorHandler.addNotRetryableExceptions(EventContractException.class);
 DLT topic：
 
 ```yaml
-mini-card.authorization-notification.dlt.v1
+mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
 ```
 

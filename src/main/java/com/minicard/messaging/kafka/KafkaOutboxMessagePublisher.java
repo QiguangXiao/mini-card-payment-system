@@ -52,9 +52,15 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
     }
 
     private String topicFor(String eventType) {
-        // 当前学习项目先用一个 Authorization topic 承载多种 eventType。
-        // 什么时候拆 topic，应该由吞吐、权限、retention 等真实需求决定。
-        return topics.authorizationEvents();
+        // Outbox 是通用 reliable delivery 机制；topic routing 属于 Kafka adapter。
+        // 这里按业务事实所属上下文拆 topic，避免把 card_transaction 事件塞进 authorization topic。
+        if (eventType.startsWith("authorization.")) {
+            return topics.authorizationEvents();
+        }
+        if (eventType.startsWith("card_transaction.")) {
+            return topics.transactionEvents();
+        }
+        throw new IllegalArgumentException("unsupported integration event type " + eventType);
     }
 
     private void addHeader(ProducerRecord<String, String> record, String name, String value) {

@@ -5,6 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "messaging.topics")
 public record KafkaTopicsProperties(
         String authorizationEvents,
+        String transactionEvents,
         String notificationDeadLetter,
         String riskFeatureDeadLetter
 ) {

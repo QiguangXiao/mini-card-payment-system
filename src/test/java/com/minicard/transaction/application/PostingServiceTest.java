@@ -25,6 +25,8 @@ import com.minicard.creditaccount.domain.CreditAccountStatus;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionRepository;
 import com.minicard.transaction.domain.CardTransactionStatus;
+import com.minicard.transaction.domain.event.CardTransactionDomainEvent;
+import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -46,7 +48,8 @@ class PostingServiceTest {
     private AuthorizationRepository authorizationRepository;
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
-    private AuthorizationDomainEventPublisher eventPublisher;
+    private AuthorizationDomainEventPublisher authorizationEventPublisher;
+    private CardTransactionDomainEventPublisher transactionEventPublisher;
     private PostingService service;
 
     @BeforeEach
@@ -55,13 +58,15 @@ class PostingServiceTest {
         authorizationRepository = mock(AuthorizationRepository.class);
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
-        eventPublisher = mock(AuthorizationDomainEventPublisher.class);
+        authorizationEventPublisher = mock(AuthorizationDomainEventPublisher.class);
+        transactionEventPublisher = mock(CardTransactionDomainEventPublisher.class);
         service = new PostingService(
                 transactionRepository,
                 authorizationRepository,
                 cardRepository,
                 creditAccountRepository,
-                eventPublisher,
+                authorizationEventPublisher,
+                transactionEventPublisher,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -89,8 +94,12 @@ class PostingServiceTest {
         verify(transactionRepository).update(transaction);
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
-        verify(eventPublisher).append(event.capture());
+        verify(authorizationEventPublisher).append(event.capture());
         assertThat(event.getValue()).isInstanceOf(AuthorizationPostedDomainEvent.class);
+        ArgumentCaptor<CardTransactionDomainEvent> transactionEvent =
+                ArgumentCaptor.forClass(CardTransactionDomainEvent.class);
+        verify(transactionEventPublisher).append(transactionEvent.capture());
+        assertThat(transactionEvent.getValue()).isInstanceOf(CardTransactionPostedDomainEvent.class);
     }
 
     @Test
@@ -112,7 +121,8 @@ class PostingServiceTest {
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
         verify(transactionRepository, never()).update(any());
-        verify(eventPublisher, never()).append(any());
+        verify(authorizationEventPublisher, never()).append(any());
+        verify(transactionEventPublisher, never()).append(any());
     }
 
     @Test

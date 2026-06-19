@@ -3,6 +3,7 @@ package com.minicard.notification.application;
 import java.time.Clock;
 import java.time.Instant;
 
+import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import com.minicard.notification.domain.Notification;
 import com.minicard.notification.domain.NotificationRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,30 +22,40 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class RequestAuthorizationNotificationService {
 
+    public static final String CONSUMER_NAME = "notification-v1";
+
+    private final ConsumerInboxRepository inboxRepository;
     private final NotificationRepository notificationRepository;
     private final Clock clock;
 
     @Transactional
     public void request(RequestAuthorizationNotificationCommand command) {
-        // Notification 使用 sourceEventId 做 idempotency key，应对 Kafka at-least-once delivery。
-        Notification notification = Notification.requestAuthorizationDecision(
+        Instant now = Instant.now(clock);
+        // Inbox claim 是 consumer-side idempotency 的第一道门：
+        // Kafka at-least-once 可能重复投递，同一个 eventId 对 notification-v1 只处理一次。
+        if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), now)) {
+            log.info("notification_event_duplicate eventId={}", command.sourceEventId());
+            return;
+        }
+
+        // 这里不解析 eventType，也不碰 Kafka API；职责只是一条“创建通知请求”的 use case。
+        Notification notification = Notification.requestFromAuthorizationEvent(
                 command.sourceEventId(),
                 command.authorizationId(),
                 command.cardId(),
-                command.approved(),
-                Instant.now(clock)
+                command.type(),
+                now
         );
         if (!notificationRepository.insertIfAbsent(notification)) {
-            // duplicate event 直接成功返回，相当于确认重复投递；
-            // source_event_id 唯一索引保护多实例并发消费。
+            // notifications.source_event_id 是第二道保护，防止历史数据修复或并发边界变化造成重复通知。
             log.info("notification_request_duplicate eventId={}", command.sourceEventId());
             return;
         }
         log.info(
-                "notification_requested eventId={} notificationId={} template={}",
+                "notification_requested eventId={} notificationId={} type={}",
                 command.sourceEventId(),
                 notification.id(),
-                notification.template()
+                notification.type()
         );
     }
 }

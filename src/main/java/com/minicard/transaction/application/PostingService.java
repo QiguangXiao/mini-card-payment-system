@@ -17,6 +17,7 @@ import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionRepository;
 import com.minicard.transaction.domain.CardTransactionStatus;
+import com.minicard.transaction.domain.event.CardTransactionDomainEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +36,8 @@ public class PostingService {
     private final AuthorizationRepository authorizationRepository;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final AuthorizationDomainEventPublisher eventPublisher;
+    private final AuthorizationDomainEventPublisher authorizationEventPublisher;
+    private final CardTransactionDomainEventPublisher transactionEventPublisher;
     private final Clock clock;
 
     @Transactional
@@ -96,7 +98,11 @@ public class PostingService {
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
         transactionRepository.update(transaction);
-        publishDomainEvents(authorization);
+        // 两个 aggregate 都发生了状态转换，但语义不同：
+        // Authorization event 表达授权生命周期结束；CardTransaction event 表达用户交易已入账。
+        // 两类 Outbox rows 仍和本次 posting transaction 一起提交，避免消息与状态不一致。
+        publishAuthorizationEvents(authorization);
+        publishCardTransactionEvents(transaction);
         return transaction;
     }
 
@@ -137,9 +143,15 @@ public class PostingService {
         }
     }
 
-    private void publishDomainEvents(Authorization authorization) {
+    private void publishAuthorizationEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
-            eventPublisher.append(event);
+            authorizationEventPublisher.append(event);
+        }
+    }
+
+    private void publishCardTransactionEvents(CardTransaction transaction) {
+        for (CardTransactionDomainEvent event : transaction.pullDomainEvents()) {
+            transactionEventPublisher.append(event);
         }
     }
 }

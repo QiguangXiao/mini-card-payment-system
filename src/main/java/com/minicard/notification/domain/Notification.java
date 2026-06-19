@@ -21,7 +21,7 @@ public class Notification {
     private final UUID sourceEventId;
     private final UUID authorizationId;
     private final String cardId;
-    private final String template;
+    private final NotificationType type;
     private final Instant createdAt;
     private NotificationStatus status;
     private int deliveryAttempts;
@@ -34,7 +34,7 @@ public class Notification {
             UUID sourceEventId,
             UUID authorizationId,
             String cardId,
-            String template,
+            NotificationType type,
             NotificationStatus status,
             int deliveryAttempts,
             String lastError,
@@ -46,7 +46,7 @@ public class Notification {
         this.sourceEventId = Objects.requireNonNull(sourceEventId);
         this.authorizationId = Objects.requireNonNull(authorizationId);
         this.cardId = requireText(cardId, "cardId");
-        this.template = requireText(template, "template");
+        this.type = Objects.requireNonNull(type);
         this.status = Objects.requireNonNull(status);
         this.deliveryAttempts = deliveryAttempts;
         this.lastError = lastError;
@@ -56,27 +56,25 @@ public class Notification {
     }
 
     /**
-     * 根据 authorization decision 创建通知。
+     * 根据 authorization event 创建通知。
      *
-     * <p>source event id 被保留为 idempotency key。Kafka 是 at-least-once delivery，
-     * 同一个事件可能重复触发创建请求。</p>
+     * <p>这里生成 notification id；source event id 被保留为 idempotency key。
+     * Kafka 是 at-least-once delivery，同一个事件可能重复触发创建请求，
+     * repository 里的唯一索引会保证最终只落一条通知。</p>
      */
-    public static Notification requestAuthorizationDecision(
+    public static Notification requestFromAuthorizationEvent(
             UUID sourceEventId,
             UUID authorizationId,
             String cardId,
-            boolean approved,
+            NotificationType type,
             Instant now
     ) {
-        String template = approved
-                ? "AUTHORIZATION_APPROVED"
-                : "AUTHORIZATION_DECLINED";
         return new Notification(
                 UUID.randomUUID(),
                 sourceEventId,
                 authorizationId,
                 cardId,
-                template,
+                type,
                 NotificationStatus.PENDING,
                 0,
                 null,

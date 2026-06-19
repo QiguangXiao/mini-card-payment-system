@@ -20,7 +20,7 @@ public class MyBatisNotificationRepository implements NotificationRepository {
                     notification.sourceEventId().toString(),
                     notification.authorizationId().toString(),
                     notification.cardId(),
-                    notification.template(),
+                    notification.type().name(),
                     notification.status().name(),
                     notification.deliveryAttempts(),
                     notification.lastError(),

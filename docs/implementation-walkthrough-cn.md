@@ -301,9 +301,23 @@ curl -X POST http://localhost:8080/api/authorizations \
 消费者如何处理多种事件：
 
 - `IntegrationEventReader` 是共享 transport reader，只负责读取 JSON envelope、校验 header，并返回 JsonNode payload。
-- Notification/Risk listener 显式处理 `authorization.approved` 和 `authorization.declined`，直接从 payload 读取自己需要的字段。
-- 如果未来同一 topic 出现 `authorization.posted`，当前 consumer 可以直接跳过。
+- Notification 侧按上游领域拆 listener：
+  - `AuthorizationNotificationListener` 处理 `authorization.approved` 和 `authorization.declined`。
+  - `CardTransactionNotificationListener` 处理 `card_transaction.posted`。
+- Risk listener 仍只处理 `authorization.approved` 和 `authorization.declined`，因为风控投影只关心授权决策历史。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
+
+为什么不叫 `PaymentNotificationListener`：
+
+- 当前工程没有一个独立的 `payment` bounded context。
+- `authorization` 和 `CardTransaction` 是两个不同上游领域，Notification 只是独立消费它们的 integration events。
+- 按上游领域拆 inbound adapter，更接近未来 notification 微服务的真实形态。
+
+为什么 Notification 用 `NotificationType` enum：
+
+- `approved=true/false` 只能表达两种 decision，无法自然扩展到 posted、refund、reversal。
+- enum 让 listener 负责把 `eventType` 翻译成“要发哪一种用户通知”，application service 只负责创建通知请求。
+- `consumer_inbox` 是第一道 consumer-side idempotency；`notifications.source_event_id` 是第二道保护，保证 Kafka at-least-once 重复投递不会创建重复通知。
 
 为什么不在这里直接发 Kafka：
 
@@ -448,7 +462,17 @@ curl -X POST http://localhost:8080/api/presentments \
    - `credit_accounts.posted_balance` 增加。
    - `authorizations.status = POSTED`。
    - `card_transactions.status = POSTED`。
-   - `outbox_events` 新增 `authorization.posted/PENDING`。
+   - `outbox_events` 新增 `authorization.posted/PENDING`，表达 authorization lifecycle 已被 presentment 消耗。
+   - `outbox_events` 新增 `card_transaction.posted/PENDING`，表达用户可见交易已经入账。
+
+10. Outbox 后续异步发布 `card_transaction.posted`
+
+   - 主 posting transaction 不直接调用 Notification，也不等待 Kafka。
+   - Outbox worker 发布 Kafka 后，Notification consumer 收到 `card_transaction.posted`。
+   - `CardTransactionNotificationListener` 把 eventType 转成 `NotificationType.CARD_TRANSACTION_POSTED`。
+   - `RequestAuthorizationNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
+   - claim 成功后创建一条 `notifications/PENDING` 请求。
+   - duplicate delivery claim 失败后直接返回，避免重复通知用户。
 
 为什么这一阶段不做完整 ledger：
 
@@ -463,6 +487,7 @@ PayPay Card 面试提示：
 - `networkTransactionId` 是外部幂等键，能防止 presentment retry 造成 double posting。
 - `Authorization` row lock 防止同一授权被多次入账；`CreditAccount` row lock 防止账户余额并发错算。
 - 本阶段把 settlement 留到后面，是因为 settlement 处理资金清算，不是用户账户入账。
+- posting 成功通知通过 `CardTransactionPostedDomainEvent -> Outbox -> Kafka -> Notification Inbox` 异步完成，不扩大 posting 的 transaction boundary。
 
 ## 5. 核心流程三：Outbox 发布消息
 
@@ -552,6 +577,7 @@ PayPay Card 面试提示：
 - `messaging/inbox/mybatis`：Inbox 的 MyBatis persistence 细节。
 - 业务 bounded context 的 listener，例如：
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
+  - `notification/infrastructure/messaging/CardTransactionNotificationListener`
   - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
@@ -777,7 +803,7 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
 | 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
@@ -849,6 +875,12 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - `authorization.expired`
 
 所以 event id 是事件本身的唯一标识，authorization id 是 aggregate 标识。
+
+`card_transaction.posted` 里还会有 cardTransactionId：
+
+- eventId：这条 integration event 的唯一 id，用于 Outbox/Inbox 幂等。
+- cardTransactionId：用户可见交易流水的 aggregate id。
+- authorizationId：这笔 posted transaction 消耗的是哪一笔授权。
 
 ## 10. Spring 和 MyBatis 语法速查
 

@@ -7,16 +7,17 @@ import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
 import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
 import com.minicard.notification.application.RequestAuthorizationNotificationService;
+import com.minicard.notification.domain.NotificationType;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Notification bounded context 的 Kafka inbound adapter。
+ * Authorization 事件进入 Notification bounded context 的 Kafka inbound adapter。
  *
- * <p>这里不放通知业务规则，只做 transport contract 转换并调用 application use case。
- * 面试重点：adapter 薄，业务幂等和 transaction boundary 在 service/repository。</p>
+ * <p>未来 Notification 拆成独立微服务时，它依然只依赖 Kafka integration event contract，
+ * 不依赖 authorization domain class。这里不做通知业务规则，只把授权事件翻译成通知请求。</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -33,27 +34,30 @@ public class AuthorizationNotificationListener {
             groupId = "${messaging.consumers.notification.group-id}",
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
-    public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
-        // 先读 eventType，再显式选择 handler。这样新增 authorization.posted 等事件时，
-        // Notification 没订阅就直接跳过，不把“合法但不关心”的消息当 contract failure。
+    public void onAuthorizationEvent(ConsumerRecord<String, String> record) {
+        // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
+        // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {
-            service.request(new RequestAuthorizationNotificationCommand(
-                    event.eventId(),
-                    UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
-                    eventReader.requiredText(payload, "cardId"),
-                    true
-            ));
+            requestNotification(event, payload, NotificationType.AUTHORIZATION_APPROVED);
             return;
         }
         if (AUTHORIZATION_DECLINED.equals(event.eventType())) {
-            service.request(new RequestAuthorizationNotificationCommand(
-                    event.eventId(),
-                    UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
-                    eventReader.requiredText(payload, "cardId"),
-                    false
-            ));
+            requestNotification(event, payload, NotificationType.AUTHORIZATION_DECLINED);
         }
+    }
+
+    private void requestNotification(
+            IntegrationEvent event,
+            JsonNode payload,
+            NotificationType type
+    ) {
+        service.request(new RequestAuthorizationNotificationCommand(
+                event.eventId(),
+                UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
+                eventReader.requiredText(payload, "cardId"),
+                type
+        ));
     }
 }

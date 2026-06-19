@@ -62,10 +62,11 @@ being applied twice.
 
 ## Event Contract
 
-Topic:
+Topics:
 
 ```text
 mini-card.authorization-events.v1
+mini-card.transaction-events.v1
 ```
 
 Event types:
@@ -74,6 +75,8 @@ Event types:
 authorization.approved
 authorization.declined
 authorization.expired
+authorization.posted
+card_transaction.posted
 ```
 
 The envelope contains:
@@ -209,7 +212,7 @@ independently.
 Each consumer has its own listener container factory and DLT:
 
 ```text
-mini-card.authorization-notification.dlt.v1
+mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
 ```
 

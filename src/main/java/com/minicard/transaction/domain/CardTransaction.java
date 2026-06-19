@@ -1,10 +1,14 @@
 package com.minicard.transaction.domain;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
+import com.minicard.transaction.domain.event.CardTransactionDomainEvent;
+import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import lombok.Getter;
 import lombok.experimental.Accessors;
 
@@ -30,6 +34,8 @@ public final class CardTransaction {
     private Instant postedAt;
     private final Instant createdAt;
     private Instant updatedAt;
+    // Domain event buffer 只存在于内存中；restore 出来的历史对象不会重新发布事件。
+    private final List<CardTransactionDomainEvent> domainEvents = new ArrayList<>();
 
     private CardTransaction(
             UUID id,
@@ -114,13 +120,32 @@ public final class CardTransaction {
     }
 
     public void markPosted(Instant postingTime) {
-        // PENDING -> POSTED 发生在账户 postedBalance 和 authorization 状态更新之后的同一事务内。
+        // PENDING -> POSTED 是用户可见交易入账事实。
+        // 因为 Notification 未来可能是独立微服务，后续通知应消费这个 CardTransaction event，
+        // 而不是依赖 Authorization 的内部生命周期事件。
         if (status != CardTransactionStatus.PENDING) {
             throw new IllegalStateException("cannot post card transaction in status " + status);
         }
         postedAt = Objects.requireNonNull(postingTime);
         updatedAt = postingTime;
         status = CardTransactionStatus.POSTED;
+        domainEvents.add(new CardTransactionPostedDomainEvent(
+                id,
+                networkTransactionId,
+                authorizationId,
+                cardId,
+                creditAccountId,
+                amount,
+                postedAt
+        ));
+    }
+
+    public List<CardTransactionDomainEvent> pullDomainEvents() {
+        // Application service 在同一 transaction 内保存 aggregate 后调用这里。
+        // 返回 copy 并清空，避免同一个对象被重复 append 到 Outbox。
+        List<CardTransactionDomainEvent> events = List.copyOf(domainEvents);
+        domainEvents.clear();
+        return events;
     }
 
     public boolean samePresentment(
