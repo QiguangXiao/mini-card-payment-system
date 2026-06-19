@@ -4,12 +4,17 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
+import lombok.Getter;
+import lombok.experimental.Accessors;
+
 /**
  * Kafka 发布前先落 MySQL 的 reliable-message state。
  *
  * <p>Outbox delivery 是 at-least-once：Kafka ack 后、MySQL commit 前宕机可能导致重复发布。
  * 所以后续 consumer 必须用 eventId 去重(deduplicate)。</p>
  */
+@Getter
+@Accessors(fluent = true)
 public final class OutboxEvent {
 
     private static final int MAX_ERROR_LENGTH = 500;
@@ -179,57 +184,5 @@ public final class OutboxEvent {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
-    }
-
-    public UUID id() {
-        return id;
-    }
-
-    public String aggregateType() {
-        return aggregateType;
-    }
-
-    public String aggregateId() {
-        return aggregateId;
-    }
-
-    public String eventType() {
-        return eventType;
-    }
-
-    public int eventVersion() {
-        return eventVersion;
-    }
-
-    public String partitionKey() {
-        return partitionKey;
-    }
-
-    public String payload() {
-        return payload;
-    }
-
-    public OutboxEventStatus status() {
-        return status;
-    }
-
-    public int attempts() {
-        return attempts;
-    }
-
-    public Instant nextAttemptAt() {
-        return nextAttemptAt;
-    }
-
-    public Instant createdAt() {
-        return createdAt;
-    }
-
-    public Instant publishedAt() {
-        return publishedAt;
-    }
-
-    public String lastError() {
-        return lastError;
     }
 }

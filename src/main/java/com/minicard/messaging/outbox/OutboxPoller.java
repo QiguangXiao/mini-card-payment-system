@@ -4,8 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.task.TaskExecutor;
@@ -25,9 +24,8 @@ import org.springframework.transaction.support.TransactionOperations;
         name = "enabled",
         havingValue = "true"
 )
+@Slf4j
 public class OutboxPoller {
-
-    private static final Logger log = LoggerFactory.getLogger(OutboxPoller.class);
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxProperties properties;

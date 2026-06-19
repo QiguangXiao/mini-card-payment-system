@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import com.minicard.messaging.inbox.ConsumerInboxRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -14,13 +15,10 @@ import org.springframework.stereotype.Repository;
  * 这里属于 messaging infrastructure，不进入具体业务 bounded context。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisConsumerInboxRepository implements ConsumerInboxRepository {
 
     private final ConsumerInboxMapper mapper;
-
-    public MyBatisConsumerInboxRepository(ConsumerInboxMapper mapper) {
-        this.mapper = mapper;
-    }
 
     @Override
     public boolean claim(String consumerName, UUID eventId, Instant processedAt) {

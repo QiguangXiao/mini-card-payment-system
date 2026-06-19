@@ -5,16 +5,14 @@ import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
 import com.minicard.risk.infrastructure.external.ExternalRiskClient;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 @Service
+@RequiredArgsConstructor
 public class ExternalRiskService {
 
     private final ExternalRiskClient externalRiskClient;
-
-    public ExternalRiskService(ExternalRiskClient externalRiskClient) {
-        this.externalRiskClient = externalRiskClient;
-    }
 
     @CircuitBreaker(name = "externalRisk", fallbackMethod = "fallback")
     public RiskDecision assess(RiskAssessmentRequest request) {

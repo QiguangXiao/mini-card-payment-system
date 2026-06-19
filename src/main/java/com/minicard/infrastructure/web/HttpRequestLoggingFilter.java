@@ -7,17 +7,15 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
+@Slf4j
 public class HttpRequestLoggingFilter extends OncePerRequestFilter {
 
     static final String REQUEST_ID_HEADER = "X-Request-Id";
-
-    private static final Logger log = LoggerFactory.getLogger(HttpRequestLoggingFilter.class);
 
     @Override
     protected void doFilterInternal(

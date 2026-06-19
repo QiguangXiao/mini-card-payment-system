@@ -11,8 +11,8 @@ import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,29 +22,15 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>一个 job 一个 transaction，可以缩短 DB lock 时间，也避免坏数据回滚同一轮里的其他 job。</p>
  */
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class AuthorizationExpiryService {
-
-    private static final Logger log = LoggerFactory.getLogger(AuthorizationExpiryService.class);
 
     private final AuthorizationRepository authorizationRepository;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final AuthorizationDomainEventPublisher eventPublisher;
     private final Clock clock;
-
-    public AuthorizationExpiryService(
-            AuthorizationRepository authorizationRepository,
-            CardRepository cardRepository,
-            CreditAccountRepository creditAccountRepository,
-            AuthorizationDomainEventPublisher eventPublisher,
-            Clock clock
-    ) {
-        this.authorizationRepository = authorizationRepository;
-        this.cardRepository = cardRepository;
-        this.creditAccountRepository = creditAccountRepository;
-        this.eventPublisher = eventPublisher;
-        this.clock = clock;
-    }
 
     @Transactional
     public void expire(UUID authorizationId) {

@@ -8,6 +8,7 @@ import java.util.UUID;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
 import com.minicard.messaging.outbox.OutboxEventStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -17,13 +18,10 @@ import org.springframework.stereotype.Repository;
  * 它用 DB row state 表达待发布、已发布、失败重试和 DEAD。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisOutboxEventRepository implements OutboxEventRepository {
 
     private final OutboxEventMapper mapper;
-
-    public MyBatisOutboxEventRepository(OutboxEventMapper mapper) {
-        this.mapper = mapper;
-    }
 
     @Override
     public void insert(OutboxEvent event) {

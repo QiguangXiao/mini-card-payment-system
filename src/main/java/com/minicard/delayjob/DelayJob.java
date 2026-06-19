@@ -4,12 +4,17 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
+import lombok.Getter;
+import lombok.experimental.Accessors;
+
 /**
  * 延迟业务动作的 durable plan，当前用于“7 天未 capture 的授权自动过期”。
  *
  * <p>它刻意和 OutboxEvent 保持相似：都是 database-backed work queue，都由 scheduler 轮询。
  * 区别是 Outbox 负责 publish message，DelayJob 负责 execute future business action。</p>
  */
+@Getter
+@Accessors(fluent = true)
 public final class DelayJob {
 
     private static final int MAX_ERROR_LENGTH = 500;
@@ -164,49 +169,5 @@ public final class DelayJob {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
-    }
-
-    public UUID id() {
-        return id;
-    }
-
-    public DelayJobType jobType() {
-        return jobType;
-    }
-
-    public String aggregateType() {
-        return aggregateType;
-    }
-
-    public String aggregateId() {
-        return aggregateId;
-    }
-
-    public DelayJobStatus status() {
-        return status;
-    }
-
-    public int attempts() {
-        return attempts;
-    }
-
-    public Instant scheduledAt() {
-        return scheduledAt;
-    }
-
-    public Instant nextAttemptAt() {
-        return nextAttemptAt;
-    }
-
-    public Instant createdAt() {
-        return createdAt;
-    }
-
-    public Instant updatedAt() {
-        return updatedAt;
-    }
-
-    public String lastError() {
-        return lastError;
     }
 }

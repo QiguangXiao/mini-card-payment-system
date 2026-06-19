@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxMessagePublisher;
+import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -17,18 +18,11 @@ import org.springframework.stereotype.Component;
  * Outbox 自身不依赖 Kafka infrastructure。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final KafkaTopicsProperties topics;
-
-    public KafkaOutboxMessagePublisher(
-            KafkaTemplate<String, String> kafkaTemplate,
-            KafkaTopicsProperties topics
-    ) {
-        this.kafkaTemplate = kafkaTemplate;
-        this.topics = topics;
-    }
 
     @Override
     public void publish(OutboxEvent event, Duration timeout) {

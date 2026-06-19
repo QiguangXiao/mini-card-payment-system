@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
 import com.minicard.risk.application.RiskFeatureProjectionService;
+import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
  * 风控特征由事件异步更新，下一笔交易再使用最新可见数据。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class AuthorizationRiskFeatureListener {
 
     private static final String AUTHORIZATION_APPROVED = "authorization.approved";
@@ -24,14 +26,6 @@ public class AuthorizationRiskFeatureListener {
 
     private final IntegrationEventReader eventReader;
     private final RiskFeatureProjectionService projectionService;
-
-    public AuthorizationRiskFeatureListener(
-            IntegrationEventReader eventReader,
-            RiskFeatureProjectionService projectionService
-    ) {
-        this.eventReader = eventReader;
-        this.projectionService = projectionService;
-    }
 
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",

@@ -17,6 +17,7 @@ import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionRepository;
 import com.minicard.transaction.domain.CardTransactionStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 这里刻意不叫 capture/settlement：capture 偏商户侧，settlement 偏资金清算，不等于持卡人账户入账。</p>
  */
 @Service
+@RequiredArgsConstructor
 public class PostingService {
 
     private final CardTransactionRepository transactionRepository;
@@ -35,22 +37,6 @@ public class PostingService {
     private final CreditAccountRepository creditAccountRepository;
     private final AuthorizationDomainEventPublisher eventPublisher;
     private final Clock clock;
-
-    public PostingService(
-            CardTransactionRepository transactionRepository,
-            AuthorizationRepository authorizationRepository,
-            CardRepository cardRepository,
-            CreditAccountRepository creditAccountRepository,
-            AuthorizationDomainEventPublisher eventPublisher,
-            Clock clock
-    ) {
-        this.transactionRepository = transactionRepository;
-        this.authorizationRepository = authorizationRepository;
-        this.cardRepository = cardRepository;
-        this.creditAccountRepository = creditAccountRepository;
-        this.eventPublisher = eventPublisher;
-        this.clock = clock;
-    }
 
     @Transactional
     public CardTransaction post(PostPresentmentCommand command) {

@@ -5,6 +5,7 @@ import java.util.UUID;
 import com.minicard.delayjob.DelayJobHandler;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobType;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -14,13 +15,10 @@ import org.springframework.stereotype.Component;
  * 这样 scheduler 是通用机制，业务动作仍留在 authorization application layer。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
     private final AuthorizationExpiryService expiryService;
-
-    public AuthorizationExpiryDelayJobHandler(AuthorizationExpiryService expiryService) {
-        this.expiryService = expiryService;
-    }
 
     @Override
     public DelayJobType jobType() {

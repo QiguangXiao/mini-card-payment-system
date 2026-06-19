@@ -4,12 +4,17 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
+import lombok.Getter;
+import lombok.experimental.Accessors;
+
 /**
  * 通知 aggregate root，维护一条客户通知及其 delivery lifecycle。
  *
  * <p>它由 integration event 创建，但 Kafka 不属于领域模型。
  * 这样 delivery 规则可以被 Kafka、admin retry endpoint 或 scheduler 复用。</p>
  */
+@Getter
+@Accessors(fluent = true)
 public class Notification {
 
     private final UUID id;
@@ -114,50 +119,6 @@ public class Notification {
         if (deliveryAttempts >= maxAttempts) {
             status = NotificationStatus.FAILED;
         }
-    }
-
-    public UUID id() {
-        return id;
-    }
-
-    public UUID sourceEventId() {
-        return sourceEventId;
-    }
-
-    public UUID authorizationId() {
-        return authorizationId;
-    }
-
-    public String cardId() {
-        return cardId;
-    }
-
-    public String template() {
-        return template;
-    }
-
-    public NotificationStatus status() {
-        return status;
-    }
-
-    public int deliveryAttempts() {
-        return deliveryAttempts;
-    }
-
-    public String lastError() {
-        return lastError;
-    }
-
-    public Instant sentAt() {
-        return sentAt;
-    }
-
-    public Instant createdAt() {
-        return createdAt;
-    }
-
-    public Instant updatedAt() {
-        return updatedAt;
     }
 
     private static String requireText(String value, String name) {

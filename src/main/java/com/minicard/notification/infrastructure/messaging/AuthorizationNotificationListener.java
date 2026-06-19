@@ -7,6 +7,7 @@ import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
 import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
 import com.minicard.notification.application.RequestAuthorizationNotificationService;
+import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Component;
  * 面试重点：adapter 薄，业务幂等和 transaction boundary 在 service/repository。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class AuthorizationNotificationListener {
 
     private static final String AUTHORIZATION_APPROVED = "authorization.approved";
@@ -25,14 +27,6 @@ public class AuthorizationNotificationListener {
 
     private final IntegrationEventReader eventReader;
     private final RequestAuthorizationNotificationService service;
-
-    public AuthorizationNotificationListener(
-            IntegrationEventReader eventReader,
-            RequestAuthorizationNotificationService service
-    ) {
-        this.eventReader = eventReader;
-        this.service = service;
-    }
 
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",

@@ -9,26 +9,20 @@ import com.minicard.authorization.domain.Authorization;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobRepository;
 import com.minicard.delayjob.DelayJobType;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
  * 把 authorization expiry plan 写入通用 delay_jobs 表。
  */
 @Component
+@RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobScheduler implements AuthorizationExpiryJobScheduler {
 
     private static final String AGGREGATE_TYPE = "Authorization";
 
     private final DelayJobRepository delayJobRepository;
     private final Clock clock;
-
-    public AuthorizationExpiryDelayJobScheduler(
-            DelayJobRepository delayJobRepository,
-            Clock clock
-    ) {
-        this.delayJobRepository = delayJobRepository;
-        this.clock = clock;
-    }
 
     @Override
     public void schedule(Authorization authorization) {

@@ -8,6 +8,7 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -17,13 +18,10 @@ import org.springframework.stereotype.Repository;
  * 但额度计算仍放在 CreditAccount aggregate 内。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisCreditAccountRepository implements CreditAccountRepository {
 
     private final CreditAccountMapper creditAccountMapper;
-
-    public MyBatisCreditAccountRepository(CreditAccountMapper creditAccountMapper) {
-        this.creditAccountMapper = creditAccountMapper;
-    }
 
     @Override
     public Optional<CreditAccount> findByIdForUpdate(UUID accountId) {

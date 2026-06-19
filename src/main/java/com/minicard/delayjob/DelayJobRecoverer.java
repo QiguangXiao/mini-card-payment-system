@@ -4,8 +4,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -23,23 +23,13 @@ import org.springframework.transaction.annotation.Transactional;
         name = "enabled",
         havingValue = "true"
 )
+@Slf4j
+@RequiredArgsConstructor
 public class DelayJobRecoverer {
-
-    private static final Logger log = LoggerFactory.getLogger(DelayJobRecoverer.class);
 
     private final DelayJobRepository delayJobRepository;
     private final DelayJobProperties properties;
     private final Clock clock;
-
-    public DelayJobRecoverer(
-            DelayJobRepository delayJobRepository,
-            DelayJobProperties properties,
-            Clock clock
-    ) {
-        this.delayJobRepository = delayJobRepository;
-        this.properties = properties;
-        this.clock = clock;
-    }
 
     @Scheduled(
             fixedDelayString = "${delay-jobs.scheduler.recovery-fixed-delay-ms:5000}",

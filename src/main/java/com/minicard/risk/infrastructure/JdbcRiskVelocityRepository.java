@@ -3,17 +3,15 @@ package com.minicard.risk.infrastructure;
 import java.sql.Timestamp;
 import java.time.Instant;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
+@RequiredArgsConstructor
 public class JdbcRiskVelocityRepository {
 
     private final JdbcTemplate jdbcTemplate;
-
-    public JdbcRiskVelocityRepository(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
-    }
 
     public int countRecentAuthorizations(String cardId, Instant since) {
         Integer count = jdbcTemplate.queryForObject(

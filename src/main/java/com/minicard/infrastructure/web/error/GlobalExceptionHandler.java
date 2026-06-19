@@ -7,8 +7,7 @@ import com.minicard.authorization.application.IdempotencyConflictException;
 import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -23,9 +22,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 客户端需要稳定 code，服务端日志保留细节用于排查。</p>
  */
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
-
-    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException exception) {

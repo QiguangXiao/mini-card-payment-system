@@ -8,6 +8,7 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionRepository;
 import com.minicard.transaction.domain.CardTransactionStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -18,13 +19,10 @@ import org.springframework.stereotype.Repository;
  * posting 的业务顺序仍放在 PostingService，避免 SQL 层偷偷承担业务规则。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisCardTransactionRepository implements CardTransactionRepository {
 
     private final CardTransactionMapper mapper;
-
-    public MyBatisCardTransactionRepository(CardTransactionMapper mapper) {
-        this.mapper = mapper;
-    }
 
     @Override
     public boolean claim(CardTransaction transaction) {

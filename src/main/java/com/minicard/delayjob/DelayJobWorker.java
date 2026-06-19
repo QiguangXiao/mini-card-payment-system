@@ -6,8 +6,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
@@ -18,9 +17,8 @@ import org.springframework.transaction.support.TransactionOperations;
  * 成功后标 DONE，失败后按 retry policy 回到 PENDING 或进入 DEAD。</p>
  */
 @Service
+@Slf4j
 public class DelayJobWorker {
-
-    private static final Logger log = LoggerFactory.getLogger(DelayJobWorker.class);
 
     private final DelayJobRepository delayJobRepository;
     private final DelayJobProperties properties;

@@ -6,6 +6,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 
 /**
  * 信用账户 aggregate root，负责维护总额度、已预占额度、已入账余额和账户状态。
@@ -13,6 +15,8 @@ import com.minicard.authorization.domain.Money;
  * <p>面试重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
  * 再调用这个 aggregate 的 reserve/release 来保护额度 invariant。</p>
  */
+@Getter
+@Accessors(fluent = true)
 public final class CreditAccount {
 
     private final UUID id;
@@ -129,25 +133,5 @@ public final class CreditAccount {
 
     private static Money zero(Currency currency) {
         return new Money(BigDecimal.ZERO, currency);
-    }
-
-    public UUID id() {
-        return id;
-    }
-
-    public Money creditLimit() {
-        return creditLimit;
-    }
-
-    public Money reservedAmount() {
-        return reservedAmount;
-    }
-
-    public Money postedBalance() {
-        return postedBalance;
-    }
-
-    public CreditAccountStatus status() {
-        return status;
     }
 }

@@ -5,6 +5,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 
 /**
  * 持卡人可见的卡交易流水(card transaction)。
@@ -13,6 +15,8 @@ import com.minicard.authorization.domain.Money;
  * 一笔消费入账后，后续 refund/reversal/dispute 会继续围绕这条交易生命周期展开。
  * 它也不是 ledger entry；double-entry ledger 可以在后续阶段基于这个业务事实再补。</p>
  */
+@Getter
+@Accessors(fluent = true)
 public final class CardTransaction {
 
     private final UUID id;
@@ -142,49 +146,5 @@ public final class CardTransaction {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
-    }
-
-    public UUID id() {
-        return id;
-    }
-
-    public String networkTransactionId() {
-        return networkTransactionId;
-    }
-
-    public UUID authorizationId() {
-        return authorizationId;
-    }
-
-    public String cardId() {
-        return cardId;
-    }
-
-    public UUID creditAccountId() {
-        return creditAccountId;
-    }
-
-    public Money amount() {
-        return amount;
-    }
-
-    public CardTransactionStatus status() {
-        return status;
-    }
-
-    public Instant presentmentReceivedAt() {
-        return presentmentReceivedAt;
-    }
-
-    public Instant postedAt() {
-        return postedAt;
-    }
-
-    public Instant createdAt() {
-        return createdAt;
-    }
-
-    public Instant updatedAt() {
-        return updatedAt;
     }
 }

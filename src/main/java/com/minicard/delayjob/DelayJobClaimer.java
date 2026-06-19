@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,21 +16,12 @@ import org.springframework.transaction.annotation.Transactional;
  * 避免持有 job row lock 等待业务处理。</p>
  */
 @Service
+@RequiredArgsConstructor
 public class DelayJobClaimer {
 
     private final DelayJobRepository delayJobRepository;
     private final DelayJobProperties properties;
     private final Clock clock;
-
-    public DelayJobClaimer(
-            DelayJobRepository delayJobRepository,
-            DelayJobProperties properties,
-            Clock clock
-    ) {
-        this.delayJobRepository = delayJobRepository;
-        this.properties = properties;
-        this.clock = clock;
-    }
 
     @Transactional
     public List<DelayJob> claimDueJobs() {

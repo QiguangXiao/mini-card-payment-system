@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicard.messaging.event.IntegrationEvent;
+import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.springframework.stereotype.Component;
@@ -17,13 +18,10 @@ import org.springframework.stereotype.Component;
  * 具体 consumer 自己根据 eventType 读取 JsonNode payload，避免为每种消息创建 payload class。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class IntegrationEventReader {
 
     private final ObjectMapper objectMapper;
-
-    public IntegrationEventReader(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
 
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {

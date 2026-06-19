@@ -5,8 +5,8 @@ import java.time.Instant;
 
 import com.minicard.notification.domain.Notification;
 import com.minicard.notification.domain.NotificationRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,21 +17,12 @@ import org.springframework.transaction.annotation.Transactional;
  * 这样 Kafka listener、后台重试或未来 admin endpoint 都可以复用同一个 use case。</p>
  */
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class RequestAuthorizationNotificationService {
-
-    private static final Logger log =
-            LoggerFactory.getLogger(RequestAuthorizationNotificationService.class);
 
     private final NotificationRepository notificationRepository;
     private final Clock clock;
-
-    public RequestAuthorizationNotificationService(
-            NotificationRepository notificationRepository,
-            Clock clock
-    ) {
-        this.notificationRepository = notificationRepository;
-        this.clock = clock;
-    }
 
     @Transactional
     public void request(RequestAuthorizationNotificationCommand command) {

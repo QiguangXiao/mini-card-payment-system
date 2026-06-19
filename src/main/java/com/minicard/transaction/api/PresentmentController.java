@@ -7,6 +7,7 @@ import com.minicard.transaction.api.dto.CreatePresentmentRequest;
 import com.minicard.transaction.application.PostingService;
 import com.minicard.transaction.application.PostPresentmentCommand;
 import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,13 +21,10 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/presentments")
+@RequiredArgsConstructor
 public class PresentmentController {
 
     private final PostingService postingService;
-
-    public PresentmentController(PostingService postingService) {
-        this.postingService = postingService;
-    }
 
     @PostMapping
     public CardTransactionResponse postPresentment(

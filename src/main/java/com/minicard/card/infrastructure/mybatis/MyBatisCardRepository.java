@@ -6,6 +6,7 @@ import java.util.UUID;
 import com.minicard.card.domain.Card;
 import com.minicard.card.domain.CardRepository;
 import com.minicard.card.domain.CardStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -15,13 +16,10 @@ import org.springframework.stereotype.Repository;
  * CreditAccount 上加锁。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisCardRepository implements CardRepository {
 
     private final CardMapper cardMapper;
-
-    public MyBatisCardRepository(CardMapper cardMapper) {
-        this.cardMapper = cardMapper;
-    }
 
     @Override
     public Optional<Card> findById(String cardId) {

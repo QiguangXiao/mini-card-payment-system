@@ -4,8 +4,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
@@ -13,29 +13,15 @@ import org.springframework.transaction.support.TransactionOperations;
  * Outbox worker，负责等待 Kafka acknowledgement，并由 worker 自己 finalize delivery state。
  */
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class OutboxWorker {
-
-    private static final Logger log = LoggerFactory.getLogger(OutboxWorker.class);
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxMessagePublisher messagePublisher;
     private final OutboxProperties properties;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
-
-    public OutboxWorker(
-            OutboxEventRepository outboxEventRepository,
-            OutboxMessagePublisher messagePublisher,
-            OutboxProperties properties,
-            Clock clock,
-            TransactionOperations transactionOperations
-    ) {
-        this.outboxEventRepository = outboxEventRepository;
-        this.messagePublisher = messagePublisher;
-        this.properties = properties;
-        this.clock = clock;
-        this.transactionOperations = transactionOperations;
-    }
 
     public void publishClaimedEvent(OutboxEvent claimedEvent) {
         try {

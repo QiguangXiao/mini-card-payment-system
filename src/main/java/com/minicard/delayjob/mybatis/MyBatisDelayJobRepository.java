@@ -9,6 +9,7 @@ import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobRepository;
 import com.minicard.delayjob.DelayJobStatus;
 import com.minicard.delayjob.DelayJobType;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -19,13 +20,10 @@ import org.springframework.stereotype.Repository;
  * 例如 authorization expiry，而不是发布消息。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisDelayJobRepository implements DelayJobRepository {
 
     private final DelayJobMapper mapper;
-
-    public MyBatisDelayJobRepository(DelayJobMapper mapper) {
-        this.mapper = mapper;
-    }
 
     @Override
     public boolean insertIfAbsent(DelayJob job) {

@@ -2,8 +2,7 @@ package com.minicard.delayjob;
 
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.task.TaskRejectedException;
@@ -23,9 +22,8 @@ import org.springframework.stereotype.Component;
         name = "enabled",
         havingValue = "true"
 )
+@Slf4j
 public class DelayJobPoller {
-
-    private static final Logger log = LoggerFactory.getLogger(DelayJobPoller.class);
 
     private final DelayJobClaimer claimer;
     private final DelayJobWorker worker;

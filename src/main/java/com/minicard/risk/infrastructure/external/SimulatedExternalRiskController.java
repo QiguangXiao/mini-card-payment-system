@@ -3,6 +3,7 @@ package com.minicard.risk.infrastructure.external;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.minicard.risk.application.RiskProperties;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -11,13 +12,10 @@ import org.springframework.web.bind.annotation.RestController;
  * 本地模拟第三方 risk API，让 Feign 调用链在本项目内可学习、可运行。
  */
 @RestController
+@RequiredArgsConstructor
 public class SimulatedExternalRiskController {
 
     private final RiskProperties properties;
-
-    public SimulatedExternalRiskController(RiskProperties properties) {
-        this.properties = properties;
-    }
 
     @PostMapping("/external-risk/assess")
     public ExternalRiskClient.ExternalRiskResponse assess(

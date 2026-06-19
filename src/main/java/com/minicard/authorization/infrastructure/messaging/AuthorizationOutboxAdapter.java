@@ -18,6 +18,7 @@ import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Component;
  * 因为当前 contract 很小，过度包装反而让学习路径变长。</p>
  */
 @Component
+@RequiredArgsConstructor
 public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPublisher {
 
     private static final String AGGREGATE_TYPE = "Authorization";
@@ -40,16 +42,6 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
     private final Clock clock;
-
-    public AuthorizationOutboxAdapter(
-            OutboxEventRepository outboxEventRepository,
-            ObjectMapper objectMapper,
-            Clock clock
-    ) {
-        this.outboxEventRepository = outboxEventRepository;
-        this.objectMapper = objectMapper;
-        this.clock = clock;
-    }
 
     @Override
     public void append(AuthorizationDomainEvent event) {

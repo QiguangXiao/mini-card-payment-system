@@ -9,6 +9,7 @@ import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.authorization.domain.Money;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -19,13 +20,10 @@ import org.springframework.stereotype.Repository;
  * application service 只依赖 repository port，不依赖 MyBatis/JDBC 细节。</p>
  */
 @Repository
+@RequiredArgsConstructor
 public class MyBatisAuthorizationRepository implements AuthorizationRepository {
 
     private final AuthorizationMapper authorizationMapper;
-
-    public MyBatisAuthorizationRepository(AuthorizationMapper authorizationMapper) {
-        this.authorizationMapper = authorizationMapper;
-    }
 
     @Override
     public Optional<Authorization> findById(UUID id) {
