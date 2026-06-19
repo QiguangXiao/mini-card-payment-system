@@ -1,6 +1,7 @@
 package com.minicard.transaction.infrastructure.mybatis;
 
 import java.util.Currency;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -46,6 +47,35 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
     }
 
     @Override
+    public List<CardTransaction> findUnbilledPostedByCreditAccountForUpdate(
+            UUID creditAccountId,
+            java.time.Instant postedAtFromInclusive,
+            java.time.Instant postedAtToExclusive
+    ) {
+        // StatementService 持有 credit account row lock 后再调用这里。
+        // FOR UPDATE 锁住本次账单要 snapshot 的交易行，防止重复 statement assignment。
+        return mapper.findUnbilledPostedByCreditAccountForUpdate(
+                        creditAccountId.toString(),
+                        postedAtFromInclusive,
+                        postedAtToExclusive
+                )
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
+    public void assignStatement(List<CardTransaction> transactions) {
+        if (transactions.isEmpty()) {
+            return;
+        }
+        // 批量只写 statement assignment columns；交易金额、授权引用和 postedAt 都是历史事实。
+        mapper.assignStatement(transactions.stream()
+                .map(this::toRow)
+                .toList());
+    }
+
+    @Override
     public void update(CardTransaction transaction) {
         mapper.update(toRow(transaction));
     }
@@ -62,6 +92,8 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
                 transaction.status().name(),
                 transaction.presentmentReceivedAt(),
                 transaction.postedAt(),
+                transaction.statementId().map(UUID::toString).orElse(null),
+                transaction.statementAssignedAt().orElse(null),
                 transaction.createdAt(),
                 transaction.updatedAt()
         );
@@ -78,8 +110,14 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
                 CardTransactionStatus.valueOf(row.status()),
                 row.presentmentReceivedAt(),
                 row.postedAt(),
+                optionalUuid(row.statementId()),
+                row.statementAssignedAt(),
                 row.createdAt(),
                 row.updatedAt()
         );
+    }
+
+    private UUID optionalUuid(String value) {
+        return value == null ? null : UUID.fromString(value);
     }
 }

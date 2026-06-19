@@ -10,6 +10,7 @@ import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CardTransactionTest {
 
@@ -37,6 +38,30 @@ class CardTransactionTest {
                 transaction.authorizationId(),
                 money("100.00")
         )).isTrue();
+    }
+
+    @Test
+    void postedTransactionCanBeAssignedToStatementOnce() {
+        CardTransaction transaction = transaction();
+        transaction.markPosted(NOW.plusSeconds(1));
+        UUID statementId = UUID.randomUUID();
+
+        transaction.assignToStatement(statementId, NOW.plusSeconds(2));
+
+        assertThat(transaction.statementId()).contains(statementId);
+        assertThat(transaction.statementAssignedAt()).contains(NOW.plusSeconds(2));
+        assertThatThrownBy(() -> transaction.assignToStatement(UUID.randomUUID(), NOW.plusSeconds(3)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already assigned");
+    }
+
+    @Test
+    void pendingTransactionCannotBeAssignedToStatement() {
+        CardTransaction transaction = transaction();
+
+        assertThatThrownBy(() -> transaction.assignToStatement(UUID.randomUUID(), NOW.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("only posted");
     }
 
     private CardTransaction transaction() {

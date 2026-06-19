@@ -17,6 +17,8 @@
             <arg column="status" javaType="java.lang.String"/>
             <arg column="presentment_received_at" javaType="java.time.Instant"/>
             <arg column="posted_at" javaType="java.time.Instant"/>
+            <arg column="statement_id" javaType="java.lang.String"/>
+            <arg column="statement_assigned_at" javaType="java.time.Instant"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="updated_at" javaType="java.time.Instant"/>
         </constructor>
@@ -24,7 +26,8 @@
 
     <sql id="cardTransactionColumns">
         id, network_transaction_id, authorization_id, card_id, credit_account_id,
-        amount, currency, status, presentment_received_at, posted_at, created_at, updated_at
+        amount, currency, status, presentment_received_at, posted_at,
+        statement_id, statement_assigned_at, created_at, updated_at
     </sql>
 
     <insert id="insert">
@@ -41,6 +44,8 @@
             #{status},
             #{presentmentReceivedAt},
             #{postedAt,jdbcType=TIMESTAMP},
+            #{statementId,jdbcType=CHAR},
+            #{statementAssignedAt,jdbcType=TIMESTAMP},
             #{createdAt},
             #{updatedAt}
         )
@@ -57,10 +62,53 @@
         FOR UPDATE
     </select>
 
+    <!--
+      Statement generation 只收录 POSTED 且 statement_id 为空的交易。
+      FOR UPDATE 防止两次并发账单生成把同一笔交易重复归入不同 statement。
+    -->
+    <select id="findUnbilledPostedByCreditAccountForUpdate" resultMap="cardTransactionRowMap">
+        SELECT <include refid="cardTransactionColumns"/>
+        FROM card_transactions
+        WHERE credit_account_id = #{creditAccountId}
+          AND status = 'POSTED'
+          AND statement_id IS NULL
+          AND posted_at >= #{postedAtFromInclusive}
+          AND posted_at &lt; #{postedAtToExclusive}
+        ORDER BY posted_at, id
+        FOR UPDATE
+    </select>
+
+    <update id="assignStatement">
+        UPDATE card_transactions
+        SET statement_id = CASE id
+            <foreach collection="transactions" item="transaction">
+                WHEN #{transaction.id} THEN #{transaction.statementId}
+            </foreach>
+            END,
+            statement_assigned_at = CASE id
+            <foreach collection="transactions" item="transaction">
+                WHEN #{transaction.id} THEN #{transaction.statementAssignedAt}
+            </foreach>
+            END,
+            updated_at = CASE id
+            <foreach collection="transactions" item="transaction">
+                WHEN #{transaction.id} THEN #{transaction.updatedAt}
+            </foreach>
+            END
+        WHERE status = 'POSTED'
+          AND statement_id IS NULL
+          AND id IN
+          <foreach collection="transactions" item="transaction" open="(" separator="," close=")">
+              #{transaction.id}
+          </foreach>
+    </update>
+
     <update id="update">
         UPDATE card_transactions
         SET status = #{status},
             posted_at = #{postedAt,jdbcType=TIMESTAMP},
+            statement_id = #{statementId,jdbcType=CHAR},
+            statement_assigned_at = #{statementAssignedAt,jdbcType=TIMESTAMP},
             updated_at = #{updatedAt}
         WHERE id = #{id}
     </update>

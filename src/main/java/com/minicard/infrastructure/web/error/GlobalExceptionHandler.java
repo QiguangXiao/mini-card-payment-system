@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 
 import com.minicard.authorization.application.IdempotencyConflictException;
+import com.minicard.statement.application.StatementGenerationRejectedException;
 import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
@@ -27,7 +28,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException exception) {
-        return error(HttpStatus.NOT_FOUND, "AUTHORIZATION_NOT_FOUND", exception.getMessage());
+        return error(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", exception.getMessage());
     }
 
     @ExceptionHandler(IdempotencyConflictException.class)
@@ -49,6 +50,13 @@ public class GlobalExceptionHandler {
             PresentmentRejectedException exception
     ) {
         return error(HttpStatus.CONFLICT, "PRESENTMENT_REJECTED", exception.getMessage());
+    }
+
+    @ExceptionHandler(StatementGenerationRejectedException.class)
+    public ResponseEntity<ErrorResponse> handleStatementGenerationRejected(
+            StatementGenerationRejectedException exception
+    ) {
+        return error(HttpStatus.CONFLICT, "STATEMENT_GENERATION_REJECTED", exception.getMessage());
     }
 
     @ExceptionHandler({

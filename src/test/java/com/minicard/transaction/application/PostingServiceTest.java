@@ -30,6 +30,7 @@ import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -89,6 +91,9 @@ class PostingServiceTest {
         assertThat(authorization.status()).isEqualTo(AuthorizationStatus.POSTED);
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("0.00");
         assertThat(account.postedBalance().amount()).isEqualByComparingTo("100.00");
+        InOrder lockOrder = inOrder(creditAccountRepository, transactionRepository);
+        lockOrder.verify(creditAccountRepository).findByIdForUpdate(accountId);
+        lockOrder.verify(transactionRepository).claim(any());
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(authorization);
         verify(transactionRepository).update(transaction);
@@ -159,7 +164,9 @@ class PostingServiceTest {
             return true;
         });
         when(transactionRepository.findByNetworkTransactionIdForUpdate("ntx-001"))
-                .thenAnswer(invocation -> Optional.of(claimed.get()));
+                .thenAnswer(invocation -> claimed.get() == null
+                        ? Optional.empty()
+                        : Optional.of(claimed.get()));
     }
 
     private PostPresentmentCommand command(UUID authorizationId, String amount) {

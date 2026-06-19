@@ -46,6 +46,16 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
+    public NewTopic statementEventsTopic(KafkaTopicsProperties properties) {
+        // Statement events 单独 topic，未来账单通知、PDF 生成、还款提醒可以独立订阅。
+        // event key 使用 creditAccountId，保证同一账户账单顺序。
+        return TopicBuilder.name(properties.statementEvents())
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         return deadLetterTopic(properties.notificationDeadLetter());
     }

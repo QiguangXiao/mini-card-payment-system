@@ -16,7 +16,9 @@ public record CardTransactionResponse(
         String currency,
         String status,
         Instant presentmentReceivedAt,
-        Instant postedAt
+        Instant postedAt,
+        UUID statementId,
+        Instant statementAssignedAt
 ) {
 
     public static CardTransactionResponse from(CardTransaction transaction) {
@@ -30,7 +32,9 @@ public record CardTransactionResponse(
                 transaction.amount().currency().getCurrencyCode(),
                 transaction.status().name(),
                 transaction.presentmentReceivedAt(),
-                transaction.postedAt()
+                transaction.postedAt(),
+                transaction.statementId().orElse(null),
+                transaction.statementAssignedAt().orElse(null)
         );
     }
 }

@@ -3,6 +3,7 @@ package com.minicard.transaction.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
 import com.minicard.authorization.domain.Authorization;
@@ -53,6 +54,27 @@ public class PostingService {
                 .orElseThrow(() -> new PresentmentRejectedException(
                         "posted authorization references missing card " + authorization.cardId()
                 ));
+
+        Optional<CardTransaction> existingTransaction = transactionRepository
+                .findByNetworkTransactionIdForUpdate(command.networkTransactionId());
+        if (existingTransaction.isPresent()) {
+            CardTransaction transaction = existingTransaction.get();
+            assertSamePresentment(command, transaction);
+            if (transaction.status() == CardTransactionStatus.POSTED) {
+                return transaction;
+            }
+            throw new PresentmentRejectedException(
+                    "presentment is already being processed: " + command.networkTransactionId()
+            );
+        }
+
+        validateAuthorizationCanBePosted(authorization, command.money(), now);
+        CreditAccount account = creditAccountRepository.findByIdForUpdate(card.creditAccountId())
+                .orElseThrow(() -> new PresentmentRejectedException(
+                        "approved authorization references missing credit account "
+                                + card.creditAccountId()
+                ));
+
         CardTransaction pending = CardTransaction.pending(
                 command.networkTransactionId(),
                 authorization.id(),
@@ -63,7 +85,9 @@ public class PostingService {
         );
 
         // networkTransactionId 是 presentment 的天然 idempotency key。
-        // 先 INSERT claim，再改账户余额，避免 retry/并发 duplicate 造成 double posting。
+        // 新 presentment 必须在 credit account row lock 之后再 INSERT claim：
+        // StatementService 也先锁 account，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
+        // 并保证账单生成期间不会漏掉正在入账的交易。
         boolean claimed = transactionRepository.claim(pending);
         CardTransaction transaction = transactionRepository
                 .findByNetworkTransactionIdForUpdate(command.networkTransactionId())
@@ -80,13 +104,6 @@ public class PostingService {
                     "presentment is already being processed: " + command.networkTransactionId()
             );
         }
-
-        validateAuthorizationCanBePosted(authorization, command.money(), now);
-        CreditAccount account = creditAccountRepository.findByIdForUpdate(card.creditAccountId())
-                .orElseThrow(() -> new PresentmentRejectedException(
-                        "approved authorization references missing credit account "
-                                + card.creditAccountId()
-                ));
 
         // 同一个 transaction 内完成三件事：
         // 1. reservedAmount -> postedBalance，2. Authorization APPROVED -> POSTED，

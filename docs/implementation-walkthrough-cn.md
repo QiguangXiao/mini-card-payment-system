@@ -15,7 +15,7 @@
 
 关键词：
 
-- `Aggregate`：一组需要保持一致的业务对象。当前重点是 `Authorization` 和 `CreditAccount`。
+- `Aggregate`：一组需要保持一致的业务对象。当前重点是 `Authorization`、`CreditAccount`、`CardTransaction` 和 `Statement`。
 - `Idempotency`：同一个客户端重试不会重复扣额度。
 - `Row lock`：用数据库行锁控制并发，而不是 JVM `synchronized`。
 - `Outbox`：主业务事务里只写消息意图，后台 scheduler 再发布 Kafka。
@@ -70,8 +70,52 @@ availableCredit = creditLimit - reservedAmount - postedBalance
 - `status`：`PENDING`、`POSTED`。
 - `presentment_received_at`：系统收到 presentment 的时间。
 - `posted_at`：完成账户入账的时间。
+- `statement_id`：这笔 posted transaction 已经进入哪一期账单，未出账时为空。
+- `statement_assigned_at`：交易被账单收录的时间。
 
 这里的 `CardTransaction` 是用户流水，不是完整会计 ledger。
+
+### `statements`
+
+保存一个信用账户某个 billing cycle 的账单快照。
+
+核心字段：
+
+- `id`：statement id，由 `Statement.close(...)` 内部 `UUID.randomUUID()` 生成。
+- `credit_account_id`：账单属于哪个信用账户。
+- `period_start` / `period_end`：账单周期，当前按 UTC 日期切分。
+- `due_date`：还款到期日。
+- `total_amount`：本期已入账交易汇总金额。
+- `minimum_payment_amount`：当前简化规则计算出的最低还款额。
+- `paid_amount`：未来还款阶段使用；当前生成账单时为 0。
+- `transaction_count`：本期收录的 posted transactions 数量。
+- `status`：当前生成后为 `CLOSED`，未来还款/逾期阶段会进入 `PARTIALLY_PAID`、`PAID`、`OVERDUE`。
+
+幂等键：
+
+```text
+credit_account_id + period_start + period_end
+```
+
+同一账户同一账单周期只能生成一张 statement。
+
+### `statement_items`
+
+保存账单生成时对 posted `CardTransaction` 的快照。
+
+核心字段：
+
+- `id`：statement item id，由 `StatementItem.snapshot(...)` 内部生成 UUID。
+- `statement_id`：属于哪张账单。
+- `card_transaction_id`：来源交易，有唯一约束，防止一笔交易进入两张账单。
+- `network_transaction_id` / `authorization_id` / `card_id`：从源交易复制的审计字段。
+- `amount` / `currency` / `posted_at`：账单行金额和入账时间快照。
+
+为什么要有 item 快照：
+
+- 账单不是每次查询时临时 SUM 交易表。
+- 生成账单后，用户看到的账单金额和明细应该稳定可审计。
+- 后续 refund、adjustment、dispute 可以基于“是否已经出账”走不同处理路径。
 
 ### `delay_jobs`
 
@@ -96,7 +140,7 @@ availableCredit = creditLimit - reservedAmount - postedBalance
 - `id`：event id，由 Outbox adapter 生成 UUID，下游用它做幂等去重。
 - `aggregate_type` / `aggregate_id`：事件属于哪个业务对象。
 - `event_type` / `event_version`：事件类型和版本。
-- `partition_key`：Kafka 分区 key，目前用 authorization id。
+- `partition_key`：Kafka 分区 key，按事件所属 aggregate 选择；authorization/card transaction 事件用自身 id，statement 事件用 credit account id。
 - `payload`：JSON 字符串。
 - `status`：`PENDING`、`PROCESSING`、`PUBLISHED`、`DEAD`。
 - `next_attempt_at`：下一次可领取时间；`PROCESSING` 时也作为 publisher lease deadline。
@@ -396,17 +440,13 @@ curl -X POST http://localhost:8080/api/presentments \
    先锁住 authorization row。
    这样同一笔授权不会被两个不同 presentment 同时 posted。
 
-2. `CardTransaction.pending(...)`
+2. `transactionRepository.findByNetworkTransactionIdForUpdate(networkTransactionId)`
 
-   创建 `PENDING` 交易流水，`id = UUID.randomUUID()`。
-   这里的 `networkTransactionId` 是外部网络交易 id，也是 presentment idempotency key。
+   先检查同一个外部 presentment 是否已经处理过。
+   如果已存在并且内容一致、状态是 `POSTED`，说明这是 duplicate retry，直接返回已有 `CardTransaction`。
+   这条路径不会重复释放 hold，也不会再次增加 `postedBalance`。
 
-3. `transactionRepository.claim(transaction)`
-
-   先插入 `card_transactions`，依赖 `network_transaction_id` 唯一索引抢占幂等所有权。
-   如果 duplicate retry 已经存在同一条 posted transaction，就直接返回已有结果，不重复改余额。
-
-4. 校验 authorization
+3. 校验 authorization
 
    当前阶段只支持 full presentment：
 
@@ -415,12 +455,26 @@ curl -X POST http://localhost:8080/api/presentments \
 
    partial presentment 会引入 remaining hold，后续可以扩展，但现在先不提前复杂化。
 
-5. `creditAccountRepository.findByIdForUpdate(accountId)`
+4. `creditAccountRepository.findByIdForUpdate(accountId)`
 
    锁住账户 row。
-   这让 posting 和新的 authorization reserve 在同一个账户上串行化。
+   这让 posting、statement generation 和新的 authorization reserve 在同一个账户上串行化。
 
-6. `account.postAuthorized(amount)`
+   这次改动的重点是：新 presentment 只有拿到账户锁后才创建/claim `CardTransaction`。
+   因为 `StatementService` 也先锁账户，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
+   同时防止账单生成期间漏掉正在入账的交易。
+
+5. `CardTransaction.pending(...)`
+
+   创建 `PENDING` 交易流水，`id = UUID.randomUUID()`。
+   这里的 `networkTransactionId` 是外部网络交易 id，也是 presentment idempotency key。
+
+6. `transactionRepository.claim(transaction)`
+
+   插入 `card_transactions`，依赖 `network_transaction_id` 唯一索引抢占幂等所有权。
+   如果 duplicate retry 已经存在同一条 posted transaction，就直接返回已有结果，不重复改余额。
+
+7. `account.postAuthorized(amount)`
 
    状态变化：
 
@@ -436,7 +490,7 @@ curl -X POST http://localhost:8080/api/presentments \
    after : creditLimit - (reservedAmount - amount) - (postedBalance + amount)
    ```
 
-7. `authorization.post(now)`
+8. `authorization.post(now)`
 
    状态变化：
 
@@ -447,7 +501,7 @@ curl -X POST http://localhost:8080/api/presentments \
 
    `Authorization` aggregate 自己记录 `AuthorizationPostedDomainEvent`。
 
-8. `transaction.markPosted(now)`
+9. `transaction.markPosted(now)`
 
    状态变化：
 
@@ -456,7 +510,7 @@ curl -X POST http://localhost:8080/api/presentments \
    postedAt = now
    ```
 
-9. 同一事务内提交
+10. 同一事务内提交
 
    - `credit_accounts.reserved_amount` 减少。
    - `credit_accounts.posted_balance` 增加。
@@ -465,7 +519,7 @@ curl -X POST http://localhost:8080/api/presentments \
    - `outbox_events` 新增 `authorization.posted/PENDING`，表达 authorization lifecycle 已被 presentment 消耗。
    - `outbox_events` 新增 `card_transaction.posted/PENDING`，表达用户可见交易已经入账。
 
-10. Outbox 后续异步发布 `card_transaction.posted`
+11. Outbox 后续异步发布 `card_transaction.posted`
 
    - 主 posting transaction 不直接调用 Notification，也不等待 Kafka。
    - Outbox worker 发布 Kafka 后，Notification consumer 收到 `card_transaction.posted`。
@@ -485,11 +539,192 @@ PayPay Card 面试提示：
 
 - issuer backend 里 authorization 和 posting 是两段生命周期，不能混成一个状态。
 - `networkTransactionId` 是外部幂等键，能防止 presentment retry 造成 double posting。
-- `Authorization` row lock 防止同一授权被多次入账；`CreditAccount` row lock 防止账户余额并发错算。
+- `Authorization` row lock 防止同一授权被多次入账；`CreditAccount` row lock 同时保护 posting、statement generation 和额度并发。
 - 本阶段把 settlement 留到后面，是因为 settlement 处理资金清算，不是用户账户入账。
 - posting 成功通知通过 `CardTransactionPostedDomainEvent -> Outbox -> Kafka -> Notification Inbox` 异步完成，不扩大 posting 的 transaction boundary。
 
-## 5. 核心流程三：Outbox 发布消息
+## 5. 核心流程三：Statement 账单生成
+
+当前业务目标：
+
+- 把一个 billing cycle 内已经 `POSTED`、但还没有进入账单的 `CardTransaction` 汇总成 statement。
+- 固定账单金额、最低还款额和行项目快照。
+- 标记这些交易已经被该 statement 收录，避免下次重复出账。
+
+示例请求：
+
+```bash
+curl -X POST http://localhost:8080/api/statements/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "creditAccountId": "11111111-1111-1111-1111-111111111111",
+    "periodStart": "2026-06-01",
+    "periodEnd": "2026-06-30",
+    "dueDate": "2026-07-25"
+  }'
+```
+
+入口：
+
+- `StatementController.generate(...)`
+- `GenerateStatementCommand`
+- `StatementService.generate(command)`
+- `Statement.close(...)`
+- `CardTransaction.assignToStatement(statementId, now)`
+- `StatementOutboxAdapter.append(event)`
+
+### 5.1 Controller 和 Command 阶段
+
+`StatementController` 只负责 HTTP request/response mapping：
+
+- 从 body 读取 `creditAccountId`、`periodStart`、`periodEnd`、`dueDate`。
+- 创建 `GenerateStatementCommand`。
+- 调用 `statementService.generate(command)`。
+
+`GenerateStatementCommand` 会校验：
+
+- `periodEnd` 不能早于 `periodStart`。
+- `dueDate` 必须晚于 `periodEnd`。
+
+当前阶段用 API 手动传入 billing cycle，方便学习和本地验证。
+未来可以由 scheduler 根据账户账单日自动构造同一个 command。
+
+### 5.2 StatementService transaction boundary
+
+关键顺序：
+
+1. `creditAccountRepository.findByIdForUpdate(creditAccountId)`
+
+   先锁住 `credit_accounts` row。
+   这一步不是为了修改账户金额，而是作为账单生成窗口的 concurrency gate。
+
+   `PostingService` 现在也先锁 account，再创建/claim `CardTransaction`。
+   因此同一账户上：
+
+   ```text
+   posting
+   statement generation
+   authorization reserve
+   ```
+
+   会围绕同一行账户锁串行化，避免账单漏掉正在入账的交易。
+
+2. `statementRepository.findByCycleForUpdate(...)`
+
+   查询同一账户同一账单周期是否已经生成过 statement。
+
+   幂等键是：
+
+   ```text
+   credit_account_id + period_start + period_end
+   ```
+
+   如果已经存在，直接返回已有账单。
+   这就是 statement generation 的 idempotency，不需要客户端额外传 `Idempotency-Key`。
+
+3. `transactionRepository.findUnbilledPostedByCreditAccountForUpdate(...)`
+
+   查询并锁住本周期内：
+
+   - `status = POSTED`
+   - `statement_id IS NULL`
+   - `posted_at >= periodStart`
+   - `posted_at < periodEnd + 1 day`
+
+   的交易。
+
+   SQL 使用 `FOR UPDATE`，防止两个并发生成流程把同一笔交易收进不同 statement。
+
+4. `Statement.close(...)`
+
+   生成 `statement.id = UUID.randomUUID()`。
+
+   同时为每笔交易生成 `StatementItem.snapshot(...)`：
+
+   - `statement_items.id = UUID.randomUUID()`
+   - 复制 `cardTransactionId`
+   - 复制 `networkTransactionId`
+   - 复制 `authorizationId`
+   - 复制 `cardId`
+   - 复制 `amount/currency/postedAt`
+
+   这一步产生稳定的账单快照。
+
+5. 计算最低还款额
+
+   当前简化规则在 `statement.policy` 中配置：
+
+   ```text
+   minimumPayment = min(totalAmount, max(totalAmount * 10%, currencyFloor))
+   ```
+
+   例如：
+
+   ```text
+   totalAmount = 1500 JPY
+   10% = 150 JPY
+   JPY floor = 1000 JPY
+   minimumPayment = 1000 JPY
+   ```
+
+   真实系统会按产品条款、余额分层、监管要求和历史账龄计算，本项目先保留可解释的简化版本。
+
+6. `statementRepository.insert(statement)`
+
+   同一事务内插入：
+
+   - `statements`
+   - `statement_items`
+
+   如果唯一键冲突，service 会回读已有 statement，作为 defensive idempotency fallback。
+
+7. `transaction.assignToStatement(statement.id(), now)`
+
+   对每个被收录的 `CardTransaction` 写入：
+
+   - `statement_id`
+   - `statement_assigned_at`
+
+   这不是把交易变成 statement 的子对象，而是记录这笔 posted transaction 已经被哪期账单收录。
+   下次生成账单时 `statement_id IS NULL` 条件会跳过它。
+
+8. `StatementClosedDomainEvent`
+
+   `Statement.close(...)` 在 aggregate 内部记录 `StatementClosedDomainEvent`。
+   `StatementService` 保存账单和交易归属后，调用 `statement.pullDomainEvents()`，
+   再交给 `StatementOutboxAdapter` 写入 `outbox_events/PENDING`。
+
+### 5.3 本次事务提交后的数据变化
+
+成功生成后：
+
+- `statements` 新增一行，`status = CLOSED`。
+- `statement_items` 新增多行，保存账单行项目快照。
+- 被收录的 `card_transactions.statement_id` 指向该 statement。
+- 被收录的 `card_transactions.statement_assigned_at` 记录归账时间。
+- `outbox_events` 新增 `statement.closed/PENDING`。
+
+不会变化：
+
+- `credit_accounts.posted_balance` 不会减少。
+- `credit_accounts.reserved_amount` 不会变化。
+- `CardTransaction.status` 仍然是 `POSTED`。
+
+原因：
+
+- 账单生成只是把已入账消费固定成账单，不代表用户已经还款。
+- 未来 Payment 阶段才会减少 `postedBalance`，并恢复可用额度。
+
+### 5.4 PayPay Card 面试提示
+
+- Statement 是 posted transaction 的账单快照，不是实时查询结果。
+- 账单周期用自然唯一键实现 idempotency：同一账户同一周期只能有一张账单。
+- 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
+- `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
+- `statement.closed` 通过 Outbox 异步发布，未来通知、PDF 生成、还款提醒可以独立消费。
+- 当前没有做还款，所以 `paid_amount = 0` 且状态为 `CLOSED`；下一阶段 Payment 会继续推进状态。
+
+## 6. 核心流程四：Outbox 发布消息
 
 入口：
 
@@ -566,7 +801,7 @@ PayPay Card 面试提示：
 - 下游 consumer 必须用 `eventId` 做幂等。
 - `processingTimeoutSeconds` 应大于正常 Kafka send timeout，避免健康 publisher 被过早认为失联。
 
-### 5.1 消息可靠性结构说明
+### 6.1 消息可靠性结构说明
 
 当前消息相关代码分成 5 组：
 
@@ -595,7 +830,7 @@ PayPay Card 面试提示：
 - `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
 - `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
 
-## 6. 核心流程四：DelayJob 自动过期授权
+## 7. 核心流程五：DelayJob 自动过期授权
 
 当前业务目标：
 
@@ -631,7 +866,7 @@ PayPay Card 面试提示：
 - `DelayJob` 的状态机很重要，但它描述的是执行计划的 lease/retry/DONE/DEAD，不是信用卡业务规则。
 - 包结构压平后，业务领域仍在 `authorization/card/creditaccount`，共享机制则直接放在 `delayjob`。
 
-### 6.1 Poll and claim batch
+### 7.1 Poll and claim batch
 
 关键方法：
 
@@ -653,7 +888,7 @@ PayPay Card 面试提示：
 - lease 到期后，`DelayJobRecoverer` 会把 job 恢复成可 retry 状态。
 - worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
-### 6.2 Worker dispatch handler
+### 7.2 Worker dispatch handler
 
 关键方法：
 
@@ -674,7 +909,7 @@ PayPay Card 面试提示：
 - 新增 handler。
 - 新增业务 scheduler adapter。
 
-### 6.3 Business transaction
+### 7.3 Business transaction
 
 入口：
 
@@ -724,7 +959,7 @@ PayPay Card 面试提示：
    - `authorizations.status = EXPIRED`。
    - `AuthorizationExpiryService` 从 aggregate 拉取 domain event，`outbox_events` 新增 `authorization.expired/PENDING`。
 
-### 6.4 Worker mark done or failed
+### 7.4 Worker mark done or failed
 
 回到：
 
@@ -750,7 +985,7 @@ PayPay Card 面试提示：
 - 失败记录单独提交，避免错误信息跟业务 rollback 一起消失。
 - worker 成功后自己 finalize，保证 `DONE` 一定发生在业务处理之后。
 
-### 6.5 Recover stuck PROCESSING jobs
+### 7.5 Recover stuck PROCESSING jobs
 
 入口：
 
@@ -770,23 +1005,26 @@ PayPay Card 面试提示：
 - recoverer 只关心 worker/pod 宕机或超时留下的 stuck lease。
 - 这让正常执行路径和故障恢复路径都更容易解释。
 
-## 7. 核心流程五：查询授权
+## 8. 核心流程六：查询授权和账单
 
 示例请求：
 
 ```bash
 curl http://localhost:8080/api/authorizations/{authorizationId}
+curl http://localhost:8080/api/statements/{statementId}
 ```
 
 入口：
 
 - `AuthorizationController.get(id)`
 - `AuthorizationService.get(id)`
+- `StatementController.get(id)`
+- `StatementService.get(id)`
 
 处理：
 
 - `@Transactional(readOnly = true)`
-- 通过 authorization id 查询当前状态。
+- 通过 authorization id 或 statement id 查询当前状态。
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
@@ -796,14 +1034,15 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 - 创建后可能是 `APPROVED`。
 - presentment posting 后会变成 `POSTED`。
 - 7 天过期任务执行后会变成 `EXPIRED`。
+- statement 生成后可以看到 `CLOSED` 状态、账单金额、最低还款额和 item 快照。
 
-## 8. Outbox vs DelayJob 对比
+## 9. Outbox vs DelayJob 对比
 
 | 项目 | Outbox | DelayJob |
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
 | 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
@@ -816,7 +1055,7 @@ curl http://localhost:8080/api/authorizations/{authorizationId}
 - Outbox 表保存“我要告诉别人发生了什么”。
 - DelayJob 表保存“未来我要自己做一件业务动作”。
 
-## 9. 面试容易追问的点
+## 10. 面试容易追问的点
 
 ### 为什么不用 Java `synchronized` 控制额度？
 
@@ -850,7 +1089,11 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - `Ledger` 是内部会计账本，回答“财务科目怎样借贷变化”。
 - `Reconciliation` 是运营/批处理流程，回答“内部记录和外部文件/资金结果是否一致”。
 
-当前阶段先做 `CardTransaction`，因为没有 posted transaction 就没有账单、还款、ledger 和对账的可靠基础。
+当前阶段已经有 `CardTransaction` 和 `Statement`：
+
+- `CardTransaction` 提供 posted transaction 基础。
+- `Statement` 把 posted transactions 固定成账单快照。
+- 下一阶段 Payment 才会处理还款、恢复额度和账单结清。
 
 ### 为什么 Outbox 和 DelayJob 分开？
 
@@ -882,7 +1125,13 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - cardTransactionId：用户可见交易流水的 aggregate id。
 - authorizationId：这笔 posted transaction 消耗的是哪一笔授权。
 
-## 10. Spring 和 MyBatis 语法速查
+`statement.closed` 里还会有 statementId：
+
+- eventId：这条 integration event 的唯一 id。
+- statementId：账单 aggregate id。
+- creditAccountId：Kafka partition key，用来保证同一账户账单事件有序。
+
+## 11. Spring 和 MyBatis 语法速查
 
 ### `@RestController`
 
@@ -895,7 +1144,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 ### `@Transactional`
 
 声明事务边界。
-当前最关键的是 `AuthorizationService.authorize()`、`PostingService.post()` 和 `AuthorizationExpiryService.expire()`。
+当前最关键的是 `AuthorizationService.authorize()`、`PostingService.post()`、`StatementService.generate()` 和 `AuthorizationExpiryService.expire()`。
 
 ### `@Transactional(readOnly = true)`
 
@@ -937,17 +1186,18 @@ FOR UPDATE SKIP LOCKED
 `FOR UPDATE` 锁住选中的 row。
 `SKIP LOCKED` 让并发 worker 跳过别人已经锁住的 row。
 
-## 11. 后续学习建议
+## 12. 后续学习建议
 
 当前实现已经适合学习面试核心点。
 如果继续扩展，建议按这个顺序：
 
-1. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
-2. 增加 minimal ledger，记录 posting 对内部会计账本的影响。
-3. 增加 reconciliation，对比内部 posted transaction 和外部清算/资金文件。
-4. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
-5. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
-6. 补充少量并发测试，验证同账户多个授权不会超额。
+1. 增加 Payment / Repayment，用还款减少 `postedBalance`，推进 statement 状态。
+2. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
+3. 增加 minimal ledger，记录 posting、statement、payment 对内部会计账本的影响。
+4. 增加 reconciliation，对比内部 posted transaction 和外部清算/资金文件。
+5. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
+6. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
+7. 补充少量并发测试，验证同账户多个授权、posting 和 statement generation 不会互相漏算。
 
 这一阶段最应该讲清楚的是：
 
@@ -955,3 +1205,4 @@ FOR UPDATE SKIP LOCKED
 - 额度为什么不会在并发下被超用。
 - 为什么 delay job 和 outbox 都写在主事务里。
 - 为什么 delay job 和 outbox 分表，但 scheduler 形状保持对称。
+- 为什么 statement generation 只固定账单，不恢复额度；恢复额度属于 Payment 阶段。

@@ -14,6 +14,8 @@ public record CardTransactionRow(
         String status,
         Instant presentmentReceivedAt,
         Instant postedAt,
+        String statementId,
+        Instant statementAssignedAt,
         Instant createdAt,
         Instant updatedAt
 ) {

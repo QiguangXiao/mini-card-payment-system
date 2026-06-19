@@ -55,6 +55,45 @@ CREATE TABLE IF NOT EXISTS authorizations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS statements (
+    id CHAR(36) PRIMARY KEY,
+    credit_account_id CHAR(36) NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    due_date DATE NOT NULL,
+    total_amount DECIMAL(19, 2) NOT NULL,
+    minimum_payment_amount DECIMAL(19, 2) NOT NULL,
+    paid_amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    transaction_count INT NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    generated_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_statements_cycle UNIQUE (credit_account_id, period_start, period_end),
+    INDEX idx_statements_account_due (credit_account_id, due_date, status),
+    CONSTRAINT fk_statements_credit_account FOREIGN KEY (credit_account_id)
+        REFERENCES credit_accounts (id),
+    CONSTRAINT chk_statements_period CHECK (period_end >= period_start AND due_date > period_end),
+    CONSTRAINT chk_statements_amounts CHECK (
+        total_amount > 0
+        AND minimum_payment_amount > 0
+        AND minimum_payment_amount <= total_amount
+        AND paid_amount >= 0
+        AND paid_amount <= total_amount
+    ),
+    CONSTRAINT chk_statements_transaction_count CHECK (transaction_count > 0),
+    CONSTRAINT chk_statements_status CHECK (
+        status IN ('CLOSED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE')
+    ),
+    CONSTRAINT chk_statements_payment_state CHECK (
+        (status = 'CLOSED' AND paid_amount = 0)
+        OR (status = 'PARTIALLY_PAID' AND paid_amount > 0 AND paid_amount < total_amount)
+        OR (status = 'PAID' AND paid_amount = total_amount)
+        OR (status = 'OVERDUE' AND paid_amount < total_amount)
+    )
+);
+
 CREATE TABLE IF NOT EXISTS card_transactions (
     id CHAR(36) PRIMARY KEY,
     network_transaction_id VARCHAR(100) NOT NULL,
@@ -66,21 +105,52 @@ CREATE TABLE IF NOT EXISTS card_transactions (
     status VARCHAR(20) NOT NULL,
     presentment_received_at TIMESTAMP(6) NOT NULL,
     posted_at TIMESTAMP(6) NULL,
+    statement_id CHAR(36) NULL,
+    statement_assigned_at TIMESTAMP(6) NULL,
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
     CONSTRAINT uk_card_transactions_network_transaction UNIQUE (network_transaction_id),
     INDEX idx_card_transactions_authorization (authorization_id),
     INDEX idx_card_transactions_card_posted_at (card_id, posted_at),
+    INDEX idx_card_transactions_statement_candidates (
+        credit_account_id, status, statement_id, posted_at, id
+    ),
     CONSTRAINT fk_card_transactions_authorization FOREIGN KEY (authorization_id)
         REFERENCES authorizations (id),
     CONSTRAINT fk_card_transactions_credit_account FOREIGN KEY (credit_account_id)
         REFERENCES credit_accounts (id),
+    CONSTRAINT fk_card_transactions_statement FOREIGN KEY (statement_id)
+        REFERENCES statements (id),
     CONSTRAINT chk_card_transactions_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_card_transactions_status CHECK (status IN ('PENDING', 'POSTED')),
     CONSTRAINT chk_card_transactions_posting_state CHECK (
         (status = 'PENDING' AND posted_at IS NULL)
         OR (status = 'POSTED' AND posted_at IS NOT NULL)
+    ),
+    CONSTRAINT chk_card_transactions_statement_assignment CHECK (
+        (statement_id IS NULL AND statement_assigned_at IS NULL)
+        OR (status = 'POSTED' AND statement_id IS NOT NULL AND statement_assigned_at IS NOT NULL)
     )
+);
+
+CREATE TABLE IF NOT EXISTS statement_items (
+    id CHAR(36) PRIMARY KEY,
+    statement_id CHAR(36) NOT NULL,
+    card_transaction_id CHAR(36) NOT NULL,
+    network_transaction_id VARCHAR(100) NOT NULL,
+    authorization_id CHAR(36) NOT NULL,
+    card_id VARCHAR(100) NOT NULL,
+    amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    posted_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_statement_items_card_transaction UNIQUE (card_transaction_id),
+    INDEX idx_statement_items_statement (statement_id, posted_at, card_transaction_id),
+    CONSTRAINT fk_statement_items_statement FOREIGN KEY (statement_id)
+        REFERENCES statements (id),
+    CONSTRAINT fk_statement_items_card_transaction FOREIGN KEY (card_transaction_id)
+        REFERENCES card_transactions (id),
+    CONSTRAINT chk_statement_items_amount_positive CHECK (amount > 0)
 );
 
 CREATE TABLE IF NOT EXISTS outbox_events (

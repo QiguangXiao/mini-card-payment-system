@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record KafkaTopicsProperties(
         String authorizationEvents,
         String transactionEvents,
+        String statementEvents,
         String notificationDeadLetter,
         String riskFeatureDeadLetter
 ) {

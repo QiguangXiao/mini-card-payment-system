@@ -303,7 +303,14 @@ dueDate = 7 月 27 日
 - minimum payment 怎么计算？
 - due date 怎么处理？
 
-当前项目还没做 statement，因为需要先有稳定的 `CardTransaction`。
+当前项目已经实现基础 statement generation：
+
+- `StatementService.generate(...)` 按 billing cycle 汇总未出账的 `POSTED` transactions。
+- `statements` 保存账单汇总，`statement_items` 保存交易快照。
+- `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
+- `statement.closed` 通过 Outbox 发布，未来通知、PDF 生成、还款提醒都可以消费。
+
+当前还没有做 Payment，所以账单生成只固定金额，不恢复信用额度。
 
 ## 6. 阶段四：Payment 还款
 
@@ -829,7 +836,6 @@ Authorization
 
 ```text
 Refund / reversal
-Statement
 Payment
 Ledger
 Reconciliation
@@ -840,9 +846,9 @@ Dispute / chargeback
 最自然的后续路线：
 
 ```text
-1. Refund / reversal：围绕 CardTransaction 生命周期扩展
-2. Statement：把 POSTED transactions 汇总成账单
-3. Payment：处理持卡人还款
+1. Payment：处理持卡人还款，推进 Statement 状态并恢复额度
+2. Refund / reversal：围绕 CardTransaction 和 Statement 生命周期扩展
+3. Statement due/overdue：处理到期、逾期和最低还款判断
 4. Minimal Ledger：记录内部借贷分录
 5. Reconciliation：对比外部清算/资金文件
 ```

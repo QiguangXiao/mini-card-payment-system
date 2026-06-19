@@ -148,7 +148,7 @@ class AuthorizationControllerTest {
 
         mockMvc.perform(get("/api/authorizations/{id}", id))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("AUTHORIZATION_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test

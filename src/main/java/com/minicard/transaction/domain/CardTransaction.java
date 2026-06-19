@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
@@ -32,6 +33,8 @@ public final class CardTransaction {
     private CardTransactionStatus status;
     private final Instant presentmentReceivedAt;
     private Instant postedAt;
+    private UUID statementId;
+    private Instant statementAssignedAt;
     private final Instant createdAt;
     private Instant updatedAt;
     // Domain event buffer 只存在于内存中；restore 出来的历史对象不会重新发布事件。
@@ -47,6 +50,8 @@ public final class CardTransaction {
             CardTransactionStatus status,
             Instant presentmentReceivedAt,
             Instant postedAt,
+            UUID statementId,
+            Instant statementAssignedAt,
             Instant createdAt,
             Instant updatedAt
     ) {
@@ -62,6 +67,8 @@ public final class CardTransaction {
         this.status = Objects.requireNonNull(status);
         this.presentmentReceivedAt = Objects.requireNonNull(presentmentReceivedAt);
         this.postedAt = postedAt;
+        this.statementId = statementId;
+        this.statementAssignedAt = statementAssignedAt;
         this.createdAt = Objects.requireNonNull(createdAt);
         this.updatedAt = Objects.requireNonNull(updatedAt);
         validateState();
@@ -86,6 +93,8 @@ public final class CardTransaction {
                 CardTransactionStatus.PENDING,
                 receivedAt,
                 null,
+                null,
+                null,
                 receivedAt,
                 receivedAt
         );
@@ -101,6 +110,8 @@ public final class CardTransaction {
             CardTransactionStatus status,
             Instant presentmentReceivedAt,
             Instant postedAt,
+            UUID statementId,
+            Instant statementAssignedAt,
             Instant createdAt,
             Instant updatedAt
     ) {
@@ -114,6 +125,8 @@ public final class CardTransaction {
                 status,
                 presentmentReceivedAt,
                 postedAt,
+                statementId,
+                statementAssignedAt,
                 createdAt,
                 updatedAt
         );
@@ -140,6 +153,28 @@ public final class CardTransaction {
         ));
     }
 
+    public void assignToStatement(UUID statementId, Instant assignedAt) {
+        // POSTED -> billed-to-statement 不是新的交易状态，而是账单归属关系。
+        // 这里放在 aggregate 内部，防止同一笔交易被两个 statement 重复收录。
+        if (status != CardTransactionStatus.POSTED) {
+            throw new IllegalStateException("only posted card transactions can be assigned to statement");
+        }
+        if (this.statementId != null) {
+            throw new IllegalStateException("card transaction is already assigned to a statement");
+        }
+        this.statementId = Objects.requireNonNull(statementId);
+        this.statementAssignedAt = Objects.requireNonNull(assignedAt);
+        updatedAt = assignedAt;
+    }
+
+    public Optional<UUID> statementId() {
+        return Optional.ofNullable(statementId);
+    }
+
+    public Optional<Instant> statementAssignedAt() {
+        return Optional.ofNullable(statementAssignedAt);
+    }
+
     public List<CardTransactionDomainEvent> pullDomainEvents() {
         // Application service 在同一 transaction 内保存 aggregate 后调用这里。
         // 返回 copy 并清空，避免同一个对象被重复 append 到 Outbox。
@@ -163,6 +198,13 @@ public final class CardTransaction {
         }
         if (status == CardTransactionStatus.POSTED && postedAt == null) {
             throw new IllegalArgumentException("posted transaction requires postedAt");
+        }
+        if (status == CardTransactionStatus.PENDING
+                && (statementId != null || statementAssignedAt != null)) {
+            throw new IllegalArgumentException("pending transaction cannot be assigned to statement");
+        }
+        if ((statementId == null) != (statementAssignedAt == null)) {
+            throw new IllegalArgumentException("statement assignment requires both id and timestamp");
         }
     }
 

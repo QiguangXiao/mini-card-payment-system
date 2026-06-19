@@ -27,6 +27,9 @@ See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
 See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
 consumer idempotency, partition ordering, and failure-recovery decisions.
+See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
+MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
+backend interview talking points.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
