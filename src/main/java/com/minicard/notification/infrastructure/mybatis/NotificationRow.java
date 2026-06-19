@@ -9,8 +9,9 @@ import java.time.Instant;
 public record NotificationRow(
         String id,
         String sourceEventId,
-        String authorizationId,
-        String cardId,
+        String subjectType,
+        String subjectId,
+        String recipientKey,
         String template,
         String status,
         int deliveryAttempts,

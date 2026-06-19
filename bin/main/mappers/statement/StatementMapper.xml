@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.statement.infrastructure.mybatis.StatementMapper">
+
+    <resultMap id="statementRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="credit_account_id" javaType="java.lang.String"/>
+            <arg column="period_start" javaType="java.time.LocalDate"/>
+            <arg column="period_end" javaType="java.time.LocalDate"/>
+            <arg column="due_date" javaType="java.time.LocalDate"/>
+            <arg column="total_amount" javaType="java.math.BigDecimal"/>
+            <arg column="minimum_payment_amount" javaType="java.math.BigDecimal"/>
+            <arg column="paid_amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="transaction_count" javaType="_int"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="generated_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="statementItemRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementItemRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="statement_id" javaType="java.lang.String"/>
+            <arg column="card_transaction_id" javaType="java.lang.String"/>
+            <arg column="network_transaction_id" javaType="java.lang.String"/>
+            <arg column="authorization_id" javaType="java.lang.String"/>
+            <arg column="card_id" javaType="java.lang.String"/>
+            <arg column="amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="posted_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="statementColumns">
+        id, credit_account_id, period_start, period_end, due_date,
+        total_amount, minimum_payment_amount, paid_amount, currency,
+        transaction_count, status, generated_at, created_at, updated_at
+    </sql>
+
+    <sql id="statementItemColumns">
+        id, statement_id, card_transaction_id, network_transaction_id,
+        authorization_id, card_id, amount, currency, posted_at, created_at
+    </sql>
+
+    <insert id="insertStatement">
+        INSERT INTO statements (
+            <include refid="statementColumns"/>
+        ) VALUES (
+            #{id},
+            #{creditAccountId},
+            #{periodStart},
+            #{periodEnd},
+            #{dueDate},
+            #{totalAmount},
+            #{minimumPaymentAmount},
+            #{paidAmount},
+            #{currency},
+            #{transactionCount},
+            #{status},
+            #{generatedAt},
+            #{createdAt},
+            #{updatedAt}
+        )
+    </insert>
+
+    <insert id="insertItem">
+        INSERT INTO statement_items (
+            <include refid="statementItemColumns"/>
+        ) VALUES (
+            #{id},
+            #{statementId},
+            #{cardTransactionId},
+            #{networkTransactionId},
+            #{authorizationId},
+            #{cardId},
+            #{amount},
+            #{currency},
+            #{postedAt},
+            #{createdAt}
+        )
+    </insert>
+
+    <select id="findByCycleForUpdate" resultMap="statementRowMap">
+        SELECT <include refid="statementColumns"/>
+        FROM statements
+        WHERE credit_account_id = #{creditAccountId}
+          AND period_start = #{periodStart}
+          AND period_end = #{periodEnd}
+        FOR UPDATE
+    </select>
+
+    <select id="findById" resultMap="statementRowMap">
+        SELECT <include refid="statementColumns"/>
+        FROM statements
+        WHERE id = #{id}
+    </select>
+
+    <select id="findItemsByStatementId" resultMap="statementItemRowMap">
+        SELECT <include refid="statementItemColumns"/>
+        FROM statement_items
+        WHERE statement_id = #{statementId}
+        ORDER BY posted_at, card_transaction_id
+    </select>
+
+</mapper>

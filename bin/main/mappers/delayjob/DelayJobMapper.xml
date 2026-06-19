@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.delayjob.mybatis.DelayJobMapper">
+
+    <resultMap id="delayJobRowMap"
+               type="com.minicard.delayjob.mybatis.DelayJobRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="job_type" javaType="java.lang.String"/>
+            <arg column="aggregate_type" javaType="java.lang.String"/>
+            <arg column="aggregate_id" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="attempts" javaType="int"/>
+            <arg column="scheduled_at" javaType="java.time.Instant"/>
+            <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+            <arg column="last_error" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="delayJobColumns">
+        id, job_type, aggregate_type, aggregate_id, status, attempts,
+        scheduled_at, next_attempt_at, created_at, updated_at, last_error
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO delay_jobs (
+            <include refid="delayJobColumns"/>
+        ) VALUES (
+            #{id},
+            #{jobType},
+            #{aggregateType},
+            #{aggregateId},
+            #{status},
+            #{attempts},
+            #{scheduledAt},
+            #{nextAttemptAt},
+            #{createdAt},
+            #{updatedAt},
+            #{lastError,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <!--
+      poller 只 claim PENDING due rows，并在短事务内改成 PROCESSING。
+      多个 pod 并发 poll 时，SKIP LOCKED 会跳过别人已经锁住的 rows，避免重复 claim。
+    -->
+    <select id="findRunnableBatchForUpdate" resultMap="delayJobRowMap">
+        SELECT <include refid="delayJobColumns"/>
+        FROM delay_jobs
+        WHERE status = 'PENDING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!--
+      recovery 独立扫描 lease 已超时的 PROCESSING rows。
+      这让“正常 claim”和“宕机恢复”两个路径在面试解释时更清楚。
+    -->
+    <select id="findStuckProcessingBatchForUpdate" resultMap="delayJobRowMap">
+        SELECT <include refid="delayJobColumns"/>
+        FROM delay_jobs
+        WHERE status = 'PROCESSING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY next_attempt_at, created_at, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="delayJobRowMap">
+        SELECT <include refid="delayJobColumns"/>
+        FROM delay_jobs
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="updateExecutionState">
+        UPDATE delay_jobs
+        SET status = #{status},
+            attempts = #{attempts},
+            next_attempt_at = #{nextAttemptAt},
+            updated_at = #{updatedAt},
+            last_error = #{lastError,jdbcType=VARCHAR}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

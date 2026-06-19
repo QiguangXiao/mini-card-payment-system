@@ -308,7 +308,7 @@ dueDate = 7 月 27 日
 - `StatementService.generate(...)` 按 billing cycle 汇总未出账的 `POSTED` transactions。
 - `statements` 保存账单汇总，`statement_items` 保存交易快照。
 - `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
-- `statement.closed` 通过 Outbox 发布，未来通知、PDF 生成、还款提醒都可以消费。
+- `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_READY` 通知，未来 PDF 生成、还款提醒也可以消费。
 
 当前还没有做 Payment，所以账单生成只固定金额，不恢复信用额度。
 

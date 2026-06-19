@@ -1,0 +1,112 @@
+spring:
+  application:
+    name: mini-card-payment-system
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/mini_card}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:rootpassword}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Broker acknowledgements and idempotent producer retries reduce duplicate
+      # writes inside Kafka, but consumers must still deduplicate Outbox events.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 3000
+    consumer:
+      # Offsets are committed only after a listener returns successfully.
+      # Database side effects remain idempotent because Kafka and MySQL cannot
+      # participate in one atomic local transaction.
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+    listener:
+      ack-mode: record
+
+mybatis:
+  mapper-locations: classpath:mappers/**/*.xml
+
+messaging:
+  topics:
+    authorization-events: mini-card.authorization-events.v1
+    transaction-events: mini-card.transaction-events.v1
+    statement-events: mini-card.statement-events.v1
+    notification-dead-letter: mini-card.notification.dlt.v1
+    risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
+  consumers:
+    notification:
+      group-id: mini-card-notification-v1
+    risk-feature:
+      group-id: mini-card-risk-feature-v1
+    dead-letter-monitor:
+      group-id: mini-card-dead-letter-monitor-v1
+
+outbox:
+  publisher:
+    enabled: true
+    fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 5000
+    batch-size: 50
+    send-timeout-ms: 5000
+    processing-timeout-seconds: 30
+    max-attempts: 10
+    worker-pool-size: 4
+    worker-queue-capacity: 100
+
+delay-jobs:
+  scheduler:
+    enabled: true
+    fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 5000
+    max-per-run: 100
+    max-attempts: 10
+    processing-timeout-seconds: 60
+    worker-pool-size: 4
+    worker-queue-capacity: 100
+
+authorization:
+  policy:
+    single-transaction-limits:
+      JPY: 100000.00
+      USD: 1000.00
+
+statement:
+  policy:
+    # minimum payment = min(total, max(total * rate, currency floor)).
+    # 当前只是教学用简化规则，真实发卡系统会按产品条款、余额分层和监管要求配置。
+    minimum-payment-rate: 0.10
+    minimum-payment-floors:
+      JPY: 1000.00
+      USD: 25.00
+
+risk:
+  local:
+    velocity-window-seconds: 60
+    max-authorizations-per-window: 3
+    high-risk-amount-thresholds:
+      JPY: 50000.00
+      USD: 500.00
+    blocked-merchant-ids:
+      - merchant-blocked
+  external:
+    base-url: ${EXTERNAL_RISK_BASE_URL:http://localhost:8080}
+    simulated-latency-millis: 100
+    failure-rate-percent: 0
+    high-risk-score-threshold: 80
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      externalRisk:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2

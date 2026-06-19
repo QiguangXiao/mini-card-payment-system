@@ -18,8 +18,9 @@ public class MyBatisNotificationRepository implements NotificationRepository {
             return mapper.insert(new NotificationRow(
                     notification.id().toString(),
                     notification.sourceEventId().toString(),
-                    notification.authorizationId().toString(),
-                    notification.cardId(),
+                    notification.subjectType().name(),
+                    notification.subjectId(),
+                    notification.recipientKey(),
                     notification.type().name(),
                     notification.status().name(),
                     notification.deliveryAttempts(),

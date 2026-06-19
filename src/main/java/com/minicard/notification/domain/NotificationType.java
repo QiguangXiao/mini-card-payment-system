@@ -9,5 +9,9 @@ package com.minicard.notification.domain;
 public enum NotificationType {
     AUTHORIZATION_APPROVED,
     AUTHORIZATION_DECLINED,
-    CARD_TRANSACTION_POSTED
+    CARD_TRANSACTION_POSTED,
+    /**
+     * 来自 statement.closed 事件，但用户看到的是“账单已生成/可查看”。
+     */
+    STATEMENT_READY
 }

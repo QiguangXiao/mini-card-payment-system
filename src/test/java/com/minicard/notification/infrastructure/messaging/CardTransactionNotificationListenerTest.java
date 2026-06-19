@@ -9,8 +9,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
-import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
-import com.minicard.notification.application.RequestAuthorizationNotificationService;
+import com.minicard.notification.application.RequestNotificationCommand;
+import com.minicard.notification.application.RequestNotificationService;
+import com.minicard.notification.domain.NotificationSubjectType;
 import com.minicard.notification.domain.NotificationType;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -31,31 +32,30 @@ class CardTransactionNotificationListenerTest {
 
     @Test
     void postedEventRequestsPostedNotification() throws Exception {
-        RequestAuthorizationNotificationService service =
-                mock(RequestAuthorizationNotificationService.class);
+        RequestNotificationService service = mock(RequestNotificationService.class);
         CardTransactionNotificationListener listener = listener(service);
-        UUID authorizationId = UUID.randomUUID();
+        UUID cardTransactionId = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
 
         listener.onCardTransactionEvent(record(
                 eventId,
                 "card_transaction.posted",
-                payload(authorizationId, "card-123", "postedAt")
+                payload(cardTransactionId, "card-123", "postedAt")
         ));
 
-        ArgumentCaptor<RequestAuthorizationNotificationCommand> command =
-                ArgumentCaptor.forClass(RequestAuthorizationNotificationCommand.class);
+        ArgumentCaptor<RequestNotificationCommand> command =
+                ArgumentCaptor.forClass(RequestNotificationCommand.class);
         verify(service).request(command.capture());
         assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
-        assertThat(command.getValue().authorizationId()).isEqualTo(authorizationId);
-        assertThat(command.getValue().cardId()).isEqualTo("card-123");
+        assertThat(command.getValue().subjectType()).isEqualTo(NotificationSubjectType.CARD_TRANSACTION);
+        assertThat(command.getValue().subjectId()).isEqualTo(cardTransactionId.toString());
+        assertThat(command.getValue().recipientKey()).isEqualTo("card-123");
         assertThat(command.getValue().type()).isEqualTo(NotificationType.CARD_TRANSACTION_POSTED);
     }
 
     @Test
     void irrelevantCardTransactionEventIsSkipped() throws Exception {
-        RequestAuthorizationNotificationService service =
-                mock(RequestAuthorizationNotificationService.class);
+        RequestNotificationService service = mock(RequestNotificationService.class);
         CardTransactionNotificationListener listener = listener(service);
 
         listener.onCardTransactionEvent(record(
@@ -68,7 +68,7 @@ class CardTransactionNotificationListenerTest {
     }
 
     private CardTransactionNotificationListener listener(
-            RequestAuthorizationNotificationService service
+            RequestNotificationService service
     ) {
         return new CardTransactionNotificationListener(
                 new IntegrationEventReader(objectMapper),
@@ -76,9 +76,10 @@ class CardTransactionNotificationListenerTest {
         );
     }
 
-    private ObjectNode payload(UUID authorizationId, String cardId, String timeField) {
+    private ObjectNode payload(UUID cardTransactionId, String cardId, String timeField) {
         ObjectNode payload = objectMapper.createObjectNode();
-        payload.put("authorizationId", authorizationId.toString());
+        payload.put("cardTransactionId", cardTransactionId.toString());
+        payload.put("authorizationId", UUID.randomUUID().toString());
         payload.put("cardId", cardId);
         payload.put("amount", "100.00");
         payload.put("currency", "JPY");
@@ -102,7 +103,7 @@ class CardTransactionNotificationListenerTest {
                 "mini-card.transaction-events.v1",
                 0,
                 0,
-                payload.get("authorizationId").asText(),
+                payload.get("cardTransactionId").asText(),
                 objectMapper.writeValueAsString(event)
         );
         record.headers().add(new RecordHeader(

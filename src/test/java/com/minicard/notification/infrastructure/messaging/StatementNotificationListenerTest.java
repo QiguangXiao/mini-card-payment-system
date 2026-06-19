@@ -2,6 +2,7 @@ package com.minicard.notification.infrastructure.messaging;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,64 +24,71 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-class AuthorizationNotificationListenerTest {
+class StatementNotificationListenerTest {
 
-    private static final Instant NOW = Instant.parse("2026-06-20T00:00:00Z");
+    private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
 
     private final ObjectMapper objectMapper =
             new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Test
-    void approvedEventRequestsApprovedNotification() throws Exception {
+    void closedEventRequestsStatementReadyNotification() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
-        AuthorizationNotificationListener listener = listener(service);
-        UUID authorizationId = UUID.randomUUID();
+        StatementNotificationListener listener = listener(service);
+        UUID statementId = UUID.randomUUID();
+        UUID creditAccountId = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
 
-        listener.onAuthorizationEvent(record(
+        listener.onStatementEvent(record(
                 eventId,
-                "authorization.approved",
-                payload(authorizationId, "card-123", "approvedAt")
+                "statement.closed",
+                payload(statementId, creditAccountId, "closedAt")
         ));
 
         ArgumentCaptor<RequestNotificationCommand> command =
                 ArgumentCaptor.forClass(RequestNotificationCommand.class);
         verify(service).request(command.capture());
         assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
-        assertThat(command.getValue().subjectType()).isEqualTo(NotificationSubjectType.AUTHORIZATION);
-        assertThat(command.getValue().subjectId()).isEqualTo(authorizationId.toString());
-        assertThat(command.getValue().recipientKey()).isEqualTo("card-123");
-        assertThat(command.getValue().type()).isEqualTo(NotificationType.AUTHORIZATION_APPROVED);
+        assertThat(command.getValue().subjectType()).isEqualTo(NotificationSubjectType.STATEMENT);
+        assertThat(command.getValue().subjectId()).isEqualTo(statementId.toString());
+        assertThat(command.getValue().recipientKey()).isEqualTo(creditAccountId.toString());
+        assertThat(command.getValue().type()).isEqualTo(NotificationType.STATEMENT_READY);
     }
 
     @Test
-    void authorizationPostedEventIsSkipped() throws Exception {
+    void irrelevantStatementEventIsSkipped() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
-        AuthorizationNotificationListener listener = listener(service);
+        StatementNotificationListener listener = listener(service);
 
-        listener.onAuthorizationEvent(record(
+        listener.onStatementEvent(record(
                 UUID.randomUUID(),
-                "authorization.posted",
-                payload(UUID.randomUUID(), "card-123", "postedAt")
+                "statement.payment_due",
+                payload(UUID.randomUUID(), UUID.randomUUID(), "dueAt")
         ));
 
         verifyNoInteractions(service);
     }
 
-    private AuthorizationNotificationListener listener(
-            RequestNotificationService service
-    ) {
-        return new AuthorizationNotificationListener(
+    private StatementNotificationListener listener(RequestNotificationService service) {
+        return new StatementNotificationListener(
                 new IntegrationEventReader(objectMapper),
                 service
         );
     }
 
-    private ObjectNode payload(UUID authorizationId, String cardId, String timeField) {
+    private ObjectNode payload(
+            UUID statementId,
+            UUID creditAccountId,
+            String timeField
+    ) {
         ObjectNode payload = objectMapper.createObjectNode();
-        payload.put("authorizationId", authorizationId.toString());
-        payload.put("cardId", cardId);
-        payload.put("amount", "100.00");
+        payload.put("statementId", statementId.toString());
+        payload.put("creditAccountId", creditAccountId.toString());
+        payload.put("periodStart", LocalDate.parse("2026-06-01").toString());
+        payload.put("periodEnd", LocalDate.parse("2026-06-30").toString());
+        payload.put("dueDate", LocalDate.parse("2026-07-25").toString());
+        payload.put("totalAmount", "1500.00");
+        payload.put("minimumPaymentAmount", "1000.00");
         payload.put("currency", "JPY");
         payload.put(timeField, NOW.toString());
         return payload;
@@ -99,10 +107,10 @@ class AuthorizationNotificationListenerTest {
                 payload
         );
         ConsumerRecord<String, String> record = new ConsumerRecord<>(
-                "mini-card.authorization-events.v1",
+                "mini-card.statement-events.v1",
                 0,
                 0,
-                payload.get("authorizationId").asText(),
+                payload.get("statementId").asText(),
                 objectMapper.writeValueAsString(event)
         );
         record.headers().add(new RecordHeader(

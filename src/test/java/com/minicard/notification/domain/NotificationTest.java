@@ -14,14 +14,16 @@ class NotificationTest {
 
     @Test
     void createsPostedNotificationTypeFromAuthorizationEvent() {
-        Notification notification = Notification.requestFromAuthorizationEvent(
+        Notification notification = Notification.requestFromEvent(
                 UUID.randomUUID(),
-                UUID.randomUUID(),
+                NotificationSubjectType.CARD_TRANSACTION,
+                UUID.randomUUID().toString(),
                 "card-123",
                 NotificationType.CARD_TRANSACTION_POSTED,
                 NOW
         );
 
+        assertThat(notification.subjectType()).isEqualTo(NotificationSubjectType.CARD_TRANSACTION);
         assertThat(notification.type()).isEqualTo(NotificationType.CARD_TRANSACTION_POSTED);
         assertThat(notification.status()).isEqualTo(NotificationStatus.PENDING);
     }
@@ -52,9 +54,10 @@ class NotificationTest {
     }
 
     private Notification notification() {
-        return Notification.requestFromAuthorizationEvent(
+        return Notification.requestFromEvent(
                 UUID.randomUUID(),
-                UUID.randomUUID(),
+                NotificationSubjectType.AUTHORIZATION,
+                UUID.randomUUID().toString(),
                 "card-123",
                 NotificationType.AUTHORIZATION_APPROVED,
                 NOW

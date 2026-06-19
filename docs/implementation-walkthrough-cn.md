@@ -146,6 +146,27 @@ credit_account_id + period_start + period_end
 - `next_attempt_at`：下一次可领取时间；`PROCESSING` 时也作为 publisher lease deadline。
 - `attempts` / `last_error`：失败重试和排障信息。
 
+### `notifications`
+
+保存待发送或已发送的客户通知请求。
+
+核心字段：
+
+- `id`：notification id，由 `Notification.requestFromEvent(...)` 内部 `UUID.randomUUID()` 生成。
+- `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等。
+- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`。
+- `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
+- `template`：通知模板类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_READY`。
+- `status`：`PENDING`、`SENT`、`FAILED`。
+
+提醒：
+
+- `recipient_key` 不是生产系统里的真实用户 id。
+- 以后加入 Cardholder/User 后，应该在 Notification 侧根据 subject 查 customerId 和 notification preference。
+- 不要在 authorization/posting/statement 主事务里直接发 push/email/sms。
+- 当前项目还没引入 Flyway/Liquibase，`schema.sql` 的 `CREATE TABLE IF NOT EXISTS`
+  不会自动修改已经存在的旧 `notifications` 表；本地已有数据库可能需要手动重建或迁移这张表。
+
 ## 3. 核心流程一：创建授权
 
 示例请求：
@@ -524,7 +545,7 @@ curl -X POST http://localhost:8080/api/presentments \
    - 主 posting transaction 不直接调用 Notification，也不等待 Kafka。
    - Outbox worker 发布 Kafka 后，Notification consumer 收到 `card_transaction.posted`。
    - `CardTransactionNotificationListener` 把 eventType 转成 `NotificationType.CARD_TRANSACTION_POSTED`。
-   - `RequestAuthorizationNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
+   - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
    - claim 成功后创建一条 `notifications/PENDING` 请求。
    - duplicate delivery claim 失败后直接返回，避免重复通知用户。
 
@@ -694,6 +715,21 @@ curl -X POST http://localhost:8080/api/statements/generate \
    `StatementService` 保存账单和交易归属后，调用 `statement.pullDomainEvents()`，
    再交给 `StatementOutboxAdapter` 写入 `outbox_events/PENDING`。
 
+9. Outbox 后续异步发布 `statement.closed`
+
+   - 主 statement transaction 不直接调用 Notification，也不等待短信/邮件/Push provider。
+   - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
+   - Listener 把内部事件映射成用户侧 `NotificationType.STATEMENT_READY`。
+   - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
+   - claim 成功后创建一条 `notifications/PENDING` 请求。
+   - duplicate delivery claim 失败后直接返回，避免重复提醒用户。
+
+   警示：
+
+   - 账单已经生成成功后，通知失败不能 rollback statement。
+   - 当前没有 Cardholder/User 表，所以 statement 通知暂时用 `creditAccountId` 做 `recipient_key`。
+   - 生产系统应在 Notification 侧查找用户和通知偏好，例如是否允许 push/email、是否静默时段。
+
 ### 5.3 本次事务提交后的数据变化
 
 成功生成后：
@@ -721,7 +757,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - 账单周期用自然唯一键实现 idempotency：同一账户同一周期只能有一张账单。
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
-- `statement.closed` 通过 Outbox 异步发布，未来通知、PDF 生成、还款提醒可以独立消费。
+- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_READY` 通知；未来 PDF 生成、还款提醒也可以独立消费。
 - 当前没有做还款，所以 `paid_amount = 0` 且状态为 `CLOSED`；下一阶段 Payment 会继续推进状态。
 
 ## 6. 核心流程四：Outbox 发布消息
@@ -813,6 +849,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - 业务 bounded context 的 listener，例如：
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
   - `notification/infrastructure/messaging/CardTransactionNotificationListener`
+  - `notification/infrastructure/messaging/StatementNotificationListener`
   - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
@@ -1130,6 +1167,31 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - eventId：这条 integration event 的唯一 id。
 - statementId：账单 aggregate id。
 - creditAccountId：Kafka partition key，用来保证同一账户账单事件有序。
+
+### 为什么 statement.closed 映射成 STATEMENT_READY？
+
+`statement.closed` 是系统内部业务事实，意思是 billing cycle 已关闭、账单金额固定。
+用户侧通知不应该直接说 “closed”，而应该表达“本期账单已生成，可以查看并还款”。
+
+所以 Notification 侧使用：
+
+```text
+statement.closed -> NotificationType.STATEMENT_READY
+```
+
+这个区分能体现 event contract 和 customer-facing template 的边界。
+
+### 为什么 notifications 不再只存 authorizationId？
+
+因为 Notification 现在同时消费三类事件：
+
+- `authorization.approved/declined`
+- `card_transaction.posted`
+- `statement.closed`
+
+Statement 没有 authorizationId，强行塞入旧列会让模型变形。
+所以现在用 `subject_type + subject_id` 表达“这条通知关联哪个业务对象”，
+再用 `recipient_key` 表达“目前怎样找到接收方”。
 
 ## 11. Spring 和 MyBatis 语法速查
 

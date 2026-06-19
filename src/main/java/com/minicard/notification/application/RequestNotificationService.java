@@ -12,15 +12,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 从授权事件创建通知请求的 application use case。
+ * 从 integration event 创建通知请求的 application use case。
  *
  * <p>类名按业务动作命名，而不是按 Kafka consumption 命名。
- * 这样 Kafka listener、后台重试或未来 admin endpoint 都可以复用同一个 use case。</p>
+ * 这样 authorization、card transaction、statement listener 都可以复用同一个 use case。</p>
  */
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class RequestAuthorizationNotificationService {
+public class RequestNotificationService {
 
     public static final String CONSUMER_NAME = "notification-v1";
 
@@ -29,7 +29,7 @@ public class RequestAuthorizationNotificationService {
     private final Clock clock;
 
     @Transactional
-    public void request(RequestAuthorizationNotificationCommand command) {
+    public void request(RequestNotificationCommand command) {
         Instant now = Instant.now(clock);
         // Inbox claim 是 consumer-side idempotency 的第一道门：
         // Kafka at-least-once 可能重复投递，同一个 eventId 对 notification-v1 只处理一次。
@@ -38,11 +38,13 @@ public class RequestAuthorizationNotificationService {
             return;
         }
 
-        // 这里不解析 eventType，也不碰 Kafka API；职责只是一条“创建通知请求”的 use case。
-        Notification notification = Notification.requestFromAuthorizationEvent(
+        // 警示：通知创建失败不应该影响 statement/authorization/posting 的主业务事务。
+        // 主事务早已通过 Outbox 提交；这里失败时让 Kafka listener/DLT 和人工重放处理。
+        Notification notification = Notification.requestFromEvent(
                 command.sourceEventId(),
-                command.authorizationId(),
-                command.cardId(),
+                command.subjectType(),
+                command.subjectId(),
+                command.recipientKey(),
                 command.type(),
                 now
         );
@@ -52,10 +54,12 @@ public class RequestAuthorizationNotificationService {
             return;
         }
         log.info(
-                "notification_requested eventId={} notificationId={} type={}",
+                "notification_requested eventId={} notificationId={} type={} subjectType={} subjectId={}",
                 command.sourceEventId(),
                 notification.id(),
-                notification.type()
+                notification.type(),
+                notification.subjectType(),
+                notification.subjectId()
         );
     }
 }

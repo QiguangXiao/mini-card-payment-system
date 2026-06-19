@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.authorization.infrastructure.mybatis.AuthorizationMapper">
+
+    <resultMap id="authorizationRowMap"
+               type="com.minicard.authorization.infrastructure.mybatis.AuthorizationRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="request_fingerprint" javaType="java.lang.String"/>
+            <arg column="card_id" javaType="java.lang.String"/>
+            <arg column="amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="decline_reason" javaType="java.lang.String"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="decided_at" javaType="java.time.Instant"/>
+            <arg column="expires_at" javaType="java.time.Instant"/>
+            <arg column="posted_at" javaType="java.time.Instant"/>
+            <arg column="expired_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="authorizationColumns">
+        id, request_fingerprint, card_id, amount, currency, status,
+        decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
+    </sql>
+
+    <select id="findById" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE id = #{id}
+    </select>
+
+    <!--
+      INSERT-first idempotency：先写入 claim，避免 read-then-insert race。
+      unique idempotency_key constraint 会在并发请求中选出唯一 winner。
+    -->
+    <insert id="insert">
+        INSERT INTO authorizations (
+            id, idempotency_key, request_fingerprint, card_id, amount, currency,
+            status, decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
+        ) VALUES (
+            #{authorization.id},
+            #{idempotencyKey},
+            #{authorization.requestFingerprint},
+            #{authorization.cardId},
+            #{authorization.amount},
+            #{authorization.currency},
+            #{authorization.status},
+            #{authorization.declineReason,jdbcType=VARCHAR},
+            #{authorization.createdAt},
+            #{authorization.decidedAt,jdbcType=TIMESTAMP},
+            #{authorization.expiresAt,jdbcType=TIMESTAMP},
+            #{authorization.postedAt,jdbcType=TIMESTAMP},
+            #{authorization.expiredAt,jdbcType=TIMESTAMP}
+        )
+    </insert>
+
+    <!--
+      concurrent duplicate 会等待 winner transaction，然后读取最终状态。
+      这样 duplicate 不会再次执行 credit reservation。
+    -->
+    <select id="findByIdempotencyKeyForUpdate" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <!--
+      DelayJobWorker 处理的是已经 claim 的 delay job；这里仍要锁 authorization row。
+      原因是 business state 才是释放 reserved credit 前的 source of truth。
+    -->
+    <select id="findByIdForUpdate" resultMap="authorizationRowMap">
+        SELECT <include refid="authorizationColumns"/>
+        FROM authorizations
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="update">
+        UPDATE authorizations
+        SET status = #{status},
+            decline_reason = #{declineReason,jdbcType=VARCHAR},
+            decided_at = #{decidedAt,jdbcType=TIMESTAMP},
+            expires_at = #{expiresAt,jdbcType=TIMESTAMP},
+            posted_at = #{postedAt,jdbcType=TIMESTAMP},
+            expired_at = #{expiredAt,jdbcType=TIMESTAMP}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

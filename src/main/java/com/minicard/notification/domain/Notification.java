@@ -19,8 +19,9 @@ public class Notification {
 
     private final UUID id;
     private final UUID sourceEventId;
-    private final UUID authorizationId;
-    private final String cardId;
+    private final NotificationSubjectType subjectType;
+    private final String subjectId;
+    private final String recipientKey;
     private final NotificationType type;
     private final Instant createdAt;
     private NotificationStatus status;
@@ -32,8 +33,9 @@ public class Notification {
     private Notification(
             UUID id,
             UUID sourceEventId,
-            UUID authorizationId,
-            String cardId,
+            NotificationSubjectType subjectType,
+            String subjectId,
+            String recipientKey,
             NotificationType type,
             NotificationStatus status,
             int deliveryAttempts,
@@ -44,8 +46,9 @@ public class Notification {
     ) {
         this.id = Objects.requireNonNull(id);
         this.sourceEventId = Objects.requireNonNull(sourceEventId);
-        this.authorizationId = Objects.requireNonNull(authorizationId);
-        this.cardId = requireText(cardId, "cardId");
+        this.subjectType = Objects.requireNonNull(subjectType);
+        this.subjectId = requireText(subjectId, "subjectId");
+        this.recipientKey = requireText(recipientKey, "recipientKey");
         this.type = Objects.requireNonNull(type);
         this.status = Objects.requireNonNull(status);
         this.deliveryAttempts = deliveryAttempts;
@@ -56,24 +59,30 @@ public class Notification {
     }
 
     /**
-     * 根据 authorization event 创建通知。
+     * 根据 integration event 创建通知。
      *
      * <p>这里生成 notification id；source event id 被保留为 idempotency key。
      * Kafka 是 at-least-once delivery，同一个事件可能重复触发创建请求，
      * repository 里的唯一索引会保证最终只落一条通知。</p>
+     *
+     * <p>提醒：当前项目还没有 Cardholder/User 领域，所以 recipientKey 只是通知路由线索。
+     * Authorization/CardTransaction 用 cardId，Statement 用 creditAccountId。以后接真实用户模型时，
+     * 这里应该改成 customerId 或 notification preference lookup，而不是继续把账户 id 当用户。</p>
      */
-    public static Notification requestFromAuthorizationEvent(
+    public static Notification requestFromEvent(
             UUID sourceEventId,
-            UUID authorizationId,
-            String cardId,
+            NotificationSubjectType subjectType,
+            String subjectId,
+            String recipientKey,
             NotificationType type,
             Instant now
     ) {
         return new Notification(
                 UUID.randomUUID(),
                 sourceEventId,
-                authorizationId,
-                cardId,
+                subjectType,
+                subjectId,
+                recipientKey,
                 type,
                 NotificationStatus.PENDING,
                 0,

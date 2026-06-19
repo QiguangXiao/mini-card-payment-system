@@ -1,12 +1,11 @@
 package com.minicard.notification.infrastructure.messaging;
 
-import java.util.UUID;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
-import com.minicard.notification.application.RequestAuthorizationNotificationCommand;
-import com.minicard.notification.application.RequestAuthorizationNotificationService;
+import com.minicard.notification.application.RequestNotificationCommand;
+import com.minicard.notification.application.RequestNotificationService;
+import com.minicard.notification.domain.NotificationSubjectType;
 import com.minicard.notification.domain.NotificationType;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -27,7 +26,7 @@ public class AuthorizationNotificationListener {
     private static final String AUTHORIZATION_DECLINED = "authorization.declined";
 
     private final IntegrationEventReader eventReader;
-    private final RequestAuthorizationNotificationService service;
+    private final RequestNotificationService service;
 
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",
@@ -53,9 +52,10 @@ public class AuthorizationNotificationListener {
             JsonNode payload,
             NotificationType type
     ) {
-        service.request(new RequestAuthorizationNotificationCommand(
+        service.request(new RequestNotificationCommand(
                 event.eventId(),
-                UUID.fromString(eventReader.requiredText(payload, "authorizationId")),
+                NotificationSubjectType.AUTHORIZATION,
+                eventReader.requiredText(payload, "authorizationId"),
                 eventReader.requiredText(payload, "cardId"),
                 type
         ));
