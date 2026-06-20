@@ -19,7 +19,7 @@
 
 保留两层文档比较清楚：
 
-- 本文：看代码流程、参与方、命名差异、面试解释。
+- 本文：看代码流程、参与方、命名差异、interview解释。
 - `docs/kafka-learning-cn.md`：深入 Kafka 配置、producer/consumer 参数、DLT、partition、consumer group。
 
 ## 1. 总览：项目里有三类异步机制
@@ -80,7 +80,7 @@ PROCESSING lease expired
   -> PENDING retry 或 DEAD
 ```
 
-面试重点：
+interview重点：
 
 - 主业务事务只写 MySQL，不直接发 Kafka，避免 MySQL commit 和 Kafka ack 的 dual-write 风险。
 - Kafka publish 成功后、`markPublished` 前宕机会重复发布，所以整体是 at-least-once。
@@ -129,7 +129,7 @@ PROCESSING lease expired
   -> PENDING retry 或 DEAD
 ```
 
-面试重点：
+interview重点：
 
 - DelayJob 和 Outbox 都是 database-backed queue，但业务语义不同。
 - DelayJob handler 必须幂等，因为 worker 宕机、lease 恢复、manual replay 都可能导致重复执行。
@@ -379,7 +379,7 @@ repayment.received
 | Recoverer | `OutboxRecoverer` | `DelayJobRecoverer` | 恢复 lease 超时的 `PROCESSING` rows |
 | State row | `OutboxEvent` | `DelayJob` | 都有 attempts、nextAttemptAt、lastError、retry/DEAD |
 
-这种对称结构方便面试解释：
+这种对称结构方便interview解释：
 
 ```text
 poller 只负责醒来和提交任务
@@ -401,7 +401,7 @@ recoverer 负责宕机/超时恢复
 
 这些不同不是命名不统一，而是业务语义不同。
 
-## 8. 高频面试解释模板
+## 8. 高频interview解释模板
 
 ### 8.1 为什么 Outbox 和 DelayJob 都要有 `PROCESSING lease`
 

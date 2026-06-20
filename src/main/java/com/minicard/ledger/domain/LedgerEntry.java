@@ -14,7 +14,7 @@ import lombok.experimental.Accessors;
  * <p>关键词：账本分录, 聚合, 会计事实, ledger entry,
  * aggregate, accounting entry, 仕訳(しわけ)。</p>
  *
- * <p>面试重点：这里不是完整 double-entry general ledger。
+ * <p>interview重点：这里不是完整 double-entry general ledger。
  * 它先作为 learning projection，消费已经发生的 integration event，
  * 把“消费入账增加应收”和“还款入账减少应收”保存成 append-only 分录。</p>
  */

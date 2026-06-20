@@ -1,9 +1,9 @@
 # 剩余领域学习路线图
 
-这份文档不是普通 TODO 清单，而是面向 PayPay Card / 金融后端面试准备的
+这份文档不是普通 TODO 清单，而是面向 PayPay Card / 金融后端interview准备的
 remaining domain roadmap。
 
-当前项目已经覆盖面试最核心的主链路：
+当前项目已经覆盖interview最核心的主链路：
 
 ```text
 Authorization
@@ -89,7 +89,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 为什么值得做：
 
 - 帮你区分交易流水、账单、还款、余额和会计账本。
-- 面试里可以解释为什么 `CardTransaction` 不等于 ledger。
+- interview里可以解释为什么 `CardTransaction` 不等于 ledger。
 - 可以复用 Outbox/Inbox 思路，学习 downstream projection。
 
 注意：
@@ -118,7 +118,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 不建议先做的原因：
 
 - 如果没有 ledger 或至少稳定的 internal records，对账会变成普通列表 diff。
-- 面试价值来自“为什么对不上、如何处理 exception”，不是 CSV 解析本身。
+- interview价值来自“为什么对不上、如何处理 exception”，不是 CSV 解析本身。
 
 ### P2: Authorization Reversal
 
@@ -139,7 +139,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 为什么不是 P1：
 
 - 现有 `Authorization Expiry` 已经展示了释放 hold 的核心机制。
-- 面试主线已经足够，reversal 是锦上添花。
+- interview主线已经足够，reversal 是锦上添花。
 
 ### P3: Refund
 
@@ -161,7 +161,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 ### P4: Dispute / Chargeback
 
-面试可以讲概念，但不建议现在实现。
+interview可以讲概念，但不建议现在实现。
 
 原因：
 
@@ -182,12 +182,12 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 ### P6: Cardholder/User/Auth
 
-生产必需，但面试主线不急。
+生产必需，但interview主线不急。
 
 原因：
 
 - 它会引入登录、权限、PII、安全设计。
-- 对金融交易一致性面试帮助不如 ledger/reconciliation。
+- 对金融交易一致性interview帮助不如 ledger/reconciliation。
 - 当前项目用 `cardId` / `creditAccountId` 作为学习用 routing key 已经足够。
 
 ## 3. 我的建议
@@ -199,7 +199,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 -> 修文档过期点
 -> 做最小 Ledger（已完成）
 -> 再做最小 Reconciliation
--> 停下来复盘面试表达
+-> 停下来复盘interview表达
 ```
 
 如果只再补一个领域：

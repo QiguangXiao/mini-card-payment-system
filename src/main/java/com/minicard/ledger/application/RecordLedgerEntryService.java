@@ -19,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
  * ledger projection, consumer idempotency, eventual consistency,
  * 仕訳投影(しわけとうえい)。</p>
  *
- * <p>面试重点：Ledger 不在 posting/repayment 主事务里同步写。
+ * <p>interview重点：Ledger 不在 posting/repayment 主事务里同步写。
  * 主事务先通过 Outbox 发布业务事实，Ledger 再作为独立 consumer 记录分录。
  * 这样主交易不等待账本投影，但要接受 eventual consistency 和 consumer 幂等。</p>
  */
