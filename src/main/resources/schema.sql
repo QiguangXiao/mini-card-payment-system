@@ -153,6 +153,33 @@ CREATE TABLE IF NOT EXISTS statement_items (
     CONSTRAINT chk_statement_items_amount_positive CHECK (amount > 0)
 );
 
+CREATE TABLE IF NOT EXISTS repayments (
+    id CHAR(36) PRIMARY KEY,
+    idempotency_key VARCHAR(100) NOT NULL,
+    request_fingerprint CHAR(64) NOT NULL,
+    statement_id CHAR(36) NOT NULL,
+    credit_account_id CHAR(36) NULL,
+    amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    received_at TIMESTAMP(6) NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_repayments_idempotency_key UNIQUE (idempotency_key),
+    INDEX idx_repayments_statement (statement_id, created_at),
+    INDEX idx_repayments_account_received (credit_account_id, received_at),
+    CONSTRAINT fk_repayments_statement FOREIGN KEY (statement_id)
+        REFERENCES statements (id),
+    CONSTRAINT fk_repayments_credit_account FOREIGN KEY (credit_account_id)
+        REFERENCES credit_accounts (id),
+    CONSTRAINT chk_repayments_amount_positive CHECK (amount > 0),
+    CONSTRAINT chk_repayments_status CHECK (status IN ('PENDING', 'RECEIVED')),
+    CONSTRAINT chk_repayments_received_state CHECK (
+        (status = 'PENDING' AND credit_account_id IS NULL AND received_at IS NULL)
+        OR (status = 'RECEIVED' AND credit_account_id IS NOT NULL AND received_at IS NOT NULL)
+    )
+);
+
 CREATE TABLE IF NOT EXISTS outbox_events (
     id CHAR(36) PRIMARY KEY,
     aggregate_type VARCHAR(50) NOT NULL,
@@ -207,7 +234,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     INDEX idx_notifications_recipient (recipient_key, created_at),
     CONSTRAINT chk_notifications_delivery_attempts CHECK (delivery_attempts >= 0),
     CONSTRAINT chk_notifications_subject_type CHECK (
-        subject_type IN ('AUTHORIZATION', 'CARD_TRANSACTION', 'STATEMENT')
+        subject_type IN ('AUTHORIZATION', 'CARD_TRANSACTION', 'STATEMENT', 'REPAYMENT')
     ),
     CONSTRAINT chk_notifications_status CHECK (status IN ('PENDING', 'SENT', 'FAILED'))
 );

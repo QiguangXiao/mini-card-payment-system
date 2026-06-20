@@ -63,6 +63,9 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         if (eventType.startsWith("statement.")) {
             return topics.statementEvents();
         }
+        if (eventType.startsWith("repayment.")) {
+            return topics.repaymentEvents();
+        }
         throw new IllegalArgumentException("unsupported integration event type " + eventType);
     }
 

@@ -7,6 +7,7 @@ public record KafkaTopicsProperties(
         String authorizationEvents,
         String transactionEvents,
         String statementEvents,
+        String repaymentEvents,
         String notificationDeadLetter,
         String riskFeatureDeadLetter
 ) {

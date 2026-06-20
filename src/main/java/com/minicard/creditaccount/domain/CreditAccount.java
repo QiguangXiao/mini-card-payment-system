@@ -114,6 +114,22 @@ public final class CreditAccount {
         postedBalance = postedBalance.add(amount);
     }
 
+    public void applyRepayment(Money amount) {
+        Objects.requireNonNull(amount);
+        // Repayment 是持卡人还款入账：它释放已入账消费占用的信用额度。
+        // service 会先拿 credit account row lock，再调用这里，避免并发 repayment/posting 改乱 postedBalance。
+        if (!creditLimit.currency().equals(amount.currency())) {
+            throw new IllegalArgumentException("repayment currency must match account currency");
+        }
+        if (!amount.isPositive()) {
+            throw new IllegalArgumentException("repayment amount must be positive");
+        }
+        if (amount.isGreaterThan(postedBalance)) {
+            throw new IllegalStateException("repayment amount exceeds posted balance");
+        }
+        postedBalance = postedBalance.subtract(amount);
+    }
+
     public Money availableCredit() {
         // available credit 是派生值，不单独落库，避免 creditLimit/reserved/posted/available 多字段不一致。
         // issuer 视角下，reserved hold 和 posted balance 都会占用信用额度。

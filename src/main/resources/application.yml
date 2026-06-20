@@ -37,6 +37,7 @@ messaging:
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
     statement-events: mini-card.statement-events.v1
+    repayment-events: mini-card.repayment-events.v1
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
   consumers:

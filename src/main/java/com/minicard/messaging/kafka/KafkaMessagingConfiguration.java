@@ -56,6 +56,16 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
+    public NewTopic repaymentEventsTopic(KafkaTopicsProperties properties) {
+        // Repayment 是独立业务事实，不混入 statement topic。
+        // event key 使用 creditAccountId，方便同一账户还款通知、对账投影按顺序处理。
+        return TopicBuilder.name(properties.repaymentEvents())
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         return deadLetterTopic(properties.notificationDeadLetter());
     }

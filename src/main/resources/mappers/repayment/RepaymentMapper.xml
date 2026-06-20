@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.repayment.infrastructure.mybatis.RepaymentMapper">
+
+    <resultMap id="repaymentRowMap"
+               type="com.minicard.repayment.infrastructure.mybatis.RepaymentRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="idempotency_key" javaType="java.lang.String"/>
+            <arg column="request_fingerprint" javaType="java.lang.String"/>
+            <arg column="statement_id" javaType="java.lang.String"/>
+            <arg column="credit_account_id" javaType="java.lang.String"/>
+            <arg column="amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="received_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="repaymentColumns">
+        id, idempotency_key, request_fingerprint, statement_id, credit_account_id,
+        amount, currency, status, received_at, created_at, updated_at
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO repayments (
+            <include refid="repaymentColumns"/>
+        ) VALUES (
+            #{id},
+            #{idempotencyKey},
+            #{requestFingerprint},
+            #{statementId},
+            #{creditAccountId,jdbcType=CHAR},
+            #{amount},
+            #{currency},
+            #{status},
+            #{receivedAt,jdbcType=TIMESTAMP},
+            #{createdAt},
+            #{updatedAt}
+        )
+    </insert>
+
+    <select id="findByIdempotencyKeyForUpdate" resultMap="repaymentRowMap">
+        SELECT <include refid="repaymentColumns"/>
+        FROM repayments
+        WHERE idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <select id="findById" resultMap="repaymentRowMap">
+        SELECT <include refid="repaymentColumns"/>
+        FROM repayments
+        WHERE id = #{id}
+    </select>
+
+    <update id="update">
+        UPDATE repayments
+        SET credit_account_id = #{creditAccountId,jdbcType=CHAR},
+            status = #{status},
+            received_at = #{receivedAt,jdbcType=TIMESTAMP},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

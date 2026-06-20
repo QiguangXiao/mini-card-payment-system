@@ -21,5 +21,9 @@ public interface StatementMapper {
 
     StatementRow findById(@Param("id") String id);
 
+    StatementRow findByIdForUpdate(@Param("id") String id);
+
+    int updatePayment(StatementRow statement);
+
     List<StatementItemRow> findItemsByStatementId(@Param("statementId") String statementId);
 }

@@ -310,7 +310,7 @@ dueDate = 7 月 27 日
 - `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
 - `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_READY` 通知，未来 PDF 生成、还款提醒也可以消费。
 
-当前还没有做 Payment，所以账单生成只固定金额，不恢复信用额度。
+账单生成只固定金额，不恢复信用额度；当前项目已经通过简化的 `Repayment` 领域处理还款入账。
 
 ## 6. 阶段四：Payment 还款
 
@@ -362,6 +362,14 @@ statement 标记为 paid
 - 还款失败或撤销怎么办？
 
 这些通常不应该塞进 `transaction` domain，而应该有独立的 `payment` / `statement` / `creditaccount` 协作。
+
+当前项目已经实现简化版 Repayment：
+
+- `POST /api/repayments` 通过 `Idempotency-Key` 防止重复还款。
+- `RepaymentService.receive(...)` 在同一 transaction boundary 内更新 `repayments`、`credit_accounts.posted_balance` 和 `statements.paid_amount/status`。
+- 锁顺序保持 `credit account row lock -> statement row lock`，避免和账单生成流程产生相反锁顺序。
+- `repayment.received` 通过 Outbox 发布，Notification 已消费它创建 `REPAYMENT_RECEIVED` 通知。
+- 当前不支持 overpayment、多账单自动分摊、银行资金清算和 ledger 分录。
 
 ## 7. 正向流程总图
 
@@ -828,6 +836,8 @@ Authorization
 -> Credit hold
 -> Presentment Posting
 -> CardTransaction
+-> Statement
+-> Repayment
 -> Authorization Expiry
 -> Outbox/Kafka notification and risk projection
 ```
@@ -836,7 +846,6 @@ Authorization
 
 ```text
 Refund / reversal
-Payment
 Ledger
 Reconciliation
 Settlement cash movement
@@ -846,11 +855,11 @@ Dispute / chargeback
 最自然的后续路线：
 
 ```text
-1. Payment：处理持卡人还款，推进 Statement 状态并恢复额度
-2. Refund / reversal：围绕 CardTransaction 和 Statement 生命周期扩展
-3. Statement due/overdue：处理到期、逾期和最低还款判断
-4. Minimal Ledger：记录内部借贷分录
-5. Reconciliation：对比外部清算/资金文件
+1. Refund / reversal：围绕 CardTransaction 和 Statement 生命周期扩展
+2. Statement due/overdue：处理到期、逾期和最低还款判断
+3. Minimal Ledger：记录 posting、repayment 等内部借贷分录
+4. Reconciliation：对比外部清算/资金文件
+5. Settlement cash movement / dispute：补齐资金移动和争议处理分支
 ```
 
 ## 18. 面试一句话总结

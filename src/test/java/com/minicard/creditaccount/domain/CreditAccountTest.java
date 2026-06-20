@@ -8,6 +8,7 @@ import com.minicard.authorization.domain.Money;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CreditAccountTest {
 
@@ -73,12 +74,41 @@ class CreditAccountTest {
         assertThat(account.availableCredit().amount()).isEqualByComparingTo("700.00");
     }
 
+    @Test
+    void appliesRepaymentToPostedBalance() {
+        CreditAccount account = accountWithPosted("1000.00", "100.00", "300.00");
+
+        account.applyRepayment(money("120.00"));
+
+        assertThat(account.postedBalance().amount()).isEqualByComparingTo("180.00");
+        assertThat(account.availableCredit().amount()).isEqualByComparingTo("720.00");
+    }
+
+    @Test
+    void rejectsRepaymentAbovePostedBalance() {
+        CreditAccount account = accountWithPosted("1000.00", "0.00", "100.00");
+
+        assertThatThrownBy(() -> account.applyRepayment(money("120.00")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("exceeds posted balance");
+    }
+
     private CreditAccount account(String limit, String reserved, CreditAccountStatus status) {
         return CreditAccount.restore(
                 UUID.randomUUID(),
                 money(limit),
                 money(reserved),
                 status
+        );
+    }
+
+    private CreditAccount accountWithPosted(String limit, String reserved, String posted) {
+        return CreditAccount.restore(
+                UUID.randomUUID(),
+                money(limit),
+                money(reserved),
+                money(posted),
+                CreditAccountStatus.ACTIVE
         );
     }
 

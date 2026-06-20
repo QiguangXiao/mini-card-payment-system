@@ -61,6 +61,18 @@ public class MyBatisStatementRepository implements StatementRepository {
                 .map(this::toDomainWithItems);
     }
 
+    @Override
+    public Optional<Statement> findByIdForUpdate(UUID id) {
+        return Optional.ofNullable(mapper.findByIdForUpdate(id.toString()))
+                .map(this::toDomainWithItems);
+    }
+
+    @Override
+    public void updatePayment(Statement statement) {
+        // Repayment 只推进 paidAmount/status，不允许重写 totalAmount 或 statement_items 快照。
+        mapper.updatePayment(toRow(statement));
+    }
+
     private Statement toDomainWithItems(StatementRow row) {
         List<StatementItem> items = mapper.findItemsByStatementId(row.id())
                 .stream()

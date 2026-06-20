@@ -66,8 +66,9 @@ public class Notification {
      * repository 里的唯一索引会保证最终只落一条通知。</p>
      *
      * <p>提醒：当前项目还没有 Cardholder/User 领域，所以 recipientKey 只是通知路由线索。
-     * Authorization/CardTransaction 用 cardId，Statement 用 creditAccountId。以后接真实用户模型时，
-     * 这里应该改成 customerId 或 notification preference lookup，而不是继续把账户 id 当用户。</p>
+     * Authorization/CardTransaction 用 cardId，Statement/Repayment 用 creditAccountId。
+     * 以后接真实用户模型时，这里应该改成 customerId 或 notification preference lookup，
+     * 而不是继续把账户 id 当用户。</p>
      */
     public static Notification requestFromEvent(
             UUID sourceEventId,

@@ -85,6 +85,32 @@ class StatementTest {
                 .hasMessageContaining("outside billing period");
     }
 
+    @Test
+    void appliesPartialAndFullRepayment() {
+        Statement statement = statement("1500.00");
+
+        statement.applyRepayment(money("500.00"), NOW.plusSeconds(1));
+
+        assertThat(statement.status()).isEqualTo(StatementStatus.PARTIALLY_PAID);
+        assertThat(statement.paidAmount().amount()).isEqualByComparingTo("500.00");
+        assertThat(statement.remainingAmount().amount()).isEqualByComparingTo("1000.00");
+
+        statement.applyRepayment(money("1000.00"), NOW.plusSeconds(2));
+
+        assertThat(statement.status()).isEqualTo(StatementStatus.PAID);
+        assertThat(statement.paidAmount().amount()).isEqualByComparingTo("1500.00");
+        assertThat(statement.remainingAmount().amount()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void rejectsRepaymentAboveRemainingAmount() {
+        Statement statement = statement("500.00");
+
+        assertThatThrownBy(() -> statement.applyRepayment(money("600.00"), NOW.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("exceeds statement remaining amount");
+    }
+
     private StatementTransaction transaction(String networkTransactionId, String amount) {
         return new StatementTransaction(
                 UUID.randomUUID(),
@@ -94,6 +120,20 @@ class StatementTest {
                 money(amount),
                 Instant.parse("2026-06-15T10:00:00Z")
         );
+    }
+
+    private Statement statement(String amount) {
+        Statement statement = Statement.close(
+                UUID.randomUUID(),
+                LocalDate.parse("2026-06-01"),
+                LocalDate.parse("2026-06-30"),
+                LocalDate.parse("2026-07-25"),
+                List.of(transaction("ntx-001", amount)),
+                money(amount),
+                NOW
+        );
+        statement.pullDomainEvents();
+        return statement;
     }
 
     private Money money(String amount) {

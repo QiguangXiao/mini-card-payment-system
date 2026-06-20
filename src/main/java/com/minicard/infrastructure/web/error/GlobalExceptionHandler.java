@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 
 import com.minicard.authorization.application.IdempotencyConflictException;
+import com.minicard.repayment.application.RepaymentConflictException;
+import com.minicard.repayment.application.RepaymentRejectedException;
 import com.minicard.statement.application.StatementGenerationRejectedException;
 import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
@@ -57,6 +59,20 @@ public class GlobalExceptionHandler {
             StatementGenerationRejectedException exception
     ) {
         return error(HttpStatus.CONFLICT, "STATEMENT_GENERATION_REJECTED", exception.getMessage());
+    }
+
+    @ExceptionHandler(RepaymentConflictException.class)
+    public ResponseEntity<ErrorResponse> handleRepaymentConflict(
+            RepaymentConflictException exception
+    ) {
+        return error(HttpStatus.CONFLICT, "REPAYMENT_CONFLICT", exception.getMessage());
+    }
+
+    @ExceptionHandler(RepaymentRejectedException.class)
+    public ResponseEntity<ErrorResponse> handleRepaymentRejected(
+            RepaymentRejectedException exception
+    ) {
+        return error(HttpStatus.CONFLICT, "REPAYMENT_REJECTED", exception.getMessage());
     }
 
     @ExceptionHandler({

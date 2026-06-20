@@ -54,7 +54,8 @@
 availableCredit = creditLimit - reservedAmount - postedBalance
 ```
 
-授权阶段增加 `reservedAmount`；presentment posting 阶段把金额从 `reservedAmount` 移到 `postedBalance`。
+授权阶段增加 `reservedAmount`；presentment posting 阶段把金额从 `reservedAmount` 移到 `postedBalance`；
+repayment 阶段减少 `postedBalance`，恢复可用额度。
 
 ### `card_transactions`
 
@@ -87,9 +88,9 @@ availableCredit = creditLimit - reservedAmount - postedBalance
 - `due_date`：还款到期日。
 - `total_amount`：本期已入账交易汇总金额。
 - `minimum_payment_amount`：当前简化规则计算出的最低还款额。
-- `paid_amount`：未来还款阶段使用；当前生成账单时为 0。
+- `paid_amount`：还款阶段累计已经还入这张账单的金额；生成账单时为 0。
 - `transaction_count`：本期收录的 posted transactions 数量。
-- `status`：当前生成后为 `CLOSED`，未来还款/逾期阶段会进入 `PARTIALLY_PAID`、`PAID`、`OVERDUE`。
+- `status`：生成后为 `CLOSED`，还款后进入 `PARTIALLY_PAID` 或 `PAID`，未来逾期阶段会使用 `OVERDUE`。
 
 幂等键：
 
@@ -117,6 +118,27 @@ credit_account_id + period_start + period_end
 - 生成账单后，用户看到的账单金额和明细应该稳定可审计。
 - 后续 refund、adjustment、dispute 可以基于“是否已经出账”走不同处理路径。
 
+### `repayments`
+
+保存一次客户还款请求和最终入账结果。
+
+核心字段：
+
+- `id`：repayment id，由 `Repayment.pending(...)` 内部 `UUID.randomUUID()` 生成。
+- `idempotency_key`：客户端传入的幂等键，有唯一索引。
+- `request_fingerprint`：由 `ReceiveRepaymentCommand.requestFingerprint()` 计算，防止同一个幂等键支付不同账单或金额。
+- `statement_id`：本次还款应用到哪张已生成 statement。
+- `credit_account_id`：还款成功后回填，用于查询账户还款历史和 Kafka partition key。
+- `amount` / `currency`：还款金额。
+- `status`：`PENDING`、`RECEIVED`。
+- `received_at`：还款真正应用到账户和账单的时间。
+
+当前范围：
+
+- 只支持支付一张已生成 statement。
+- 不支持 overpayment，也不做多张账单之间的自动分摊。
+- 还款成功后同时减少 `credit_accounts.posted_balance`，推进 `statements.paid_amount/status`。
+
 ### `delay_jobs`
 
 保存未来需要执行的业务动作。
@@ -140,7 +162,7 @@ credit_account_id + period_start + period_end
 - `id`：event id，由 Outbox adapter 生成 UUID，下游用它做幂等去重。
 - `aggregate_type` / `aggregate_id`：事件属于哪个业务对象。
 - `event_type` / `event_version`：事件类型和版本。
-- `partition_key`：Kafka 分区 key，按事件所属 aggregate 选择；authorization/card transaction 事件用自身 id，statement 事件用 credit account id。
+- `partition_key`：Kafka 分区 key，按事件所属 aggregate 选择；authorization/card transaction 事件用自身 id，statement/repayment 事件用 credit account id。
 - `payload`：JSON 字符串。
 - `status`：`PENDING`、`PROCESSING`、`PUBLISHED`、`DEAD`。
 - `next_attempt_at`：下一次可领取时间；`PROCESSING` 时也作为 publisher lease deadline。
@@ -154,9 +176,9 @@ credit_account_id + period_start + period_end
 
 - `id`：notification id，由 `Notification.requestFromEvent(...)` 内部 `UUID.randomUUID()` 生成。
 - `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等。
-- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`。
+- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`、`REPAYMENT`。
 - `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
-- `template`：通知模板类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_READY`。
+- `template`：通知模板类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_READY`、`REPAYMENT_RECEIVED`。
 - `status`：`PENDING`、`SENT`、`FAILED`。
 
 提醒：
@@ -369,14 +391,16 @@ curl -X POST http://localhost:8080/api/authorizations \
 - Notification 侧按上游领域拆 listener：
   - `AuthorizationNotificationListener` 处理 `authorization.approved` 和 `authorization.declined`。
   - `CardTransactionNotificationListener` 处理 `card_transaction.posted`。
+  - `StatementNotificationListener` 处理 `statement.closed`。
+  - `RepaymentNotificationListener` 处理 `repayment.received`。
 - Risk listener 仍只处理 `authorization.approved` 和 `authorization.declined`，因为风控投影只关心授权决策历史。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
-为什么不叫 `PaymentNotificationListener`：
+为什么按上游领域拆 listener：
 
-- 当前工程没有一个独立的 `payment` bounded context。
-- `authorization` 和 `CardTransaction` 是两个不同上游领域，Notification 只是独立消费它们的 integration events。
+- `authorization`、`CardTransaction`、`Statement`、`Repayment` 是不同上游领域，Notification 只是独立消费它们的 integration events。
 - 按上游领域拆 inbound adapter，更接近未来 notification 微服务的真实形态。
+- 每个 listener 显式检查 `eventType`，新增事件时不会靠一个大而模糊的 boolean/status 字段让 consumer 猜。
 
 为什么 Notification 用 `NotificationType` enum：
 
@@ -749,7 +773,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 原因：
 
 - 账单生成只是把已入账消费固定成账单，不代表用户已经还款。
-- 未来 Payment 阶段才会减少 `postedBalance`，并恢复可用额度。
+- Repayment 阶段才会减少 `postedBalance`，并恢复可用额度。
 
 ### 5.4 PayPay Card 面试提示
 
@@ -758,9 +782,183 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
 - `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_READY` 通知；未来 PDF 生成、还款提醒也可以独立消费。
-- 当前没有做还款，所以 `paid_amount = 0` 且状态为 `CLOSED`；下一阶段 Payment 会继续推进状态。
+- 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
 
-## 6. 核心流程四：Outbox 发布消息
+## 6. 核心流程四：Repayment 还款入账
+
+当前业务目标：
+
+- 客户针对一张已生成 statement 还款。
+- 还款成功后减少 `credit_accounts.posted_balance`，恢复可用额度。
+- 同时推进 `statements.paid_amount/status`。
+- 发布 `repayment.received`，让 Notification、未来 ledger/reconciliation 可以异步消费。
+
+当前刻意不做：
+
+- 不支持 overpayment。
+- 不把一笔还款自动分摊到多张 statement。
+- 不引入外部银行扣款、资金清算或 double-entry ledger。
+
+示例请求：
+
+```bash
+curl -X POST http://localhost:8080/api/repayments \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: demo-repayment-001' \
+  -d '{
+    "statementId": "22222222-2222-2222-2222-222222222222",
+    "amount": 500.00,
+    "currency": "JPY"
+  }'
+```
+
+### 6.1 Controller 和 Command 阶段
+
+入口：
+
+- `RepaymentController.receive(...)`
+- `ReceiveRepaymentRequest`
+- `ReceiveRepaymentCommand`
+
+处理：
+
+- Controller 校验 `Idempotency-Key` header 和 JSON body。
+- `ReceiveRepaymentCommand.money()` 把 `BigDecimal + Currency` 转成 `Money` value object。
+- `ReceiveRepaymentCommand.requestFingerprint()` 生成 canonical fingerprint：
+
+```text
+statementId | amount | currency
+```
+
+为什么要 fingerprint：
+
+- 同一个 `Idempotency-Key` 可以重复提交同一还款请求。
+- 但不能第一次给 statement A 还 500，第二次拿同一个 key 给 statement B 还 1000。
+- 这种请求会抛 `RepaymentConflictException`，API 返回 `REPAYMENT_CONFLICT`。
+
+### 6.2 RepaymentService transaction boundary
+
+入口：
+
+- `RepaymentService.receive(command)`
+
+关键顺序：
+
+1. 非锁定读取 statement
+
+   `statementRepository.findById(statementId)` 先确认 statement 存在，并拿到 `creditAccountId`。
+   这个读取不做余额决策。
+
+   为什么可以这样做：
+
+   - `statement.creditAccountId` 是 statement 的归属字段，生成后不应该变化。
+   - 先查存在性可以避免 `repayments.statement_id` 外键错误变成晦涩的数据库异常。
+   - 真正的还款金额和状态判断，会在后面 `FOR UPDATE` 锁住 statement 后重新校验。
+
+2. 创建 `Repayment.pending(...)`
+
+   `repayment.id = UUID.randomUUID()` 在 domain factory 内生成。
+   新还款先进入 `PENDING`，表达幂等 ownership 已经准备被 claim。
+
+3. `repaymentRepository.claim(pending)`
+
+   MyBatis 插入 `repayments/PENDING`。
+   `repayments.idempotency_key` 唯一索引决定并发 winner。
+
+   面试重点：
+
+   - 这是 INSERT-first idempotency。
+   - 不靠 read-then-insert，因为并发下两个线程可能同时读到不存在。
+   - loser 不会继续改 account 或 statement。
+
+4. `findByIdempotencyKeyForUpdate(...)`
+
+   用 `SELECT ... FOR UPDATE` 锁定同一个 repayment row。
+   duplicate retry 会等待 winner 提交，然后读取最终 `RECEIVED` 结果。
+
+5. 锁定 credit account
+
+   `creditAccountRepository.findByIdForUpdate(creditAccountId)`。
+
+   这里沿用全项目锁顺序：
+
+```text
+credit account row lock -> statement row lock
+```
+
+   这样 repayment 不会和 `StatementService.generate(...)` 的锁顺序相反，降低死锁风险。
+
+6. 锁定 statement
+
+   `statementRepository.findByIdForUpdate(statementId)`。
+   锁住后重新校验：
+
+   - statement 属于刚才锁住的 credit account。
+   - 币种和 statement/account 一致。
+   - statement 不是 `PAID`。
+   - 还款金额不超过 statement remaining amount。
+   - 还款金额不超过 account posted balance。
+
+7. 更新两个 aggregate
+
+   - `account.applyRepayment(amount)`：减少 `postedBalance`。
+   - `statement.applyRepayment(amount, now)`：增加 `paidAmount`，状态变为 `PARTIALLY_PAID` 或 `PAID`。
+
+   这两个变更在同一个 MySQL transaction boundary 内提交。
+   任一步失败都会 rollback，避免“账单显示已还但额度没恢复”或相反的不一致。
+
+8. `Repayment.markReceived(...)`
+
+   `Repayment` 从 `PENDING -> RECEIVED`。
+   domain 内部产生 `RepaymentReceivedDomainEvent`。
+
+9. 保存并写 Outbox
+
+   - `creditAccountRepository.update(account)`
+   - `statementRepository.updatePayment(statement)`
+   - `repaymentRepository.update(repayment)`
+   - `repayment.pullDomainEvents()`
+   - `RepaymentOutboxAdapter.append(event)`
+
+   `repayment.received` 的 Outbox row 和 account/statement/repayment 状态一起 commit。
+
+10. Outbox 后续异步发布 `repayment.received`
+
+   - `KafkaOutboxMessagePublisher` 看到 `eventType` 以 `repayment.` 开头，路由到 `mini-card.repayment-events.v1`。
+   - `RepaymentNotificationListener` 消费 `repayment.received`。
+   - Listener 把业务事实映射成 `NotificationType.REPAYMENT_RECEIVED`。
+   - `RequestNotificationService` 用 `consumer_inbox` 和 `notifications.source_event_id` 做 consumer-side idempotency。
+
+### 6.3 本次事务提交后的数据变化
+
+成功还款后：
+
+- `repayments`：`PENDING -> RECEIVED`，记录 `received_at` 和 `credit_account_id`。
+- `credit_accounts.posted_balance` 减少，还款金额重新释放为可用额度。
+- `statements.paid_amount` 增加。
+- `statements.status` 变为 `PARTIALLY_PAID` 或 `PAID`。
+- `outbox_events` 新增 `repayment.received/PENDING`。
+
+不会变化：
+
+- `card_transactions` 不会被改写。
+- `statement_items` 不会被改写。
+- `reserved_amount` 不会变化。
+
+原因：
+
+- 还款改变的是账户余额和账单还款状态，不改变历史交易流水和账单行快照。
+- audit trail 里“消费发生过”和“后来还款了”是两类事实。
+
+### 6.4 PayPay Card 面试提示
+
+- Repayment 是独立业务领域，不应该塞进 `transaction` 或 `statement` 里当普通 helper。
+- 还款 API 同样需要 idempotency，因为客户端重试或支付回调重复很常见。
+- 锁顺序保持 `credit account -> statement`，是为了和账单生成保持一致，避免死锁。
+- `Statement` 负责保护 `paidAmount/status`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
+- `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification row` 让通知失败不影响还款主事务。
+
+## 7. 核心流程五：Outbox 发布消息
 
 入口：
 
@@ -837,7 +1035,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - 下游 consumer 必须用 `eventId` 做幂等。
 - `processingTimeoutSeconds` 应大于正常 Kafka send timeout，避免健康 publisher 被过早认为失联。
 
-### 6.1 消息可靠性结构说明
+### 7.1 消息可靠性结构说明
 
 当前消息相关代码分成 5 组：
 
@@ -850,6 +1048,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
   - `notification/infrastructure/messaging/CardTransactionNotificationListener`
   - `notification/infrastructure/messaging/StatementNotificationListener`
+  - `notification/infrastructure/messaging/RepaymentNotificationListener`
   - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
@@ -867,7 +1066,7 @@ PayPay Card 面试提示：
 - `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
 - `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
 
-## 7. 核心流程五：DelayJob 自动过期授权
+## 8. 核心流程六：DelayJob 自动过期授权
 
 当前业务目标：
 
@@ -903,7 +1102,7 @@ PayPay Card 面试提示：
 - `DelayJob` 的状态机很重要，但它描述的是执行计划的 lease/retry/DONE/DEAD，不是信用卡业务规则。
 - 包结构压平后，业务领域仍在 `authorization/card/creditaccount`，共享机制则直接放在 `delayjob`。
 
-### 7.1 Poll and claim batch
+### 8.1 Poll and claim batch
 
 关键方法：
 
@@ -925,7 +1124,7 @@ PayPay Card 面试提示：
 - lease 到期后，`DelayJobRecoverer` 会把 job 恢复成可 retry 状态。
 - worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
 
-### 7.2 Worker dispatch handler
+### 8.2 Worker dispatch handler
 
 关键方法：
 
@@ -946,7 +1145,7 @@ PayPay Card 面试提示：
 - 新增 handler。
 - 新增业务 scheduler adapter。
 
-### 7.3 Business transaction
+### 8.3 Business transaction
 
 入口：
 
@@ -996,7 +1195,7 @@ PayPay Card 面试提示：
    - `authorizations.status = EXPIRED`。
    - `AuthorizationExpiryService` 从 aggregate 拉取 domain event，`outbox_events` 新增 `authorization.expired/PENDING`。
 
-### 7.4 Worker mark done or failed
+### 8.4 Worker mark done or failed
 
 回到：
 
@@ -1022,7 +1221,7 @@ PayPay Card 面试提示：
 - 失败记录单独提交，避免错误信息跟业务 rollback 一起消失。
 - worker 成功后自己 finalize，保证 `DONE` 一定发生在业务处理之后。
 
-### 7.5 Recover stuck PROCESSING jobs
+### 8.5 Recover stuck PROCESSING jobs
 
 入口：
 
@@ -1042,13 +1241,14 @@ PayPay Card 面试提示：
 - recoverer 只关心 worker/pod 宕机或超时留下的 stuck lease。
 - 这让正常执行路径和故障恢复路径都更容易解释。
 
-## 8. 核心流程六：查询授权和账单
+## 9. 核心流程七：查询授权、账单和还款
 
 示例请求：
 
 ```bash
 curl http://localhost:8080/api/authorizations/{authorizationId}
 curl http://localhost:8080/api/statements/{statementId}
+curl http://localhost:8080/api/repayments/{repaymentId}
 ```
 
 入口：
@@ -1057,11 +1257,13 @@ curl http://localhost:8080/api/statements/{statementId}
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
 - `StatementService.get(id)`
+- `RepaymentController.get(id)`
+- `RepaymentService.get(id)`
 
 处理：
 
 - `@Transactional(readOnly = true)`
-- 通过 authorization id 或 statement id 查询当前状态。
+- 通过 authorization id、statement id 或 repayment id 查询当前状态。
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
@@ -1072,14 +1274,15 @@ curl http://localhost:8080/api/statements/{statementId}
 - presentment posting 后会变成 `POSTED`。
 - 7 天过期任务执行后会变成 `EXPIRED`。
 - statement 生成后可以看到 `CLOSED` 状态、账单金额、最低还款额和 item 快照。
+- repayment 成功后可以看到 `RECEIVED`、`statementId`、`creditAccountId` 和 `receivedAt`。
 
-## 9. Outbox vs DelayJob 对比
+## 10. Outbox vs DelayJob 对比
 
 | 项目 | Outbox | DelayJob |
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed`, `repayment.received` | `AUTHORIZATION_EXPIRY` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
 | 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
@@ -1092,7 +1295,7 @@ curl http://localhost:8080/api/statements/{statementId}
 - Outbox 表保存“我要告诉别人发生了什么”。
 - DelayJob 表保存“未来我要自己做一件业务动作”。
 
-## 10. 面试容易追问的点
+## 11. 面试容易追问的点
 
 ### 为什么不用 Java `synchronized` 控制额度？
 
@@ -1105,6 +1308,19 @@ curl http://localhost:8080/api/statements/{statementId}
 因为 read-then-insert 有 race condition。
 两个并发请求可能都读到不存在，然后都继续执行业务。
 现在先 insert，并依赖 unique constraint 决定唯一 winner。
+
+### 为什么 repayment 先读 statement，再锁 account 和 statement？
+
+还款请求只带 `statementId`，需要先知道它属于哪个 `creditAccountId`。
+第一次 `statementRepository.findById(...)` 只是拿归属信息，不做余额决策。
+之后仍然按统一顺序拿锁：
+
+```text
+credit account row lock -> statement row lock
+```
+
+锁住 statement 后再重新校验 remaining amount 和 status。
+这样既能从 statement 找到账户，又不会和账单生成的锁顺序相反。
 
 ### 为什么 risk check 放在 account lock 前？
 
@@ -1130,7 +1346,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 - `CardTransaction` 提供 posted transaction 基础。
 - `Statement` 把 posted transactions 固定成账单快照。
-- 下一阶段 Payment 才会处理还款、恢复额度和账单结清。
+- `Repayment` 处理还款、恢复额度和账单结清。
 
 ### 为什么 Outbox 和 DelayJob 分开？
 
@@ -1183,17 +1399,18 @@ statement.closed -> NotificationType.STATEMENT_READY
 
 ### 为什么 notifications 不再只存 authorizationId？
 
-因为 Notification 现在同时消费三类事件：
+因为 Notification 现在同时消费四类事件：
 
 - `authorization.approved/declined`
 - `card_transaction.posted`
 - `statement.closed`
+- `repayment.received`
 
-Statement 没有 authorizationId，强行塞入旧列会让模型变形。
+Statement 和 Repayment 都没有 authorizationId，强行塞入旧列会让模型变形。
 所以现在用 `subject_type + subject_id` 表达“这条通知关联哪个业务对象”，
 再用 `recipient_key` 表达“目前怎样找到接收方”。
 
-## 11. Spring 和 MyBatis 语法速查
+## 12. Spring 和 MyBatis 语法速查
 
 ### `@RestController`
 
@@ -1206,7 +1423,7 @@ Statement 没有 authorizationId，强行塞入旧列会让模型变形。
 ### `@Transactional`
 
 声明事务边界。
-当前最关键的是 `AuthorizationService.authorize()`、`PostingService.post()`、`StatementService.generate()` 和 `AuthorizationExpiryService.expire()`。
+当前最关键的是 `AuthorizationService.authorize()`、`PostingService.post()`、`StatementService.generate()`、`RepaymentService.receive()` 和 `AuthorizationExpiryService.expire()`。
 
 ### `@Transactional(readOnly = true)`
 
@@ -1248,18 +1465,17 @@ FOR UPDATE SKIP LOCKED
 `FOR UPDATE` 锁住选中的 row。
 `SKIP LOCKED` 让并发 worker 跳过别人已经锁住的 row。
 
-## 12. 后续学习建议
+## 13. 后续学习建议
 
 当前实现已经适合学习面试核心点。
 如果继续扩展，建议按这个顺序：
 
-1. 增加 Payment / Repayment，用还款减少 `postedBalance`，推进 statement 状态。
-2. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
-3. 增加 minimal ledger，记录 posting、statement、payment 对内部会计账本的影响。
-4. 增加 reconciliation，对比内部 posted transaction 和外部清算/资金文件。
-5. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
-6. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
-7. 补充少量并发测试，验证同账户多个授权、posting 和 statement generation 不会互相漏算。
+1. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
+2. 增加 minimal ledger，记录 posting、statement、repayment 对内部会计账本的影响。
+3. 增加 reconciliation，对比内部 posted transaction、repayment 和外部清算/资金文件。
+4. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
+5. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
+6. 补充少量并发测试，验证同账户多个 authorization、posting、statement generation 和 repayment 不会互相漏算。
 
 这一阶段最应该讲清楚的是：
 
@@ -1267,4 +1483,4 @@ FOR UPDATE SKIP LOCKED
 - 额度为什么不会在并发下被超用。
 - 为什么 delay job 和 outbox 都写在主事务里。
 - 为什么 delay job 和 outbox 分表，但 scheduler 形状保持对称。
-- 为什么 statement generation 只固定账单，不恢复额度；恢复额度属于 Payment 阶段。
+- 为什么 statement generation 只固定账单，不恢复额度；恢复额度属于 Repayment 阶段。

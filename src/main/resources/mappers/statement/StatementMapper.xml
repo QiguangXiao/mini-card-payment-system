@@ -104,6 +104,21 @@
         WHERE id = #{id}
     </select>
 
+    <select id="findByIdForUpdate" resultMap="statementRowMap">
+        SELECT <include refid="statementColumns"/>
+        FROM statements
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="updatePayment">
+        UPDATE statements
+        SET paid_amount = #{paidAmount},
+            status = #{status},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
     <select id="findItemsByStatementId" resultMap="statementItemRowMap">
         SELECT <include refid="statementItemColumns"/>
         FROM statement_items

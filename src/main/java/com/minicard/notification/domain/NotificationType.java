@@ -13,5 +13,9 @@ public enum NotificationType {
     /**
      * 来自 statement.closed 事件，但用户看到的是“账单已生成/可查看”。
      */
-    STATEMENT_READY
+    STATEMENT_READY,
+    /**
+     * 来自 repayment.received 事件，表达用户还款已成功入账。
+     */
+    REPAYMENT_RECEIVED
 }

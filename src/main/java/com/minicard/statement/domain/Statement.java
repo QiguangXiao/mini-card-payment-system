@@ -32,7 +32,7 @@ public final class Statement {
     private final LocalDate dueDate;
     private final Money totalAmount;
     private final Money minimumPaymentAmount;
-    private final Money paidAmount;
+    private Money paidAmount;
     private final int transactionCount;
     private StatementStatus status;
     private final Instant generatedAt;
@@ -163,6 +163,41 @@ public final class Statement {
         List<StatementDomainEvent> events = List.copyOf(domainEvents);
         domainEvents.clear();
         return events;
+    }
+
+    public Money remainingAmount() {
+        // remaining amount 是账单还款阶段的派生值，不单独落库，避免 total/paid/remaining 三者漂移。
+        return totalAmount.subtract(paidAmount);
+    }
+
+    public void applyRepayment(Money amount, Instant paidAt) {
+        Objects.requireNonNull(amount);
+        Instant actualPaidAt = Objects.requireNonNull(paidAt);
+        // Statement 的职责是保护账单级还款状态，不直接改 credit account postedBalance。
+        // RepaymentService 会在同一个 transaction boundary 内同时更新 statement 和 account。
+        if (!totalAmount.currency().equals(amount.currency())) {
+            throw new IllegalArgumentException("repayment currency must match statement currency");
+        }
+        if (!amount.isPositive()) {
+            throw new IllegalArgumentException("repayment amount must be positive");
+        }
+        if (status == StatementStatus.PAID) {
+            throw new IllegalStateException("paid statement cannot accept repayment");
+        }
+        if (amount.isGreaterThan(remainingAmount())) {
+            throw new IllegalStateException("repayment amount exceeds statement remaining amount");
+        }
+
+        paidAmount = paidAmount.add(amount);
+        updatedAt = actualPaidAt;
+        if (paidAmount.equals(totalAmount)) {
+            status = StatementStatus.PAID;
+            return;
+        }
+        // OVERDUE 账单部分还款后仍然逾期；CLOSED 账单部分还款才进入 PARTIALLY_PAID。
+        if (status != StatementStatus.OVERDUE) {
+            status = StatementStatus.PARTIALLY_PAID;
+        }
     }
 
     private void validateState() {
