@@ -17,7 +17,7 @@ import org.springframework.util.backoff.FixedBackOff;
 /**
  * Kafka topic、consumer factory 和 DLT(error handling) 配置。
  *
- * <p>面试重点：每个 bounded context 用自己的 consumer group 和 DLT，互不影响；
+ * <p>interview重点：每个 bounded context 用自己的 consumer group 和 DLT，互不影响；
  * partition key 负责单个 aggregate 内有序，consumer concurrency 负责横向处理能力。</p>
  */
 @Configuration

@@ -10,7 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * バッチ設定(バッチせってい)。</p>
  *
  * <p>当前学习项目先使用全局 billing day / payment day，而不是每个客户自定义。
- * 这让面试讨论聚焦在批处理、idempotency、row lock 和失败恢复。</p>
+ * 这让interview讨论聚焦在批处理、idempotency、row lock 和失败恢复。</p>
  */
 @ConfigurationProperties(prefix = "statement.batch")
 public record StatementBatchProperties(

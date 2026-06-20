@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 /**
  * OutboxEventRepository 的 MyBatis adapter，负责 durable message queue 的数据库访问。
  *
- * <p>面试重点：Outbox 是基础设施可靠性模式，不是业务 aggregate。
+ * <p>interview重点：Outbox 是基础设施可靠性模式，不是业务 aggregate。
  * 它用 DB row state 表达待发布、已发布、失败重试和 DEAD。</p>
  */
 @Repository

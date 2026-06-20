@@ -21,7 +21,7 @@ import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
  * state transition, domain event, オーソリ集約(オーソリしゅうやく),
  * 状態遷移(じょうたいせんい)。</p>
  *
- * <p>面试重点：状态转换(state transition)放在 domain 内部，service 只能调用
+ * <p>interview重点：状态转换(state transition)放在 domain 内部，service 只能调用
  * approve/decline/expire 这些业务行为，不能绕过 invariant 直接改字段。</p>
  */
 public final class Authorization {

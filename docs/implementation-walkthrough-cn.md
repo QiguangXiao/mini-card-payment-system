@@ -580,7 +580,7 @@ curl -X POST http://localhost:8080/api/presentments \
 - `Reconciliation` 是把内部记录和外部文件/资金清算结果对比，发现 missing/duplicate/amount mismatch。
 - 现在先把 posted transaction 和账户余额做对，后续再基于它增加 minimal ledger 和 reconciliation。
 
-PayPay Card 面试提示：
+PayPay Card interview提示：
 
 - issuer backend 里 authorization 和 posting 是两段生命周期，不能混成一个状态。
 - `networkTransactionId` 是外部幂等键，能防止 presentment retry 造成 double posting。
@@ -854,7 +854,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 账单生成只是把已入账消费固定成账单，不代表用户已经还款。
 - Repayment 阶段才会减少 `postedBalance`，并恢复可用额度。
 
-### 5.4 PayPay Card 面试提示
+### 5.4 PayPay Card interview提示
 
 - Statement 是 posted transaction 的账单快照，不是实时查询结果。
 - 真实主路径是 billing batch，不是用户实时请求；HTTP generate 只是 backfill/学习入口。
@@ -1022,7 +1022,7 @@ statementId | amount | currency
    MyBatis 插入 `repayments/PENDING`。
    `repayments.idempotency_key` 唯一索引决定并发 winner。
 
-   面试重点：
+   interview重点：
 
    - 这是 INSERT-first idempotency。
    - 不靠 read-then-insert，因为并发下两个线程可能同时读到不存在。
@@ -1107,7 +1107,7 @@ credit account row lock -> statement row lock
 - 还款改变的是账户余额和账单还款状态，不改变历史交易流水和账单行快照。
 - audit trail 里“消费发生过”和“后来还款了”是两类事实。
 
-### 6.5 PayPay Card 面试提示
+### 6.5 PayPay Card interview提示
 
 - Repayment 是独立业务领域，不应该塞进 `transaction` 或 `statement` 里当普通 helper。
 - 还款 API 同样需要 idempotency，因为客户端重试或支付回调重复很常见。
@@ -1215,9 +1215,9 @@ credit account row lock -> statement row lock
 - Outbox 是 messaging 的 reliable delivery 机制，不是业务 aggregate。
 - `OutboxEvent` 表达的是一条待发布消息的 delivery state，不需要伪装成业务 domain。
 - 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务发送/消费入口放回各自 bounded context。
-- 面试中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
+- interview中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
 
-PayPay Card 面试提示：
+PayPay Card interview提示：
 
 - Outbox 解决的是“业务事务成功后，消息不能丢”的问题。
 - 它不解决“消息绝不重复”的问题，因为 Kafka ack 和 MySQL commit 无法组成单机事务。
@@ -1464,7 +1464,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - Outbox 表保存“我要告诉别人发生了什么”。
 - DelayJob 表保存“未来我要自己做一件业务动作”。
 
-## 11. 面试容易追问的点
+## 11. interview容易追问的点
 
 ### 为什么不用 Java `synchronized` 控制额度？
 
@@ -1528,7 +1528,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 - 表字段更贴合语义。
 - scheduler 可以独立配置 worker pool。
-- 面试时更容易解释职责边界。
+- interview时更容易解释职责边界。
 
 ### 为什么 eventId 和 authorizationId 不一样？
 
@@ -1636,7 +1636,7 @@ FOR UPDATE SKIP LOCKED
 
 ## 13. 后续学习建议
 
-当前实现已经适合学习面试核心点。
+当前实现已经适合学习interview核心点。
 如果继续扩展，建议按这个顺序：
 
 1. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。

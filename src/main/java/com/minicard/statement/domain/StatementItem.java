@@ -11,7 +11,7 @@ import lombok.experimental.Accessors;
 /**
  * 账单行项目(statement item)，是账单生成时对 posted CardTransaction 的历史快照。
  *
- * <p>面试重点：账单不是每次查询时临时 SUM 交易表。生成账单时把交易事实 snapshot 下来，
+ * <p>interview重点：账单不是每次查询时临时 SUM 交易表。生成账单时把交易事实 snapshot 下来，
  * 才能解释 audit trail、账单不可随意变动，以及后续 refund 在账单前后处理不同。</p>
  */
 @Getter

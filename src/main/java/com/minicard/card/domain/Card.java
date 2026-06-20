@@ -7,7 +7,7 @@ import java.util.UUID;
  * 发卡行侧的一张卡，指向共享的 CreditAccount。
  *
  * <p>一张信用账户可以有多张卡，所以 Card 负责生命周期可用性，CreditAccount 负责额度。
- * 这个拆分是 PayPay Card 面试里很容易被问到的 domain modeling 点。</p>
+ * 这个拆分是 PayPay Card interview里很容易被问到的 domain modeling 点。</p>
  */
 public record Card(
         String id,

@@ -28,7 +28,7 @@ public class WorkerExecutorConfiguration {
     ) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("outbox-worker-");
-        // core=max 固定线程数，避免流量波动时频繁创建/销毁线程，面试里可解释为 bounded worker pool。
+        // core=max 固定线程数，避免流量波动时频繁创建/销毁线程，interview里可解释为 bounded worker pool。
         executor.setCorePoolSize(properties.workerPoolSize());
         executor.setMaxPoolSize(properties.workerPoolSize());
         // queue 满会让 poller 捕获 TaskRejectedException，并把事件/任务放回 retry。

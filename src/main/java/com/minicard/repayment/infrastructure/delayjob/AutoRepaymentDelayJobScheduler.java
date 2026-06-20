@@ -39,7 +39,7 @@ public class AutoRepaymentDelayJobScheduler implements StatementDueJobScheduler 
      * 为 statement 到期日创建 AUTO_REPAYMENT job。
      *
      * <p>scheduledAt 当前取 dueDate 的 UTC 零点；真实日本业务可能需要指定 JST 银行批处理时间，
-     * 这里先保留“日期级”调度，降低面试 demo 的复杂度。</p>
+     * 这里先保留“日期级”调度，降低interview demo 的复杂度。</p>
      */
     @Override
     public void scheduleAutoRepayment(Statement statement) {

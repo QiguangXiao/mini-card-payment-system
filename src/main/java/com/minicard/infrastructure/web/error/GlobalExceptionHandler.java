@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * error contract, API error, 例外ハンドラー(れいがいハンドラー),
  * エラー契約(エラーけいやく)。</p>
  *
- * <p>面试重点：金融 API 不应该把 Java stack trace 或数据库错误直接暴露给客户端；
+ * <p>interview重点：金融 API 不应该把 Java stack trace 或数据库错误直接暴露给客户端；
  * 客户端需要稳定 code，服务端日志保留细节用于排查。</p>
  */
 @RestControllerAdvice

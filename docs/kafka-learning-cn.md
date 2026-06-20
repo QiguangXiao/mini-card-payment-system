@@ -1,6 +1,6 @@
-# Kafka 配置与面试学习笔记
+# Kafka 配置与interview学习笔记
 
-这份文档专门解释本项目里的 Kafka 配置、它们解决什么问题，以及 PayPay Card / 信用卡发卡后台面试里可能被追问的点。
+这份文档专门解释本项目里的 Kafka 配置、它们解决什么问题，以及 PayPay Card / 信用卡发卡后台interview里可能被追问的点。
 
 当前项目使用 Kafka 的方式是：
 
@@ -47,7 +47,7 @@ spring:
 - `bootstrap` 不是说只连这一台；生产环境里可以配置多台 broker 地址。
 - 本地默认是 `localhost:9092`。
 
-面试可能问：
+interview可能问：
 
 为什么叫 bootstrap servers？
 
@@ -78,7 +78,7 @@ spring:
 - 金融系统里事件丢失比延迟更严重。
 - Authorization / posting 事件用于通知、风控投影、后续运营视图，不能随便丢。
 
-面试回答：
+interview回答：
 
 > `acks=all` 提高 durability，但会增加 latency。金融后台通常会优先选择可靠性。即使如此，它也只保证 Kafka 写入更可靠，不解决 MySQL 和 Kafka 的 dual-write 原子性，所以本项目仍然使用 Outbox。
 
@@ -113,7 +113,7 @@ enable.idempotence=true
 - Outbox：解决 MySQL 业务状态和 Kafka publish 的 dual-write 问题。
 - Inbox / unique constraint：解决 Kafka redelivery 导致 consumer side effect 重复的问题。
 
-面试回答：
+interview回答：
 
 > Kafka producer idempotence 只处理 producer retry 到 Kafka 的重复写入，不能覆盖应用在 Kafka ack 后、更新 MySQL Outbox 状态前宕机的情况。这个窗口仍然会导致同一 Outbox event 再次发布，所以 consumer 必须按 `eventId` 幂等。
 
@@ -140,7 +140,7 @@ spring:
 - 保持默认可接受吞吐。
 - 配合 idempotent producer，在现代 Kafka 中可以保持安全。
 
-面试回答：
+interview回答：
 
 > 如果非常强调单 producer 严格顺序，可以降低 in-flight requests；但在本项目里，同一 authorization 的业务顺序主要依赖 Kafka key 进入同一 partition，以及事件本身按业务状态产生。Producer idempotence 也降低 retry 乱序风险。
 
@@ -175,7 +175,7 @@ outbox:
 - `processing-timeout-seconds` 是 Outbox row 的 lease 时间。
 - lease 应该大于正常 send timeout，避免健康 worker 还在等 broker ack 时，被 recoverer 当成 stuck event。
 
-面试回答：
+interview回答：
 
 > Kafka timeout 控制 producer 等 broker 的时间；Outbox lease 控制数据库里这条事件被 worker 占用多久。两者要配合，通常 lease 要明显大于 send timeout。
 
@@ -227,7 +227,7 @@ Kafka redeliver
 consumer 幂等挡住重复 side effect
 ```
 
-面试回答：
+interview回答：
 
 > 禁用 auto commit 可以避免“消息还没处理完 offset 已经提交”。但 Kafka offset 和 MySQL transaction 仍然不能原子提交，所以 consumer 仍要使用 Inbox 或 unique constraint 做幂等。
 
@@ -257,7 +257,7 @@ spring:
 - 新 consumer group 如果直接 `earliest`，可能会重放大量历史消息。
 - 是否使用 `earliest` 要结合 topic retention、投影重建策略、消费能力评估。
 
-面试回答：
+interview回答：
 
 > `earliest` 适合可重建 projection 或学习环境；生产环境要谨慎，因为新 group 可能从历史消息开始大量回放。
 
@@ -282,7 +282,7 @@ spring:
 - Notification / Risk consumer 都有数据库 side effect。
 - 每条事件独立幂等处理，record-level ack 更容易解释。
 
-面试回答：
+interview回答：
 
 > `record` ack 牺牲一点吞吐，但语义更清晰。金融后台里每条消息都有独立 side effect 和幂等记录，record-level ack 更适合作为学习项目的默认选择。
 
@@ -362,7 +362,7 @@ new ProducerRecord<>(
 不同 authorization 可以并行处理
 ```
 
-面试回答：
+interview回答：
 
 > Kafka 只保证 partition 内顺序，不保证 topic 全局顺序。我们用 authorizationId 作为 key，把同一个 aggregate 的事件固定到同一 partition，获得 aggregate-level ordering。
 
@@ -384,7 +384,7 @@ new ProducerRecord<>(
 - 通常至少 3 brokers，replication factor 设为 3。
 - 配合 `acks=all` 才能真正提升 broker 故障下的数据可靠性。
 
-面试回答：
+interview回答：
 
 > 本地 replicas=1 只是开发限制，不是生产建议。生产会提高 replication factor，并配置 min.insync.replicas，防止 leader 单点写入后丢失。
 
@@ -429,7 +429,7 @@ Concurrency 语义：
 - 但最大有效并行度受 partition 数限制。
 - topic 只有 3 partitions 时，单个 group 的有效并行度最多就是 3。
 
-面试回答：
+interview回答：
 
 > Consumer group 让同一业务能力横向扩展；不同 group 让不同业务能力独立消费同一事件。Concurrency 不能无限提高吞吐，它受 partition 数限制。
 
@@ -479,7 +479,7 @@ mini-card.authorization-risk-feature.dlt.v1
 - 排查时能看出原 partition。
 - replay 时更容易保持 partition 相关顺序。
 
-面试回答：
+interview回答：
 
 > Retry 适合 transient failure，例如数据库短暂不可用。Contract failure 是 permanent failure，应直接进入 DLT。DLT 不应该自动无限重放，需要告警、排查、修复、再人工或受控 replay。
 
@@ -518,7 +518,7 @@ Payload 是 `IntegrationEvent` envelope：
 - Payload 是完整事件内容，方便持久化和 replay。
 - `IntegrationEventReader` 会校验 header 和 payload 是否一致，避免 transport contract 损坏。
 
-面试回答：
+interview回答：
 
 > Header 是 transport-level metadata，payload 是 durable event contract。两者重复关键字段是为了提高可观测性和校验能力。
 
@@ -560,7 +560,7 @@ Kafka 消息绝不重复
 
 所以仍然是 at-least-once delivery。
 
-面试回答：
+interview回答：
 
 > Outbox 把“业务事务”和“消息发布”拆成两个可靠步骤，避免 dual-write lost event。代价是消息可能重复，所以 consumer 必须幂等。
 
@@ -595,11 +595,11 @@ commit
 
 如果 insert 失败，说明处理过，直接跳过 side effect。
 
-面试回答：
+interview回答：
 
 > Kafka redelivery 是正常情况。Consumer side effect 必须幂等，常见做法是用 eventId unique constraint 或 consumer inbox table，把“是否处理过”和业务更新放在同一个数据库事务里。
 
-## 11. 面试高频问题
+## 11. interview高频问题
 
 ### Kafka 能保证消息顺序吗？
 
@@ -693,6 +693,6 @@ Event 是跨 bounded context contract。
 
 ## 13. 一句话总结
 
-面试里可以这样讲：
+interview里可以这样讲：
 
 > 我们用 Kafka 解耦授权后的异步副作用，用 Outbox 解决 MySQL 和 Kafka dual-write 的 lost-event 风险；整体按 at-least-once 设计，所以 producer 等 broker ack，Outbox 负责 retry，consumer 用 eventId 做幂等，DLT 用于隔离无法自动恢复的坏消息。

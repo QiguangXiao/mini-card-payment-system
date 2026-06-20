@@ -16,7 +16,7 @@ import org.springframework.stereotype.Repository;
 /**
  * AuthorizationRepository 的 MyBatis adapter，负责 domain object 与数据库 row 的转换。
  *
- * <p>面试重点：idempotency claim 和 SELECT ... FOR UPDATE 由数据库保证，
+ * <p>interview重点：idempotency claim 和 SELECT ... FOR UPDATE 由数据库保证，
  * application service 只依赖 repository port，不依赖 MyBatis/JDBC 细节。</p>
  */
 @Repository

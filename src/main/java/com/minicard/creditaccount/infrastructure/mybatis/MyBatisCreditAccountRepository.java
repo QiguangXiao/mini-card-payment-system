@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 /**
  * CreditAccountRepository 的 MyBatis adapter，封装账户额度表的锁定读取和持久化。
  *
- * <p>面试重点：真正的并发控制依赖 mapper XML 里的 SELECT ... FOR UPDATE，
+ * <p>interview重点：真正的并发控制依赖 mapper XML 里的 SELECT ... FOR UPDATE，
  * 但额度计算仍放在 CreditAccount aggregate 内。</p>
  */
 @Repository

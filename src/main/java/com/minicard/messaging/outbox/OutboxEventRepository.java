@@ -8,7 +8,7 @@ import java.util.UUID;
 /**
  * OutboxEvent 的 repository port，抽象 database-backed publish queue。
  *
- * <p>面试重点：Outbox 把业务事务和 Kafka 发送解耦，但只能提供 at-least-once，
+ * <p>interview重点：Outbox 把业务事务和 Kafka 发送解耦，但只能提供 at-least-once，
  * 因此 consumer 仍要做 idempotency。</p>
  */
 public interface OutboxEventRepository {

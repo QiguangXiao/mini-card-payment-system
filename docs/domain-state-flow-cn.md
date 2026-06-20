@@ -6,7 +6,7 @@
 Authorization -> Presentment Posting -> Statement Batch -> Auto/Manual Repayment
 ```
 
-重点不是 API 用法本身，而是你在面试里要讲清楚的几个问题：
+重点不是 API 用法本身，而是你在interview里要讲清楚的几个问题：
 
 - 每个领域对象有哪些状态，谁触发状态转换。
 - 状态转换在哪个类里执行，哪些表的哪些行会变化。
@@ -1495,7 +1495,7 @@ statement remaining = 1000 JPY
 - 如果 authorization 先 commit，repayment 之后再恢复额度。
 - 不会出现两个操作同时基于旧 `posted_balance` 计算可用额度。
 
-## 12. 你可以这样在面试里讲
+## 12. 你可以这样在interview里讲
 
 > 这个项目把状态变化放在 aggregate 里：Authorization 负责 PENDING/APPROVED/POSTED/EXPIRED，CardTransaction 负责 PENDING/POSTED 和 statement assignment，Statement 负责 CLOSED/PARTIALLY_PAID/PAID，Repayment 负责 PENDING/RECEIVED。Application service 负责 transaction boundary 和跨 aggregate 编排。Statement batch 用固定关账日生成账单，并写 `AUTO_REPAYMENT` DelayJob 作为 due-date 未来业务动作。所有会改变额度的操作都要锁同一条 credit account row，用 MySQL `SELECT ... FOR UPDATE` 串行化，而不是用 JVM lock。Outbox row 和业务状态同事务提交，Kafka/Notification 在事务后异步处理，所以消息失败不会扩大主交易锁时间。
 

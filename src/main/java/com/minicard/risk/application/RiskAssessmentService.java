@@ -21,7 +21,7 @@ import org.springframework.stereotype.Service;
  * local checks, external risk, リスク評価(リスクひょうか),
  * 外部審査(がいぶしんさ)。</p>
  *
- * <p>面试重点：risk check 放在 account row lock 之前，避免慢风控调用扩大锁等待时间。</p>
+ * <p>interview重点：risk check 放在 account row lock 之前，避免慢风控调用扩大锁等待时间。</p>
  */
 @Service
 public class RiskAssessmentService {

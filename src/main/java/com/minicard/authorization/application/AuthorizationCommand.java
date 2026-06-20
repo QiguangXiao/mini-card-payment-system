@@ -16,7 +16,7 @@ import com.minicard.risk.domain.RiskAssessmentRequest;
  * Controller 转入 application layer 的授权命令对象。
  *
  * <p>它把 HTTP DTO 和领域模型隔开，同时集中处理 request fingerprint。
- * 面试重点：fingerprint 是 idempotency conflict detection，不是安全认证。</p>
+ * interview重点：fingerprint 是 idempotency conflict detection，不是安全认证。</p>
  */
 public record AuthorizationCommand(
         String idempotencyKey,

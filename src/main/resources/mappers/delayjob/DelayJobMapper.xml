@@ -60,7 +60,7 @@
 
     <!--
       recovery 独立扫描 lease 已超时的 PROCESSING rows。
-      这让“正常 claim”和“宕机恢复”两个路径在面试解释时更清楚。
+      这让“正常 claim”和“宕机恢复”两个路径在interview解释时更清楚。
     -->
     <select id="findStuckProcessingBatchForUpdate" resultMap="delayJobRowMap">
         SELECT <include refid="delayJobColumns"/>

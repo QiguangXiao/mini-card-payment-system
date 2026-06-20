@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * Risk bounded context 的 Kafka inbound adapter，把授权历史投影成风控特征。
  *
- * <p>面试重点：这是 eventually consistent projection。授权主流程不等待这个 consumer，
+ * <p>interview重点：这是 eventually consistent projection。授权主流程不等待这个 consumer，
  * 风控特征由事件异步更新，下一笔交易再使用最新可见数据。</p>
  */
 @Component

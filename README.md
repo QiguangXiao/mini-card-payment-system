@@ -27,6 +27,9 @@ See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
 See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
 consumer idempotency, partition ordering, and failure-recovery decisions.
+See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
+for interview-focused key points, answer patterns, and common follow-up
+questions grounded in this project.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.

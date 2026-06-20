@@ -1,11 +1,11 @@
 # 中英日三语关键词表
 
-这个文档把项目注释、学习文档和面试复习中反复出现的关键词统一整理成中文、English、日本語三语对照。它不再只是日语注音表，而是一个 credit card backend + Spring/Java + system design glossary。
+这个文档把项目注释、学习文档和interview复习中反复出现的关键词统一整理成中文、English、日本語三语对照。它不再只是日语注音表，而是一个 credit card backend + Spring/Java + system design glossary。
 
 表格列说明：
 
-- 中文：面试时中文解释的主入口。
-- English：代码、官方文档、面试追问里常见的英文锚点。
+- 中文：interview时中文解释的主入口。
+- English：代码、官方文档、interview追问里常见的英文锚点。
 - 日本語：尽量使用日本信用卡、支付和技术文档中自然的说法，不做机械直译。
 - 假名/读法：帮助快速读出日语词；外来语保留片假名或英文读法。
 - 备注：说明本项目里的对应场景，避免背词和代码脱节。
@@ -107,7 +107,7 @@
 | 注解 | annotation | アノテーション | アノテーション | `@Transactional`、`@Scheduled` 等。 |
 | 声明式事务 | declarative transaction | 宣言的トランザクション | せんげんてきトランザクション | `@Transactional`。 |
 | 编程式事务 | programmatic transaction | プログラムによるトランザクション管理 | プログラムによるトランザクションかんり | `TransactionTemplate`/`TransactionOperations`。 |
-| 事务传播 | transaction propagation | トランザクション伝播 | トランザクションでんぱ | 面试常问 `REQUIRED`、`REQUIRES_NEW`。 |
+| 事务传播 | transaction propagation | トランザクション伝播 | トランザクションでんぱ | interview常问 `REQUIRED`、`REQUIRES_NEW`。 |
 | 代理 | proxy | プロキシ | プロキシ | Spring AOP 和事务拦截依赖 proxy。 |
 | 自调用 | self-invocation | 自己呼び出し | じこよびだし | 同类内部调用绕过 Spring proxy。 |
 | 异常处理 | exception handling | 例外処理 | れいがいしょり | 区分业务拒绝、冲突、系统失败。 |

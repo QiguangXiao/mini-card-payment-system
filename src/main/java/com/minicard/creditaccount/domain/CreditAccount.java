@@ -16,7 +16,7 @@ import lombok.experimental.Accessors;
  * available credit, row lock, 利用枠管理集約(りようわくかんりしゅうやく),
  * 利用可能枠(りようかのうわく)。</p>
  *
- * <p>面试重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
+ * <p>interview重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
  * 再调用这个 aggregate 的 reserve/release 来保护额度 invariant。</p>
  */
 @Getter

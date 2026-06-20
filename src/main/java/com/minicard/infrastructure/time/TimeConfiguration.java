@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
  * testable time, timezone, 時刻設定(じこくせってい),
  * 協定世界時(きょうていせかいじ)。</p>
  *
- * <p>面试重点：业务代码不直接调用 Instant.now()，测试可以注入固定时间，
+ * <p>interview重点：业务代码不直接调用 Instant.now()，测试可以注入固定时间，
  * 分布式系统也避免依赖单台机器的本地时区。</p>
  */
 @Configuration

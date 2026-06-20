@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>周末之外，日本的「国民の祝日」、振替休日（substitute holiday）、
  * 国民の休日（citizens' holiday）也不能作为信用卡自动扣款日。这里用代码规则模拟
- * holiday master，适合学习和面试说明；真实银行/カード会社通常会维护可更新的
+ * holiday master，适合学习和interview说明；真实银行/カード会社通常会维护可更新的
  * 祝日マスター，因为祝日法将来可能变化。</p>
  */
 @Component
@@ -45,7 +45,7 @@ public class JapaneseBusinessDayCalendar implements BusinessDayCalendar {
     /**
      * 日本固定/Happy Monday 祝日规则。
      *
-     * <p>这里只覆盖当前学习项目需要的现代日本规则；面试可以说明这属于
+     * <p>这里只覆盖当前学习项目需要的现代日本规则；interview可以说明这属于
      * business calendar rule，不应该散落在 StatementBatchService 里。</p>
      */
     private Set<LocalDate> baseNationalHolidays(int year) {

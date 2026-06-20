@@ -17,7 +17,7 @@ import org.springframework.transaction.support.TransactionOperations;
  * processing lease, retry policy, ジョブ実行(ジョブじっこう),
  * リース検証(リースけんしょう)。</p>
  *
- * <p>面试重点：claim 已经在短事务内完成；worker 只处理已经拿到 PROCESSING lease 的 job。
+ * <p>interview重点：claim 已经在短事务内完成；worker 只处理已经拿到 PROCESSING lease 的 job。
  * 成功后标 DONE，失败后按 retry policy 回到 PENDING 或进入 DEAD。</p>
  */
 @Service

@@ -127,7 +127,7 @@ CreditAccount 不变
 - 风控拒绝。
 - 币种不支持。
 
-### 3.4 面试重点
+### 3.4 interview重点
 
 发卡后台授权阶段最容易被问：
 
@@ -307,7 +307,7 @@ statementBalance = 4,000 JPY
 dueDate = 7 月 27 日
 ```
 
-### 5.3 面试重点
+### 5.3 interview重点
 
 账单阶段会被问：
 
@@ -369,7 +369,7 @@ availableCredit 恢复
 statement 标记为 paid
 ```
 
-### 6.3 面试重点
+### 6.3 interview重点
 
 还款阶段会被问：
 
@@ -531,7 +531,7 @@ Original purchase transaction remains POSTED
 Create a separate REFUND transaction linked to original transaction
 ```
 
-面试里更推荐第二种，因为 append-only 更容易审计。
+interview里更推荐第二种，因为 append-only 更容易审计。
 
 ## 11. 分支例子四：Clearing Reversal / Adjustment 清分冲正
 
@@ -557,7 +557,7 @@ Issuer 可能做：
 保留原交易和冲正交易的关联
 ```
 
-面试重点：
+interview重点：
 
 - 不要物理删除原交易。
 - 用新 transaction 或 adjustment 保留 audit trail。
@@ -885,7 +885,7 @@ Dispute / chargeback
 5. Settlement cash movement / dispute：补齐资金移动和争议处理分支
 ```
 
-## 18. 面试一句话总结
+## 18. interview一句话总结
 
 可以这样讲：
 

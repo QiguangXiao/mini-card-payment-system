@@ -1,6 +1,6 @@
-# MyBatis 与 SQL 后端面试学习笔记
+# MyBatis 与 SQL 后端interview学习笔记
 
-这份文档整理后端工程师面试里需要掌握的 MyBatis 核心使用、SQL 基础与进阶、事务、锁、索引、批处理和金融后端常见追问点。
+这份文档整理后端工程师interview里需要掌握的 MyBatis 核心使用、SQL 基础与进阶、事务、锁、索引、批处理和金融后端常见追问点。
 
 它不只局限于本项目已经写过的代码，但会尽量用本项目的信用卡授权、额度冻结、Outbox、DelayJob 等例子来解释。
 
@@ -14,7 +14,7 @@ MyBatis 不是替你设计数据库的 ORM。
 本项目选择 MyBatis 的原因：
 
 - 信用卡后台很多关键行为依赖明确 SQL，例如 `SELECT ... FOR UPDATE`、`FOR UPDATE SKIP LOCKED`、unique constraint 和状态条件更新。
-- 面试时可以清楚解释数据库如何保证 `idempotency`、`row lock`、`transaction boundary` 和并发安全。
+- interview时可以清楚解释数据库如何保证 `idempotency`、`row lock`、`transaction boundary` 和并发安全。
 - 相比纯 `JdbcTemplate`，MyBatis 减少重复 row mapping；相比 JPA/Hibernate，它更容易看见真实 SQL。
 
 ## 1. MyBatis 在项目里的位置
@@ -47,7 +47,7 @@ AuthorizationService
 -> authorizations table
 ```
 
-面试回答：
+interview回答：
 
 > 我不会让 controller 或 domain object 直接依赖 MyBatis。MyBatis 是 infrastructure adapter，负责数据库读写和 row mapping；application service 负责 use case 和 transaction boundary；domain object 负责状态和业务规则。
 
@@ -91,7 +91,7 @@ XML：
 | `#{id}` | `@Param("id")` 参数 |
 | `resultMap` | 查询结果如何映射为 Java object |
 
-面试容易问：
+interview容易问：
 
 为什么要写 `@Param`？
 
@@ -101,7 +101,7 @@ XML：
 
 ## 3. `#{}` 和 `${}` 的区别
 
-这是 MyBatis 高频面试题。
+这是 MyBatis 高频interview题。
 
 ### 3.1 `#{}`：参数绑定
 
@@ -141,7 +141,7 @@ String sortColumn = switch (request.sortBy()) {
 };
 ```
 
-面试回答：
+interview回答：
 
 > 用户输入永远不能直接进 `${}`。如果必须动态排序或动态表名，先在 Java 层做 whitelist mapping，再传入受控 SQL 片段。
 
@@ -234,7 +234,7 @@ XML 里可以用 `<sql>` 和 `<include>` 避免列清单重复：
 - `idempotency_key` 靠数据库 unique constraint 防重复。
 - 并发请求同时插入时，只有一个 winner，其他请求收到 `DuplicateKeyException`。
 
-面试回答：
+interview回答：
 
 > 对状态改变接口，我更倾向 insert-first claim，而不是 read-then-insert。read-then-insert 在并发下有 race condition，最终还是要靠 unique constraint 兜底。
 
@@ -387,7 +387,7 @@ MyBatis 动态 SQL 使用 OGNL 表达式，常见标签如下。
 
 ## 8. 批处理 Batch
 
-批处理是后端面试常问点，因为它同时涉及吞吐、事务、内存和失败恢复。
+批处理是后端interview常问点，因为它同时涉及吞吐、事务、内存和失败恢复。
 
 ### 8.1 多 values insert
 
@@ -469,7 +469,7 @@ rewriteBatchedStatements=true
 2. 用临时表/staging table，再 join update。
 3. 用 `CASE WHEN`，但 SQL 可读性和长度会变差。
 
-面试回答：
+interview回答：
 
 > 批处理不能只说快。我要说明 batch size、事务范围、失败重试、幂等键、唯一约束、锁持有时间和监控。金融系统里批处理更重要的是可恢复，而不是单次跑得最大。
 
@@ -494,7 +494,7 @@ rewriteBatchedStatements=true
 - Runtime exception 默认触发 rollback；checked exception 默认不 rollback，除非配置。
 - 同一个类内部 self-invocation 调用 `@Transactional` 方法不会经过 Spring proxy，这是常见坑。
 
-面试回答：
+interview回答：
 
 > 我会把 transaction boundary 放在 use case 层。Repository/Mapper 只表达数据库操作，不能偷偷开启业务事务。这样才能解释哪些状态变化是原子的，哪些是 eventual consistency。
 
@@ -579,7 +579,7 @@ CREATE UNIQUE INDEX uk_authorizations_idempotency_key
 ON authorizations (idempotency_key);
 ```
 
-面试回答：
+interview回答：
 
 > Row lock 不是 Java 代码里写了 `FOR UPDATE` 就自动安全高效。查询必须走合适索引，否则 InnoDB 可能锁更多记录或范围，吞吐会下降，也更容易死锁。
 
@@ -639,7 +639,7 @@ MySQL InnoDB 重点：
 - RR 下范围锁可能涉及 next-key lock。
 - 唯一索引等值查询通常锁范围更小。
 
-面试回答：
+interview回答：
 
 > 不能只背隔离级别名字，要结合具体 SQL。比如额度冻结不是靠普通 SELECT 的隔离级别保证，而是靠同一事务内对 credit account 做 `SELECT ... FOR UPDATE`，把余额检查和更新串起来。
 
@@ -725,7 +725,7 @@ UNIQUE (event_id, consumer_group)
 - 同一个 idempotency key 只能创建一个 authorization。
 - 同一个 consumer group 只能处理同一个 event 一次。
 
-面试回答：
+interview回答：
 
 > 对幂等这种 correctness requirement，我不会只靠应用层 check。应用可以先检查提高体验，但最终必须由 database unique constraint 兜底。
 
@@ -754,7 +754,7 @@ LIMIT 50;
 
 不要机械追求“没有 filesort”。小结果集 filesort 不一定严重；真正要看数据量、QPS、延迟和是否阻塞写入。
 
-面试回答：
+interview回答：
 
 > 我会先用 EXPLAIN 看执行计划，再结合慢查询日志和真实数据分布判断。索引设计不是只看 SQL 语法，还要看 cardinality、选择性、写入成本和业务访问模式。
 
@@ -794,7 +794,7 @@ LIMIT 50;
 - 深分页性能稳定。
 - 适合交易流水、消息列表、审计日志。
 
-面试回答：
+interview回答：
 
 > 金融交易流水通常更适合 keyset pagination，用上一页最后一条的排序 key 继续查。Offset 深分页会越来越慢，也容易受新增数据影响。
 
@@ -815,7 +815,7 @@ LIMIT 50;
 - 读模型/projection 表。
 - 缓存低变化维度数据，但不要过早引入 Redis。
 
-面试回答：
+interview回答：
 
 > 我会先识别访问模式。如果是列表展示，通常用 join 或 projection；如果是领域聚合写路径，不一定强行 join，避免把聚合边界和持久化优化混在一起。
 
@@ -963,7 +963,7 @@ T2 locks account B, then waits for account A
 - 建好索引，避免锁范围扩大。
 - 捕获 deadlock/lock wait timeout，按幂等语义安全重试。
 
-面试回答：
+interview回答：
 
 > 死锁不是完全不能出现，关键是降低概率，并让应用能安全重试。前提是请求有 idempotency key，状态迁移有条件，重复执行不会多扣钱。
 
@@ -1019,7 +1019,7 @@ Outbox payload 这类字段可能是 JSON string：
 
 ### 22.5 懒加载
 
-MyBatis 支持一些关联映射能力，但在面试项目里不建议依赖神秘懒加载。
+MyBatis 支持一些关联映射能力，但在interview项目里不建议依赖神秘懒加载。
 
 更推荐：
 
@@ -1027,7 +1027,7 @@ MyBatis 支持一些关联映射能力，但在面试项目里不建议依赖神
 - 或分两次批量查询。
 - 或维护 projection。
 
-## 23. 后端面试 SQL 必备清单
+## 23. 后端interview SQL 必备清单
 
 你至少要能讲清楚这些：
 
@@ -1044,7 +1044,7 @@ MyBatis 支持一些关联映射能力，但在面试项目里不建议依赖神
 | 时间 | UTC、`Instant`、时区显示、过期任务 |
 | 安全 | SQL injection、参数绑定、敏感日志 |
 
-## 24. 本项目可以如何讲给面试官
+## 24. 本项目可以如何讲给interview官
 
 ### 24.1 为什么用 MyBatis
 
@@ -1088,7 +1088,7 @@ MyBatis 支持一些关联映射能力，但在面试项目里不建议依赖神
 6. 对一条查询写出预期索引，再用 `EXPLAIN` 验证。
 7. 用一句话讲清楚：数据库唯一约束为什么比应用层 if check 更可靠。
 
-最后再记住这句面试总纲：
+最后再记住这句interview总纲：
 
 ```text
 MyBatis 只是 SQL 执行和映射工具。

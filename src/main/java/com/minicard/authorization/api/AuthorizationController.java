@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 授权 API controller，只负责 HTTP request/response 和参数校验。
  *
- * <p>面试重点：不要把业务逻辑放在 controller。idempotency、transaction boundary、
+ * <p>interview重点：不要把业务逻辑放在 controller。idempotency、transaction boundary、
  * row lock 和 aggregate state transition 都在 application/domain 层。</p>
  */
 @Validated
