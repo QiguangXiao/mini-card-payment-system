@@ -19,9 +19,11 @@ Backend Engineer interview.
 
 ## Current Stage
 
-The project currently contains a minimal runnable Spring Boot application, a
-health check endpoint, and the first DDD vertical slice for card authorization
-with local and simulated external risk checks.
+The project currently contains a runnable issuer-side credit card backend slice:
+card authorization, presentment posting, statement generation, manual and
+automatic repayment, notification creation, local and simulated external risk
+checks, Kafka-based event delivery, Transactional Outbox, Consumer Inbox, and
+DelayJob scheduling.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
@@ -36,6 +38,12 @@ backend interview talking points.
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
 authorization-to-repayment state transitions, lock ordering, row-level lock
 scope, and request-by-request examples.
+See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
+issuer-side business concepts such as authorization, presentment, statement,
+payment, refund, dispute, ledger, and reconciliation.
+See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
+for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
+topics.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
@@ -89,18 +97,23 @@ behavior when concurrent requests use the same key.
 
 Amounts use a `Money` value object backed by Java `BigDecimal` and MySQL
 `DECIMAL(19,2)`. New authorizations start as `PENDING` and are explicitly
-approved or declined by a domain policy. The current policy uses configurable
-single-transaction limits and reserves available credit from a locked
-`CreditAccount`. A separate `Card` model validates card lifecycle and maps cards
-to accounts, allowing multiple cards to share one credit limit. The Risk module
-checks local velocity, high amount, merchant, and geolocation rules before
-calling a simulated external risk service protected by timeout, fallback, and a
-circuit breaker. Capture, reservation release, and refund flows are not
-implemented yet.
+approved or declined by a domain policy. Approved authorizations reserve credit
+from a locked `CreditAccount`. Presentment posting later moves money from
+`reserved_amount` to `posted_balance` and creates a posted `CardTransaction`.
+Statement generation snapshots posted transactions into `statement_items`, and
+repayment reduces `posted_balance` while advancing statement payment status.
 
-Final authorization decisions are written to a MySQL Transactional Outbox in the
-same transaction as the decision. A scheduled publisher later sends them to
-Kafka using at-least-once delivery.
+A separate `Card` model validates card lifecycle and maps cards to accounts,
+allowing multiple cards to share one credit limit. The Risk module checks local
+velocity, high amount, merchant, and geolocation rules before calling a
+simulated external risk service protected by timeout, fallback, and a circuit
+breaker. Authorization reversal, refund, dispute/chargeback, ledger, and
+reconciliation flows are deliberately deferred learning topics.
+
+Business events are written to a MySQL Transactional Outbox in the same
+transaction as the state change. A scheduled publisher later sends them to Kafka
+using at-least-once delivery. Future business actions such as authorization
+expiry and automatic repayment are scheduled through DelayJob, not Outbox.
 
 Two independent consumer groups demonstrate different production patterns:
 
@@ -136,13 +149,16 @@ The local database connection is:
 - Application user: `root`
 - Application and local root password: `rootpassword`
 
-Local Kafka is available at `localhost:9092`. The authorization event topic is:
+Local Kafka is available at `localhost:9092`. Current event topics are:
 
 ```text
 mini-card.authorization-events.v1
+mini-card.transaction-events.v1
+mini-card.statement-events.v1
+mini-card.repayment-events.v1
 ```
 
-Describe the topic or inspect events:
+Describe a topic or inspect events:
 
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
@@ -161,7 +177,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 Dead-letter topics:
 
 ```text
-mini-card.authorization-notification.dlt.v1
+mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
 ```
 

@@ -3,10 +3,12 @@
 ## Purpose
 
 Authorization is a synchronous financial decision, but several follow-up
-activities should not increase its API latency or share its transaction:
+activities across the issuer backend should not increase API latency or share
+the main money-changing transaction:
 
 - Cardholder notification
 - Risk-feature and fraud analytics updates
+- Statement-ready and repayment notifications
 - Operations, audit, and reporting projections
 
 The current implementation includes two consumers with deliberately different
@@ -15,7 +17,8 @@ side-effect and idempotency strategies.
 ## Why Transactional Outbox
 
 Publishing directly to Kafka inside `AuthorizationService` creates a dual-write
-problem:
+problem. The same problem appears in posting, statement generation, repayment,
+and any future money-changing workflow:
 
 ```text
 MySQL commits, Kafka fails -> business state exists but event is lost
@@ -23,10 +26,11 @@ Kafka succeeds, MySQL rolls back -> consumers observe a decision that never exis
 ```
 
 The application instead inserts `outbox_events` in the same MySQL transaction as
-the Authorization decision and CreditAccount reservation:
+the business state change. For authorization, this means the Authorization
+decision and CreditAccount reservation commit with the Outbox row:
 
 ```text
-Authorization + CreditAccount + Outbox Event -> one MySQL commit
+Authorization + CreditAccount + DelayJob + Outbox Event -> one MySQL commit
 Outbox Publisher -> Kafka later
 ```
 
@@ -47,7 +51,7 @@ effects:
 
 ```text
 begin consumer database transaction
-  insert eventId into processed_events using a unique constraint
+  insert eventId into consumer_inbox using a unique constraint
   apply consumer business change
 commit
 ```
@@ -67,6 +71,8 @@ Topics:
 ```text
 mini-card.authorization-events.v1
 mini-card.transaction-events.v1
+mini-card.statement-events.v1
+mini-card.repayment-events.v1
 ```
 
 Event types:
@@ -77,6 +83,8 @@ authorization.declined
 authorization.expired
 authorization.posted
 card_transaction.posted
+statement.closed
+repayment.received
 ```
 
 The envelope contains:
@@ -85,20 +93,23 @@ The envelope contains:
 - `eventType`: routing and observability
 - `eventVersion`: schema evolution
 - `occurredAt`: business event time
-- `payload`: authorization decision data
+- `payload`: event-specific business data
 
-Authorization message payloads are plain JSON objects inside the envelope. The
-project intentionally does not create one Java payload class per event type yet;
+Message payloads are plain JSON objects inside the envelope. The project
+intentionally does not create one Java payload class per event type yet;
 consumers use `eventType` for routing and read the fields they need from
-`JsonNode payload`.
+`JsonNode payload`. This keeps the learning project focused on event contracts,
+not DTO class proliferation.
 
 The payload represents `amount` as decimal text plus `currency`. This preserves
 financial precision across JSON storage and prevents consumers from accidentally
 using binary floating-point arithmetic.
 
-The Kafka key is `authorizationId`. Kafka guarantees ordering within a
-partition, so later lifecycle events for the same Authorization can use the same
-key and remain ordered.
+The Kafka key is the Outbox row's `partition_key`. Authorization events use
+`authorizationId`, CardTransaction events use `cardTransactionId`, and
+Statement/Repayment events use `creditAccountId`. Kafka guarantees ordering only
+within one partition, so the key should represent the aggregate or account scope
+where order matters.
 
 ## Publisher Concurrency
 
@@ -130,25 +141,27 @@ contracts, not business consumers:
 
 ```text
 messaging
-├── contract    public message payload contracts shared by producers/consumers
 ├── event       shared integration event envelope
 ├── inbox       shared consumer idempotency mechanism
+├── inbox/mybatis
 ├── kafka       Kafka configuration, publisher adapter, and transport reader
-└── outbox      reliable event publication mechanism
+├── outbox      reliable event publication mechanism
+└── outbox/mybatis
 ```
 
 Notification and Risk Kafka listeners remain inside their own bounded contexts.
 This makes Kafka an adapter for business capabilities instead of making
 `messaging` a catch-all pseudo-domain.
 
-`event`, `kafka`, and `outbox` could become separate Gradle modules if the code
-base or team ownership grows. Keeping them as packages is currently easier to
-explain and avoids premature module boundaries.
+`event`, `kafka`, `inbox`, and `outbox` could become separate Gradle modules if
+the code base or team ownership grows. Keeping them as packages is currently
+easier to explain and avoids premature module boundaries.
 
-Authorization-specific event translation lives in
-`authorization.infrastructure.messaging`. The shared Outbox mechanism therefore
-does not depend on the Authorization aggregate or absorb business-context
-knowledge.
+Business-specific event translation lives in each bounded context, such as
+`authorization.infrastructure.messaging`,
+`transaction.infrastructure.messaging`, `statement.infrastructure.messaging`,
+and `repayment.infrastructure.messaging`. The shared Outbox mechanism therefore
+does not depend on business aggregates or absorb bounded-context knowledge.
 
 Consumers use the shared `IntegrationEventReader` only for transport concerns:
 JSON parsing and header validation. Notification and Risk still choose their own
@@ -172,9 +185,9 @@ delivery-attempt count, and transition rules. Kafka is only an inbound adapter:
 the listener translates the integration event into an application command and
 does not appear in the domain model.
 
-The current use case creates a durable `notifications` row. The
-`source_event_id` unique constraint prevents duplicate aggregate creation when
-Kafka redelivers an event.
+The current use case creates durable `notifications` rows for authorization,
+card transaction, statement, and repayment events. The `source_event_id` unique
+constraint prevents duplicate aggregate creation when Kafka redelivers an event.
 
 A future notification sender can independently retry provider calls and track
 delivery status without blocking Kafka partitions or replaying the original
@@ -203,9 +216,11 @@ The current hard velocity rule still queries authorization records because an
 eventually consistent projection should not silently enforce a strong real-time
 limit.
 
-Both groups subscribe to the same topic. Kafka delivers each event once per
-consumer group, allowing notification and risk processing to scale and fail
-independently.
+Notification subscribes to authorization, transaction, statement, and repayment
+topics. Risk feature projection currently subscribes only to authorization
+events. Kafka delivers each event once per consumer group, allowing notification
+and risk processing to scale and fail independently where they share a source
+topic.
 
 ## Retry and Dead Letter Topics
 
@@ -229,14 +244,17 @@ Spring Kafka exception headers. Production operations should alert on DLT
 growth, inspect the root cause, deploy a fix, and replay messages deliberately
 rather than automatically looping DLT messages back into the source topic.
 
-### Operations and Audit Projection
+### Operations, Ledger, and Reconciliation Projections
 
-This remains a likely future consumer. It would build query-friendly operational
-views without coupling authorization transactions to reporting workloads.
+These remain likely future learning consumers or internal modules. Ledger would
+record accounting-style entries derived from posted transactions and repayments.
+Reconciliation would compare internal records against external network or bank
+statements. Both should be downstream of business facts rather than extra work
+inside the authorization API transaction.
 
-Capture, reversal, and refund should produce their own versioned event types
-when those domains are implemented. They should not be inferred solely from an
-authorization decision event.
+Reversal, refund, dispute, and chargeback should produce their own versioned
+event types when those domains are implemented. They should not be inferred
+solely from an authorization decision event.
 
 ## Local Versus Production Kafka
 

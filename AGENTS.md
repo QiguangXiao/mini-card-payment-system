@@ -63,8 +63,12 @@ where they do not improve clarity.
   defects. If current work exposes clearly unreasonable domain, infrastructure,
   mapper, or database design, fix it proactively when the fix is related and
   improves correctness, safety, or clarity.
-- After every modification, ensure `./gradlew test` passes, or clearly explain
-  why it could not be run.
+- After code, configuration, schema, mapper XML, or behavior-affecting
+  modifications, ensure `./gradlew test` passes, or clearly explain why it
+  could not be run.
+- Documentation-only modifications, such as Markdown docs, `README.md`, or
+  repository guidance files, do not require running `./gradlew test`; mention
+  that tests were skipped because the change was docs-only.
 - Use Bean Validation such as `@Valid`, `@NotBlank`, and `@NotNull` at API DTO
   boundaries. Still keep domain invariants in domain factories/constructors so
   scheduler, Kafka consumer, repository restore, and test paths cannot create

@@ -6,20 +6,25 @@ The Authorization module demonstrates a small but explicit DDD vertical slice.
 It models an issuer-side decision about whether a requested card transaction is
 approved or declined. Approved requests reserve available credit on a
 `CreditAccount`. It now includes a small Risk bounded-context collaboration,
-but it does not yet implement capture and refund flows.
+authorization expiry, and presentment posting. Refund, reversal, dispute, ledger,
+and reconciliation flows remain deliberately deferred learning topics.
 
 ## Aggregate Boundary
 
 `Authorization` is the aggregate root. External code cannot assign its status
 directly. A new aggregate starts as `PENDING`, and only its `approve`, `decline`,
-or `expire` behavior can change the lifecycle state.
+`post`, or `expire` behavior can change the lifecycle state.
 
 The aggregate protects these invariants:
 
 - A new authorization starts in `PENDING`.
 - Only a pending authorization can be approved or declined.
 - An approved authorization has a decision time and no decline reason.
+- A posted authorization must have been approved first and must be posted before
+  its `expiresAt` deadline.
 - A declined authorization has both a decision time and decline reason.
+- An expired authorization must have been approved first and can only expire at
+  or after `expiresAt`.
 - A pending authorization has neither decision time nor decline reason.
 
 `Money` is a value object. It keeps amount and currency together and rejects
@@ -44,24 +49,22 @@ locking or changing their CreditAccount.
 Authorization records intentionally keep the presented `card_id` without a
 foreign key to `cards`. This allows the system to retain a declined attempt for
 an unknown card while still enforcing the Card-to-CreditAccount relationship
-inside the `cards` table.
-
-Authorization records intentionally do not have a foreign key to `cards`.
-Declined attempts for unknown card identifiers still need an audit record. In a
-production system, `cardId` should be an internal token and never a plaintext
-primary account number.
+inside the `cards` table. In a production system, `cardId` should be an internal
+token and never a plaintext primary account number.
 
 The account protects these invariants:
 
-- Reserved amount cannot be negative or exceed the credit limit.
-- Credit limit and reserved amount use the same currency.
+- Reserved amount and posted balance cannot be negative.
+- Reserved amount plus posted balance cannot exceed the credit limit.
+- Credit limit, reserved amount, posted balance, and requested authorization
+  amount use the same currency.
 - Blocked accounts cannot reserve credit.
 - A reservation cannot exceed currently available credit.
 
 Available credit is calculated as:
 
 ```text
-credit limit - reserved amount
+credit limit - reserved amount - posted balance
 ```
 
 The repository loads the account with `SELECT ... FOR UPDATE`. Concurrent
@@ -110,8 +113,8 @@ avoiding unnecessary risk calls for missing, blocked, or expired cards.
 5. Run local and external risk checks.
 6. Lock the CreditAccount and attempt to reserve available credit.
 7. Approve or decline the Authorization with an explicit reason.
-8. Persist the account reservation, authorization decision, and Outbox event in
-   one transaction.
+8. Persist the account reservation, authorization decision, expiry DelayJob, and
+   Outbox event in one transaction.
 
 The application service coordinates the workflow but does not contain the
 authorization state-transition rules.
@@ -158,8 +161,9 @@ Domain code is the primary place for business rules. The MySQL table also uses
 constraints for positive amounts and valid status/decision column combinations.
 This protects data when writes occur outside the normal application path.
 
-The CreditAccount table additionally prevents negative reservations and
-reservations above the credit limit.
+The CreditAccount table additionally prevents negative reserved or posted
+amounts and prevents `reserved_amount + posted_balance` from exceeding the
+credit limit.
 
 Primary persistence adapters use MyBatis XML mappers. Domain repository
 interfaces remain independent from MyBatis:
@@ -185,10 +189,11 @@ multiple environments or valuable data are introduced.
 
 ## Deliberately Deferred Production Concerns
 
-- Production fraud/risk model integration
-- Authorization expiry and reversal
-- Reservation release after decline, reversal, expiry, or capture
-- Optimistic versioning for later aggregate updates
-- Capture and refund aggregates
-- Outbox events and asynchronous processing
-- Versioned database migrations
+- Production fraud/risk model integration and real provider contracts.
+- Authorization reversal from the network before presentment.
+- Partial presentment and partial hold release.
+- Refund, clearing adjustment, dispute, and chargeback flows.
+- Ledger entries and reconciliation reports.
+- Optimistic versioning for later aggregate updates.
+- User/cardholder identity, authentication, authorization, and PII handling.
+- Versioned database migrations.

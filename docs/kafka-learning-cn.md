@@ -288,7 +288,7 @@ interview回答：
 
 ## 5. Topic 和 partition 配置
 
-### 5.1 authorization / transaction events topics
+### 5.1 authorization / transaction / statement / repayment events topics
 
 代码：
 
@@ -302,6 +302,16 @@ TopicBuilder.name(properties.transactionEvents())
         .partitions(3)
         .replicas(1)
         .build();
+
+TopicBuilder.name(properties.statementEvents())
+        .partitions(3)
+        .replicas(1)
+        .build();
+
+TopicBuilder.name(properties.repaymentEvents())
+        .partitions(3)
+        .replicas(1)
+        .build();
 ```
 
 配置名：
@@ -311,6 +321,8 @@ messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
+    statement-events: mini-card.statement-events.v1
+    repayment-events: mini-card.repayment-events.v1
 ```
 
 作用：
@@ -322,12 +334,19 @@ messaging:
   - `authorization.expired`
 - 用户可见交易流水事件放在 transaction topic：
   - `card_transaction.posted`
+- 账单事件放在 statement topic：
+  - `statement.closed`
+- 还款事件放在 repayment topic：
+  - `repayment.received`
 
-为什么拆出 transaction topic：
+为什么按业务事实拆 topic：
 
 - `authorization.posted` 表达授权 hold 被 presentment 消耗。
 - `card_transaction.posted` 表达用户可见交易已经入账，Notification 更应该消费这个事实。
-- 生产中 Notification 很可能是独立微服务；它可以订阅 authorization decision 和 transaction posted 两类 contract，而不依赖本工程里的 domain class。
+- `statement.closed` 表达账单已生成，适合账单通知、PDF 生成、还款提醒订阅。
+- `repayment.received` 表达还款已入账，不应该混在 statement topic 里。
+- 生产中 Notification 很可能是独立微服务；它可以订阅需要的 business facts，
+  而不依赖本工程里的 domain class。
 
 为什么 topic 名带 `.v1`：
 
@@ -352,19 +371,24 @@ new ProducerRecord<>(
 )
 ```
 
-当前 `partitionKey` 使用 authorization id。
+当前 `partitionKey` 按事件所属业务范围选择：
+
+- authorization events：authorization id。
+- card transaction events：card transaction id。
+- statement events：credit account id。
+- repayment events：credit account id。
 
 效果：
 
 ```text
 同一 authorization 的 approved / posted / expired 等事件进入同一 partition
-同一 authorization 内保持顺序
-不同 authorization 可以并行处理
+同一账户的 statement / repayment 事件可以按 account scope 保持顺序
+不同 authorization 或不同 account 可以并行处理
 ```
 
 interview回答：
 
-> Kafka 只保证 partition 内顺序，不保证 topic 全局顺序。我们用 authorizationId 作为 key，把同一个 aggregate 的事件固定到同一 partition，获得 aggregate-level ordering。
+> Kafka 只保证 partition 内顺序，不保证 topic 全局顺序。我们按 aggregate 或 account scope 选择 partition key，例如 authorizationId、cardTransactionId、creditAccountId，让真正需要有序的业务范围进入同一 partition。
 
 ### 5.3 replicas = 1
 
@@ -605,7 +629,9 @@ interview回答：
 
 只能保证 partition 内顺序，不保证 topic 全局顺序。
 
-本项目用 authorizationId 作为 key，让同一 authorization 的 lifecycle events 进入同一 partition。
+本项目按事件语义选择 key：authorization lifecycle 用 authorizationId，交易入账用
+cardTransactionId，statement/repayment 用 creditAccountId。这样只保证需要的业务范围有序，
+不追求没有意义的全局顺序。
 
 ### Kafka 是 exactly-once 吗？
 
