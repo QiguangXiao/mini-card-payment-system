@@ -139,6 +139,29 @@ credit_account_id + period_start + period_end
 - 不支持 overpayment，也不做多张账单之间的自动分摊。
 - 还款成功后同时减少 `credit_accounts.posted_balance`，推进 `statements.paid_amount/status`。
 
+### `ledger_entries`
+
+保存最小内部账本分录。
+
+核心字段：
+
+- `id`：ledger entry id，由 `LedgerEntry.recordPurchasePosted(...)` 或
+  `LedgerEntry.recordRepaymentReceived(...)` 内部 `UUID.randomUUID()` 生成。
+- `source_event_id`：来源 integration event id，和 `entry_type` 一起做唯一约束，用于 ledger 侧幂等。
+- `entry_type`：当前有 `CARD_TRANSACTION_POSTED` 和 `REPAYMENT_RECEIVED`。
+- `direction`：`DEBIT` 或 `CREDIT`。当前项目里消费入账记 `DEBIT`，还款入账记 `CREDIT`。
+- `source_type` / `source_id`：来源业务对象，例如 `CARD_TRANSACTION` + card transaction id，
+  或 `REPAYMENT` + repayment id。
+- `credit_account_id`：账本分录归属的信用账户。
+- `amount` / `currency`：正数金额；方向由 `direction` 表达，不用负数金额。
+- `occurred_at`：业务事实发生时间，例如 postedAt 或 receivedAt。
+
+当前范围：
+
+- 这是 minimal ledger projection，不是生产级 double-entry general ledger。
+- 它异步消费 `card_transaction.posted` 和 `repayment.received`，不扩大 posting/repayment 主事务。
+- Authorization 只表示额度 hold，不是真正入账，所以当前不生成 ledger entry。
+
 ### `delay_jobs`
 
 保存未来需要执行的业务动作。
@@ -573,12 +596,21 @@ curl -X POST http://localhost:8080/api/presentments \
    - claim 成功后创建一条 `notifications/PENDING` 请求。
    - duplicate delivery claim 失败后直接返回，避免重复通知用户。
 
-为什么这一阶段不做完整 ledger：
+12. Ledger 异步消费 `card_transaction.posted`
+
+   - `CardTransactionLedgerListener` 收到同一个 Kafka event。
+   - `RecordLedgerEntryService` 先写 `consumer_inbox(ledger-v1, eventId)` 做 Inbox claim。
+   - claim 成功后调用 `LedgerEntry.recordPurchasePosted(...)`，这里生成 `ledger_entries.id`。
+   - `ledger_entries` 新增一条 `CARD_TRANSACTION_POSTED/DEBIT` 分录，表达 issuer 对持卡人的应收款增加。
+   - 如果 Kafka 重复投递，同一个 eventId 会被 Inbox 或 `source_event_id + entry_type` 唯一约束挡住。
+
+为什么这一阶段只做 minimal ledger：
 
 - `CardTransaction` 是用户流水，用于 APP 明细、账单和客服查询。
-- `Ledger` 是内部会计账本，通常需要 double-entry、accounting account、journal balance 校验。
+- 当前 `LedgerEntry` 是学习用 projection，用来解释账本概念和 consumer idempotency。
+- 生产级 `Ledger` 通常需要 double-entry、accounting account、journal balance 校验。
 - `Reconciliation` 是把内部记录和外部文件/资金清算结果对比，发现 missing/duplicate/amount mismatch。
-- 现在先把 posted transaction 和账户余额做对，后续再基于它增加 minimal ledger 和 reconciliation。
+- 本项目先记录消费入账和还款入账两类分录，不处理 settlement、fee、interest 或 refund adjustment。
 
 PayPay Card interview提示：
 
@@ -587,6 +619,7 @@ PayPay Card interview提示：
 - `Authorization` row lock 防止同一授权被多次入账；`CreditAccount` row lock 同时保护 posting、statement generation 和额度并发。
 - 本阶段把 settlement 留到后面，是因为 settlement 处理资金清算，不是用户账户入账。
 - posting 成功通知通过 `CardTransactionPostedDomainEvent -> Outbox -> Kafka -> Notification Inbox` 异步完成，不扩大 posting 的 transaction boundary。
+- posting 成功账本分录通过 `card_transaction.posted -> Ledger Inbox -> ledger_entries/DEBIT` 异步完成；它是 learning projection，不是授权主事务的一部分。
 
 ## 5. 核心流程三：Statement 月度批处理生成账单
 
@@ -874,14 +907,14 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 银行扣款成功后，针对一张已生成 statement 入账。
 - 还款成功后减少 `credit_accounts.posted_balance`，恢复可用额度。
 - 同时推进 `statements.paid_amount/status`。
-- 发布 `repayment.received`，让 Notification、未来 ledger/reconciliation 可以异步消费。
+- 发布 `repayment.received`，让 Notification 和 Ledger 可以异步消费；未来 Reconciliation 也可以基于它对账。
 
 当前刻意不做：
 
 - 不支持 overpayment。
 - 不把一笔还款自动分摊到多张 statement。
 - 不新增客户自定义扣款日或 `bank_accounts` 表；`SimulatedBankDebitGateway` 先假设客户已有默认扣款授权。
-- 不引入真实银行网络、资金清算文件或 double-entry ledger。
+- 不引入真实银行网络、资金清算文件或生产级 double-entry ledger。
 
 自动扣款主路径：
 
@@ -1086,6 +1119,14 @@ credit account row lock -> statement row lock
    - Listener 把业务事实映射成 `NotificationType.REPAYMENT_RECEIVED`。
    - `RequestNotificationService` 用 `consumer_inbox` 和 `notifications.source_event_id` 做 consumer-side idempotency。
 
+11. Ledger 异步消费 `repayment.received`
+
+   - `RepaymentLedgerListener` 收到同一个 Kafka event。
+   - `RecordLedgerEntryService` 先写 `consumer_inbox(ledger-v1, eventId)` 做 Inbox claim。
+   - claim 成功后调用 `LedgerEntry.recordRepaymentReceived(...)`，这里生成 `ledger_entries.id`。
+   - `ledger_entries` 新增一条 `REPAYMENT_RECEIVED/CREDIT` 分录，表达 issuer 对持卡人的应收款减少。
+   - 这一步失败不会 rollback repayment 主事务；Kafka retry/DLT 和人工重放负责修复 ledger projection。
+
 ### 6.4 本次事务提交后的数据变化
 
 成功还款后：
@@ -1095,6 +1136,7 @@ credit account row lock -> statement row lock
 - `statements.paid_amount` 增加。
 - `statements.status` 变为 `PARTIALLY_PAID` 或 `PAID`。
 - `outbox_events` 新增 `repayment.received/PENDING`。
+- Outbox 发布后，`ledger_entries` 会异步新增 `REPAYMENT_RECEIVED/CREDIT`。
 
 不会变化：
 
@@ -1224,6 +1266,36 @@ PayPay Card interview提示：
 - 因此下游必须设计 idempotent consumer，例如 `source_event_id` 唯一索引或 `consumer_inbox` 表。
 - `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
 - `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
+
+### 7.2 Ledger projection
+
+Ledger 作为独立 bounded context 消费已经发生的业务事实：
+
+```text
+card_transaction.posted
+-> CardTransactionLedgerListener
+-> RecordLedgerEntryService
+-> consumer_inbox(ledger-v1, eventId)
+-> ledger_entries/CARD_TRANSACTION_POSTED/DEBIT
+
+repayment.received
+-> RepaymentLedgerListener
+-> RecordLedgerEntryService
+-> consumer_inbox(ledger-v1, eventId)
+-> ledger_entries/REPAYMENT_RECEIVED/CREDIT
+```
+
+为什么不消费 authorization：
+
+- Authorization 是额度 hold，不是真正 posted receivable。
+- 真正会进入用户账务和账本的是 presentment posting 后的 `card_transaction.posted`。
+- 还款真正到账后，`repayment.received` 才减少 issuer 对持卡人的应收款。
+
+为什么当前异步写 Ledger：
+
+- 这是 minimal learning projection，用来理解 ledger entry 和 consumer idempotency。
+- 它不扩大 posting/repayment 的 transaction boundary。
+- 生产里如果 Ledger 是 accounting source of truth，通常会在 posting/repayment 的核心账务事务里同步写入，或使用更强的可靠事务设计。
 
 ## 8. 核心流程六：DelayJob 未来业务动作
 
@@ -1516,6 +1588,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - `CardTransaction` 提供 posted transaction 基础。
 - `Statement` 把 posted transactions 固定成账单快照。
 - `Repayment` 处理还款、恢复额度和账单结清。
+- `LedgerEntry` 异步记录最小内部账本分录：消费入账是 `DEBIT`，还款入账是 `CREDIT`。
 
 ### 为什么 Outbox 和 DelayJob 分开？
 

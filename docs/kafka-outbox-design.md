@@ -11,8 +11,8 @@ the main money-changing transaction:
 - Statement-ready and repayment notifications
 - Operations, audit, and reporting projections
 
-The current implementation includes two consumers with deliberately different
-side-effect and idempotency strategies.
+The current implementation includes Notification, Risk Feature, and Ledger
+consumers with deliberately different side-effect and idempotency strategies.
 
 ## Why Transactional Outbox
 
@@ -193,6 +193,33 @@ A future notification sender can independently retry provider calls and track
 delivery status without blocking Kafka partitions or replaying the original
 authorization event.
 
+### Ledger Projection
+
+Consumer group:
+
+```text
+mini-card-ledger-v1
+```
+
+Ledger is modeled as an independent bounded context for learning. Its inbound
+adapters consume `card_transaction.posted` and `repayment.received`, then call
+`RecordLedgerEntryService`.
+
+The service first claims the event in `consumer_inbox`, then appends a
+`ledger_entries` row in the same local transaction. The table also has a
+`source_event_id + entry_type` unique constraint, so duplicate Kafka delivery or
+manual replay cannot create duplicate accounting entries.
+
+The current entries are intentionally minimal:
+
+```text
+CARD_TRANSACTION_POSTED -> DEBIT
+REPAYMENT_RECEIVED -> CREDIT
+```
+
+Authorization events do not create Ledger entries because authorization is a
+credit hold, not a posted receivable.
+
 ### Risk Feature Projection
 
 Consumer group:
@@ -229,6 +256,7 @@ Each consumer has its own listener container factory and DLT:
 ```text
 mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
+mini-card.ledger.dlt.v1
 ```
 
 Transient exceptions are retried twice with a one-second fixed backoff. Contract
@@ -244,13 +272,21 @@ Spring Kafka exception headers. Production operations should alert on DLT
 growth, inspect the root cause, deploy a fix, and replay messages deliberately
 rather than automatically looping DLT messages back into the source topic.
 
-### Operations, Ledger, and Reconciliation Projections
+### Ledger and Reconciliation Projections
 
-These remain likely future learning consumers or internal modules. Ledger would
-record accounting-style entries derived from posted transactions and repayments.
-Reconciliation would compare internal records against external network or bank
-statements. Both should be downstream of business facts rather than extra work
-inside the authorization API transaction.
+Ledger is now implemented as a minimal learning projection. It consumes
+`card_transaction.posted` and `repayment.received`, claims the event through
+`consumer_inbox`, and writes append-only `ledger_entries`:
+
+```text
+card_transaction.posted -> CARD_TRANSACTION_POSTED / DEBIT
+repayment.received -> REPAYMENT_RECEIVED / CREDIT
+```
+
+This is intentionally not a production double-entry general ledger. It teaches
+that CardTransaction, Statement, Repayment, and Ledger answer different
+questions. Reconciliation remains a likely future module that would compare
+internal records against external network or bank statements.
 
 Reversal, refund, dispute, and chargeback should produce their own versioned
 event types when those domains are implemented. They should not be inferred

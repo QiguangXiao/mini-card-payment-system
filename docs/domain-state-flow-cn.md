@@ -1297,9 +1297,9 @@ repayments
 | --- | --- | --- | --- |
 | `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification、Risk projection |
 | `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 其他授权生命周期消费者 |
-| `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification |
+| `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification、Ledger |
 | `Statement.close(...)` | `StatementClosedDomainEvent` | `statement.closed` | Notification |
-| `Repayment.markReceived(...)` | `RepaymentReceivedDomainEvent` | `repayment.received` | Notification |
+| `Repayment.markReceived(...)` | `RepaymentReceivedDomainEvent` | `repayment.received` | Notification、Ledger |
 
 这些 Outbox row 和业务状态一起 commit。
 
@@ -1350,7 +1350,32 @@ Notification 自己用两层幂等：
 - 不 rollback repayment。
 - Kafka listener retry / DLT 处理。
 
-### 10.4 DelayJob 是未来业务动作
+### 10.4 Ledger 是消费结果，不影响主流程
+
+例如 `repayment.received`：
+
+```text
+RepaymentService commit
+-> Outbox worker publish Kafka
+-> RepaymentLedgerListener
+-> RecordLedgerEntryService
+-> consumer_inbox claim
+-> ledger_entries/REPAYMENT_RECEIVED/CREDIT
+```
+
+Ledger projection 自己用两层幂等：
+
+- `consumer_inbox(consumer_name, event_id)`
+- `ledger_entries(source_event_id, entry_type)` unique constraint
+
+它记录内部账本视角：
+
+- `card_transaction.posted` -> `CARD_TRANSACTION_POSTED/DEBIT`
+- `repayment.received` -> `REPAYMENT_RECEIVED/CREDIT`
+
+当前 Ledger 是学习用 minimal projection，不是生产级 double-entry general ledger。
+
+### 10.5 DelayJob 是未来业务动作
 
 Statement 生成时，同事务写入：
 

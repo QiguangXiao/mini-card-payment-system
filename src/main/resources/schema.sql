@@ -183,6 +183,38 @@ CREATE TABLE IF NOT EXISTS repayments (
     )
 );
 
+CREATE TABLE IF NOT EXISTS ledger_entries (
+    id CHAR(36) PRIMARY KEY,
+    source_event_id CHAR(36) NOT NULL,
+    entry_type VARCHAR(50) NOT NULL,
+    direction VARCHAR(20) NOT NULL,
+    source_type VARCHAR(50) NOT NULL,
+    source_id CHAR(36) NOT NULL,
+    credit_account_id CHAR(36) NOT NULL,
+    amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    occurred_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_ledger_entries_source_event_type UNIQUE (source_event_id, entry_type),
+    INDEX idx_ledger_entries_account_occurred (credit_account_id, occurred_at, id),
+    CONSTRAINT fk_ledger_entries_credit_account FOREIGN KEY (credit_account_id)
+        REFERENCES credit_accounts (id),
+    CONSTRAINT chk_ledger_entries_amount_positive CHECK (amount > 0),
+    CONSTRAINT chk_ledger_entries_type CHECK (
+        entry_type IN ('CARD_TRANSACTION_POSTED', 'REPAYMENT_RECEIVED')
+    ),
+    CONSTRAINT chk_ledger_entries_direction CHECK (direction IN ('DEBIT', 'CREDIT')),
+    CONSTRAINT chk_ledger_entries_source_type CHECK (source_type IN ('CARD_TRANSACTION', 'REPAYMENT')),
+    CONSTRAINT chk_ledger_entries_type_direction CHECK (
+        (entry_type = 'CARD_TRANSACTION_POSTED'
+            AND direction = 'DEBIT'
+            AND source_type = 'CARD_TRANSACTION')
+        OR (entry_type = 'REPAYMENT_RECEIVED'
+            AND direction = 'CREDIT'
+            AND source_type = 'REPAYMENT')
+    )
+);
+
 CREATE TABLE IF NOT EXISTS outbox_events (
     id CHAR(36) PRIMARY KEY,
     aggregate_type VARCHAR(50) NOT NULL,

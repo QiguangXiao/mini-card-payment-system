@@ -76,6 +76,11 @@ public class KafkaMessagingConfiguration {
     }
 
     @Bean
+    public NewTopic ledgerDeadLetterTopic(KafkaTopicsProperties properties) {
+        return deadLetterTopic(properties.ledgerDeadLetter());
+    }
+
+    @Bean
     public ConcurrentKafkaListenerContainerFactory<Object, Object>
             notificationKafkaListenerContainerFactory(
                     ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
@@ -109,6 +114,24 @@ public class KafkaMessagingConfiguration {
                 kafkaTemplate,
                 topics.riskFeatureDeadLetter(),
                 3
+        );
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<Object, Object>
+            ledgerKafkaListenerContainerFactory(
+                    ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+                    ConsumerFactory<Object, Object> consumerFactory,
+                    KafkaTemplate<Object, Object> kafkaTemplate,
+                    KafkaTopicsProperties topics
+    ) {
+        // Ledger projection 独立于 Notification/Risk 失败；单独 DLT 便于只重放账本投影。
+        return listenerFactory(
+                configurer,
+                consumerFactory,
+                kafkaTemplate,
+                topics.ledgerDeadLetter(),
+                2
         );
     }
 

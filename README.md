@@ -22,8 +22,8 @@ Backend Engineer interview.
 The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
-checks, Kafka-based event delivery, Transactional Outbox, Consumer Inbox, and
-DelayJob scheduling.
+checks, minimal Ledger projection, Kafka-based event delivery, Transactional
+Outbox, Consumer Inbox, and DelayJob scheduling.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
@@ -102,25 +102,31 @@ from a locked `CreditAccount`. Presentment posting later moves money from
 `reserved_amount` to `posted_balance` and creates a posted `CardTransaction`.
 Statement generation snapshots posted transactions into `statement_items`, and
 repayment reduces `posted_balance` while advancing statement payment status.
+Minimal Ledger then consumes posted transaction and repayment events to record
+append-only internal accounting entries.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
 velocity, high amount, merchant, and geolocation rules before calling a
 simulated external risk service protected by timeout, fallback, and a circuit
-breaker. Authorization reversal, refund, dispute/chargeback, ledger, and
-reconciliation flows are deliberately deferred learning topics.
+breaker. Authorization reversal, refund, dispute/chargeback, production-grade
+double-entry ledger, and reconciliation flows are deliberately deferred learning
+topics.
 
 Business events are written to a MySQL Transactional Outbox in the same
 transaction as the state change. A scheduled publisher later sends them to Kafka
 using at-least-once delivery. Future business actions such as authorization
 expiry and automatic repayment are scheduled through DelayJob, not Outbox.
 
-Two independent consumer groups demonstrate different production patterns:
+Three independent consumer groups demonstrate different production patterns:
 
 - The independent Notification bounded context creates idempotent `Notification`
   aggregates and owns their delivery lifecycle.
 - The existing Risk bounded context maintains an idempotent, replayable
   card-risk feature projection. It is deliberately not modeled as an aggregate.
+- The Ledger bounded context records minimal append-only accounting entries from
+  posted transaction and repayment events. It is a learning projection, not a
+  production-grade general ledger.
 
 Each consumer has its own retry and dead-letter topic.
 
@@ -179,6 +185,7 @@ Dead-letter topics:
 ```text
 mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
+mini-card.ledger.dlt.v1
 ```
 
 Stop local services:

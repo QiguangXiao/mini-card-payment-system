@@ -7,7 +7,7 @@
 ```text
 业务事务写 MySQL + Outbox row
 OutboxWorker 稍后发布 Kafka
-Notification / Risk consumer 异步消费
+Notification / Risk / Ledger consumer 异步消费
 consumer 用 Inbox / unique key 做幂等
 ```
 
@@ -279,7 +279,7 @@ spring:
 
 本项目为什么适合：
 
-- Notification / Risk consumer 都有数据库 side effect。
+- Notification / Risk / Ledger consumer 都有数据库 side effect。
 - 每条事件独立幂等处理，record-level ack 更容易解释。
 
 interview回答：
@@ -485,6 +485,7 @@ DLT topic：
 ```yaml
 mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
+mini-card.ledger.dlt.v1
 ```
 
 为什么每个 consumer 一个 DLT：
@@ -639,11 +640,11 @@ Kafka 有 producer idempotence 和 transaction API，但本项目涉及 MySQL si
 
 所以从业务视角仍然按 at-least-once 设计，consumer 幂等。
 
-### 为什么不用同步调用 Notification / Risk？
+### 为什么不用同步调用 Notification / Risk / Ledger？
 
 授权请求是金融实时路径，应该尽快返回。
 
-Notification 和 Risk projection 是 follow-up side effects，适合异步处理。Kafka 让这些 bounded context 独立扩缩、独立失败。
+Notification、Risk projection 和当前最小 Ledger projection 都是 follow-up side effects，适合异步处理。Kafka 让这些 bounded context 独立扩缩、独立失败。
 
 ### 如果 Kafka 挂了，授权还能成功吗？
 

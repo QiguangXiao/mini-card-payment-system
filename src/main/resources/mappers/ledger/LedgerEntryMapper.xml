@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.ledger.infrastructure.mybatis.LedgerEntryMapper">
+
+    <insert id="insert">
+        INSERT INTO ledger_entries (
+            id, source_event_id, entry_type, direction, source_type, source_id,
+            credit_account_id, amount, currency, occurred_at, created_at
+        ) VALUES (
+            #{id}, #{sourceEventId}, #{entryType}, #{direction}, #{sourceType}, #{sourceId},
+            #{creditAccountId}, #{amount}, #{currency}, #{occurredAt}, #{createdAt}
+        )
+    </insert>
+
+</mapper>

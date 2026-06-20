@@ -193,7 +193,7 @@ multiple environments or valuable data are introduced.
 - Authorization reversal from the network before presentment.
 - Partial presentment and partial hold release.
 - Refund, clearing adjustment, dispute, and chargeback flows.
-- Ledger entries and reconciliation reports.
+- Production-grade double-entry ledger and reconciliation reports.
 - Optimistic versioning for later aggregate updates.
 - User/cardholder identity, authentication, authorization, and PII handling.
 - Versioned database migrations.

@@ -40,11 +40,14 @@ messaging:
     repayment-events: mini-card.repayment-events.v1
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
+    ledger-dead-letter: mini-card.ledger.dlt.v1
   consumers:
     notification:
       group-id: mini-card-notification-v1
     risk-feature:
       group-id: mini-card-risk-feature-v1
+    ledger:
+      group-id: mini-card-ledger-v1
     dead-letter-monitor:
       group-id: mini-card-dead-letter-monitor-v1
 

@@ -390,8 +390,8 @@ statement 标记为 paid
 - `POST /api/repayments` 通过 `Idempotency-Key` 防止重复还款。
 - `RepaymentService.receive(...)` 在同一 transaction boundary 内更新 `repayments`、`credit_accounts.posted_balance` 和 `statements.paid_amount/status`。
 - 锁顺序保持 `credit account row lock -> statement row lock`，避免和账单生成流程产生相反锁顺序。
-- `repayment.received` 通过 Outbox 发布，Notification 已消费它创建 `REPAYMENT_RECEIVED` 通知。
-- 当前不支持 overpayment、多账单自动分摊、真实银行资金清算和 ledger 分录。
+- `repayment.received` 通过 Outbox 发布，Notification 会创建 `REPAYMENT_RECEIVED` 通知，Ledger 会创建 `REPAYMENT_RECEIVED/CREDIT` 分录。
+- 当前不支持 overpayment、多账单自动分摊、真实银行资金清算和生产级 double-entry ledger。
 
 ## 7. 正向流程总图
 
@@ -623,6 +623,16 @@ Credit Network Settlement Payable   1,000
 ```
 
 Ledger 更偏财务一致性，通常要求 double-entry 和 append-only。
+
+当前项目已经加入最小 Ledger projection：
+
+```text
+card_transaction.posted -> ledger_entries/CARD_TRANSACTION_POSTED/DEBIT
+repayment.received -> ledger_entries/REPAYMENT_RECEIVED/CREDIT
+```
+
+这能帮助理解 ledger 概念，但它不是生产级总账；生产级 Ledger 通常还需要 accounting account、
+journal balance、fee/interest/refund adjustment 和更严格的审计控制。
 
 ### Reconciliation 对账
 
@@ -861,6 +871,7 @@ Authorization
 -> CardTransaction
 -> Statement
 -> Repayment
+-> Minimal Ledger
 -> Authorization Expiry
 -> Outbox/Kafka notification and risk projection
 ```
@@ -869,7 +880,6 @@ Authorization
 
 ```text
 Refund / reversal
-Ledger
 Reconciliation
 Settlement cash movement
 Dispute / chargeback
@@ -878,11 +888,10 @@ Dispute / chargeback
 最自然的后续路线：
 
 ```text
-1. Refund / reversal：围绕 CardTransaction 和 Statement 生命周期扩展
-2. Statement due/overdue：处理到期、逾期和最低还款判断
-3. Minimal Ledger：记录 posting、repayment 等内部借贷分录
-4. Reconciliation：对比外部清算/资金文件
-5. Settlement cash movement / dispute：补齐资金移动和争议处理分支
+1. Reconciliation：对比外部清算/资金文件
+2. Refund / reversal：围绕 CardTransaction、Statement 和 Ledger adjustment 扩展
+3. Statement due/overdue：处理到期、逾期和最低还款判断
+4. Settlement cash movement / dispute：补齐资金移动和争议处理分支
 ```
 
 ## 18. interview一句话总结

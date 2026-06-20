@@ -10,7 +10,7 @@ Authorization
 -> Presentment Posting
 -> Statement
 -> Repayment
--> Notification / Risk
+-> Notification / Risk / Ledger
 -> Outbox / Inbox / DelayJob
 ```
 
@@ -74,16 +74,16 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 ## 2. 最值得补的领域排名
 
-### P1: 最小 Ledger
+### Done: 最小 Ledger
 
-面试价值最高，但要做得非常小。
+已经实现为最小 learning projection。
 
-推荐范围：
+当前范围：
 
-- 新增 `ledger_entries` 表。
-- 在 `card_transaction.posted` 后记录一条消费入账 entry。
-- 在 `repayment.received` 后记录一条还款 entry。
-- 每条 entry 关联 `source_event_id` 或 source aggregate，保证幂等。
+- 已新增 `ledger_entries` 表。
+- `card_transaction.posted` 后记录 `CARD_TRANSACTION_POSTED/DEBIT` entry。
+- `repayment.received` 后记录 `REPAYMENT_RECEIVED/CREDIT` entry。
+- 每条 entry 关联 `source_event_id + entry_type`，并使用 `consumer_inbox` 做第一道幂等。
 - 不做完整会计科目、不做复式借贷平衡、不做结算。
 
 为什么值得做：
@@ -98,7 +98,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 最小 Ledger 是学习 projection，不是生产级总账。
 ```
 
-### P2: 最小 Reconciliation
+### P1: 最小 Reconciliation
 
 适合在最小 Ledger 后做。
 
@@ -120,7 +120,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 - 如果没有 ledger 或至少稳定的 internal records，对账会变成普通列表 diff。
 - 面试价值来自“为什么对不上、如何处理 exception”，不是 CSV 解析本身。
 
-### P3: Authorization Reversal
+### P2: Authorization Reversal
 
 可以作为一个很小的负向分支。
 
@@ -141,7 +141,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 - 现有 `Authorization Expiry` 已经展示了释放 hold 的核心机制。
 - 面试主线已经足够，reversal 是锦上添花。
 
-### P4: Refund
+### P3: Refund
 
 真实业务很重要，但学习实现容易膨胀。
 
@@ -159,7 +159,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 先在 credit-card-lifecycle 文档里理解，暂时不急着写代码。
 ```
 
-### P5: Dispute / Chargeback
+### P4: Dispute / Chargeback
 
 面试可以讲概念，但不建议现在实现。
 
@@ -170,7 +170,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 - 强依赖卡组织规则、证据材料、时限、运营处理。
 - 容易把学习项目拖成业务流程系统。
 
-### P6: Settlement
+### P5: Settlement
 
 不建议现在实现。
 
@@ -180,7 +180,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 - 当前项目还没有真正 acquirer/network/bank 文件。
 - 很容易做成假的“状态字段”，但学不到核心。
 
-### P7: Cardholder/User/Auth
+### P6: Cardholder/User/Auth
 
 生产必需，但面试主线不急。
 
@@ -197,7 +197,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 ```text
 先消化现有主链路
 -> 修文档过期点
--> 做最小 Ledger
+-> 做最小 Ledger（已完成）
 -> 再做最小 Reconciliation
 -> 停下来复盘面试表达
 ```
@@ -205,17 +205,17 @@ Reconciliation 是内部账和外部资料是否对得上。
 如果只再补一个领域：
 
 ```text
-选最小 Ledger。
+选最小 Reconciliation。
 ```
 
 如果再补两个领域：
 
 ```text
-最小 Ledger + 最小 Reconciliation。
+最小 Reconciliation + Authorization Reversal。
 ```
 
 如果时间有限：
 
 ```text
-不补代码，只把 Ledger/Reconciliation 的概念讲清楚，也已经足够面试使用。
+Ledger 已经足够作为概念入口；Reconciliation 可以先只讲概念，不急着继续补代码。
 ```
