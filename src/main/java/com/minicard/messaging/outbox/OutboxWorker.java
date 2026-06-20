@@ -11,18 +11,30 @@ import org.springframework.transaction.support.TransactionOperations;
 
 /**
  * Outbox worker，负责等待 Kafka acknowledgement，并由 worker 自己 finalize delivery state。
+ *
+ * <p>关键词：消息发布, ack 等待, lease 校验, outbox worker,
+ * Kafka acknowledgement, finalize, 発行ワーカー(はっこうワーカー),
+ * リース検証(リースけんしょう)。</p>
  */
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class OutboxWorker {
 
+    /** finalize 前会重新锁住 outbox row。 */
     private final OutboxEventRepository outboxEventRepository;
+    /** Kafka adapter。 */
     private final OutboxMessagePublisher messagePublisher;
+    /** send timeout 和 retry policy。 */
     private final OutboxProperties properties;
+    /** 当前时间来源。 */
     private final Clock clock;
+    /** 显式事务工具，确保 publish 与 finalize 分开。 */
     private final TransactionOperations transactionOperations;
 
+    /**
+     * 发布已领取事件，并根据结果 finalize。
+     */
     public void publishClaimedEvent(OutboxEvent claimedEvent) {
         try {
             // publish() 会等待 broker acknowledgement。成功后才能 markPublished。
@@ -43,6 +55,7 @@ public class OutboxWorker {
     }
 
     public void markRejectedForRetry(OutboxEvent claimedEvent, RuntimeException exception) {
+        // worker pool 拒绝时，必须把 PROCESSING 事件放回 retry/DEAD，避免 lease 到期前一直不可见。
         markFailed(claimedEvent, "outbox worker pool rejected event", exception);
     }
 
@@ -93,6 +106,7 @@ public class OutboxWorker {
                 ));
         if (event.status() != OutboxEventStatus.PROCESSING
                 || !event.nextAttemptAt().equals(claimedEvent.nextAttemptAt())) {
+            // 老 worker 返回太晚时不能覆盖新 lease 的处理结果，这是防并发覆盖的关键保护。
             log.warn(
                     "outbox_lease_changed eventId={} claimedLease={} currentStatus={} currentLease={}",
                     claimedEvent.id(),

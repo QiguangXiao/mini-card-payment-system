@@ -22,6 +22,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 还款入账 use case。
  *
+ * <p>关键词：还款入账, 幂等键, 余额扣减, repayment service,
+ * idempotency key, posted balance, 入金処理(にゅうきんしょり),
+ * 入金処理(にゅうきんしょり)。</p>
+ *
  * <p>面试重点：Repayment 同时影响 repayment row、credit account postedBalance、
  * statement paidAmount/status 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
  */

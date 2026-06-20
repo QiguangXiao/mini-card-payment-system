@@ -16,6 +16,10 @@ import org.springframework.transaction.support.TransactionOperations;
 /**
  * Outbox poller，只负责 poll、claim、submit worker。
  *
+ * <p>关键词：Outbox 扫描, 发布领取, worker pool, outbox poller,
+ * reliable publication, task rejection, アウトボックスポーラー,
+ * 確実発行(かくじつはっこう)。</p>
+ *
  * <p>它不直接发送 Kafka，也不提前 finalize。每个 worker 必须自己 publish + markPublished/markFailed。</p>
  */
 @Component
@@ -27,11 +31,17 @@ import org.springframework.transaction.support.TransactionOperations;
 @Slf4j
 public class OutboxPoller {
 
+    /** 查询可发布事件并更新 delivery state。 */
     private final OutboxEventRepository outboxEventRepository;
+    /** Outbox batch size、lease timeout 和 worker 配置。 */
     private final OutboxProperties properties;
+    /** 可测试的当前时间来源。 */
     private final Clock clock;
+    /** publish + finalize 的 worker。 */
     private final OutboxWorker worker;
+    /** Kafka publish worker pool。 */
     private final TaskExecutor outboxWorkerExecutor;
+    /** 显式短事务 claim，避免 @Scheduled self-invocation 陷阱。 */
     private final TransactionOperations transactionOperations;
 
     public OutboxPoller(
@@ -50,6 +60,9 @@ public class OutboxPoller {
         this.transactionOperations = transactionOperations;
     }
 
+    /**
+     * 扫描可发布事件并提交给 worker。
+     */
     @Scheduled(
             fixedDelayString = "${outbox.publisher.fixed-delay-ms:1000}",
             scheduler = "outboxTaskScheduler"
@@ -70,6 +83,7 @@ public class OutboxPoller {
     List<OutboxEvent> claimPublishableEvents() {
         return transactionOperations.execute(status -> {
             Instant now = Instant.now(clock);
+            // findPublishableBatchForUpdate 在 SQL 层使用 FOR UPDATE SKIP LOCKED。
             List<OutboxEvent> events = outboxEventRepository.findPublishableBatchForUpdate(
                     now,
                     properties.batchSize()

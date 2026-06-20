@@ -18,6 +18,10 @@ import lombok.experimental.Accessors;
 /**
  * 信用卡账单 aggregate root。
  *
+ * <p>关键词：账单聚合, billing cycle, 明细快照, statement aggregate,
+ * due date, payment status, 請求集約(せいきゅうしゅうやく),
+ * 支払状態(しはらいじょうたい)。</p>
+ *
  * <p>Statement 表达一个 credit account 在固定 billing cycle 内的已入账消费快照。
  * 它不是实时余额视图：一旦生成，total/minimum payment/line items 就应该可审计、可解释。</p>
  */

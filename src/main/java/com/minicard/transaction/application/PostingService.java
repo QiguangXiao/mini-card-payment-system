@@ -26,6 +26,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Issuer 侧 presentment posting use case。
  *
+ * <p>关键词：入账用例, presentment, 交易入账, posting service,
+ * presentment posting, posted balance, 売上処理(うりあげしょり),
+ * 取引(とりひき)。</p>
+ *
  * <p>Presentment 是外部网络/商户正式请款；posting 是发卡行把交易入账到持卡人账户。
  * 这里刻意不叫 capture/settlement：capture 偏商户侧，settlement 偏资金清算，不等于持卡人账户入账。</p>
  */

@@ -17,6 +17,10 @@ import org.springframework.stereotype.Service;
 /**
  * 风控评估 use case，先跑本地规则，再调用模拟外部风控。
  *
+ * <p>关键词：风控评估, 本地规则, 外部风控, risk assessment,
+ * local checks, external risk, リスク評価(リスクひょうか),
+ * 外部審査(がいぶしんさ)。</p>
+ *
  * <p>面试重点：risk check 放在 account row lock 之前，避免慢风控调用扩大锁等待时间。</p>
  */
 @Service

@@ -14,6 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 恢复长期停留在 PROCESSING 的 delay jobs。
  *
+ * <p>关键词：任务恢复, lease 超时, 死信, delay job recovery,
+ * processing timeout, dead job, ジョブ復旧(ジョブふっきゅう),
+ * タイムアウト。</p>
+ *
  * <p>PROCESSING 是 lease，不是永久状态。worker/pod 宕机时，recoverer 会把超时任务
  * 重新放回 retry 状态或转 DEAD，保证 database-backed queue 不会卡死。</p>
  */
@@ -27,10 +31,16 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class DelayJobRecoverer {
 
+    /** 查询并加锁超时 PROCESSING job。 */
     private final DelayJobRepository delayJobRepository;
+    /** 控制每轮恢复数量和 maxAttempts。 */
     private final DelayJobProperties properties;
+    /** 当前时间来源。 */
     private final Clock clock;
 
+    /**
+     * 周期性恢复 lease 超时任务。
+     */
     @Scheduled(
             fixedDelayString = "${delay-jobs.scheduler.recovery-fixed-delay-ms:5000}",
             scheduler = "delayJobTaskScheduler"

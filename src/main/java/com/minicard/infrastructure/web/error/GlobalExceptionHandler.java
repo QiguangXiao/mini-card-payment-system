@@ -21,6 +21,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 /**
  * 全局 API 错误映射，把 application/domain exception 转换成稳定的 HTTP error contract。
  *
+ * <p>关键词：全局异常处理, HTTP 错误码, 稳定契约, global exception handler,
+ * error contract, API error, 例外ハンドラー(れいがいハンドラー),
+ * エラー契約(エラーけいやく)。</p>
+ *
  * <p>面试重点：金融 API 不应该把 Java stack trace 或数据库错误直接暴露给客户端；
  * 客户端需要稳定 code，服务端日志保留细节用于排查。</p>
  */
@@ -28,6 +32,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    /**
+     * 查询不到资源时返回 404。
+     */
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException exception) {
         return error(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", exception.getMessage());
@@ -96,6 +103,9 @@ public class GlobalExceptionHandler {
         );
     }
 
+    /**
+     * 统一构造 ErrorResponse。
+     */
     private ResponseEntity<ErrorResponse> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .body(new ErrorResponse(code, message, Instant.now()));

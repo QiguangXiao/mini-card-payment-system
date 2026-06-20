@@ -14,6 +14,10 @@ import org.springframework.stereotype.Component;
 /**
  * Outbox 可靠投递机制的 Kafka adapter。
  *
+ * <p>关键词：Kafka 发布, Outbox adapter, broker ack, Kafka publication,
+ * acknowledgement, at-least-once, Kafka発行(Kafkaはっこう),
+ * 確認応答(かくにんおうとう)。</p>
+ *
  * <p>这个类知道 topic、Kafka headers 和 broker acknowledgement；
  * Outbox 自身不依赖 Kafka infrastructure。</p>
  */
@@ -21,11 +25,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
 
+    /** Spring Kafka 发送模板；这里只作为 infrastructure dependency，不进入 domain。 */
     private final KafkaTemplate<String, String> kafkaTemplate;
+    /** topic 名由配置提供，避免业务代码写死环境差异。 */
     private final KafkaTopicsProperties topics;
 
+    /**
+     * 发布 OutboxEvent 并等待 Kafka broker ack。
+     */
     @Override
     public void publish(OutboxEvent event, Duration timeout) {
+        // ProducerRecord 包含 topic、partition key 和 payload；partition key 影响同一聚合事件顺序。
         ProducerRecord<String, String> record = new ProducerRecord<>(
                 topicFor(event.eventType()),
                 event.partitionKey(),
@@ -44,13 +54,18 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
             // 这里仍不是分布式事务，所以整体语义仍是 at-least-once。
             kafkaTemplate.send(record).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException exception) {
+            // Java 并发约定：捕获 InterruptedException 后恢复 interrupt flag，避免吞掉 shutdown 信号。
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Kafka publication was interrupted", exception);
         } catch (Exception exception) {
+            // 其他 Kafka/timeout 错误交给 OutboxWorker 统一转 retry/DEAD。
             throw new IllegalStateException("Kafka publication failed", exception);
         }
     }
 
+    /**
+     * 根据 eventType 前缀选择 topic。
+     */
     private String topicFor(String eventType) {
         // Outbox 是通用 reliable delivery 机制；topic routing 属于 Kafka adapter。
         // 这里按业务事实所属上下文拆 topic，避免把 card_transaction 事件塞进 authorization topic。
@@ -66,9 +81,13 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         if (eventType.startsWith("repayment.")) {
             return topics.repaymentEvents();
         }
+        // 未知事件类型属于开发错误，不能静默发布到错误 topic。
         throw new IllegalArgumentException("unsupported integration event type " + eventType);
     }
 
+    /**
+     * 写 Kafka header，统一使用 UTF-8 字节。
+     */
     private void addHeader(ProducerRecord<String, String> record, String name, String value) {
         record.headers().add(name, value.getBytes(StandardCharsets.UTF_8));
     }

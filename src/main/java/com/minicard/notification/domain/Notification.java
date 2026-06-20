@@ -10,6 +10,10 @@ import lombok.experimental.Accessors;
 /**
  * 通知 aggregate root，维护一条客户通知及其 delivery lifecycle。
  *
+ * <p>关键词：通知聚合, 投递生命周期, source event id, notification aggregate,
+ * delivery lifecycle, idempotency, 通知集約(つうちしゅうやく),
+ * 配信(はいしん)。</p>
+ *
  * <p>它由 integration event 创建，但 Kafka 不属于领域模型。
  * 这样 delivery 规则可以被 Kafka、admin retry endpoint 或 scheduler 复用。</p>
  */

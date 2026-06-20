@@ -27,6 +27,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 账单生成 use case。
  *
+ * <p>关键词：账单生成, 交易快照, Outbox 事件, statement generation,
+ * transaction snapshot, billing cycle, 請求明細作成(せいきゅうめいさいさくせい),
+ * 明細(めいさい)。</p>
+ *
  * <p>面试重点：Statement generation 是批处理业务，但仍然需要清楚的 transaction boundary。
  * 同一事务里锁账户、锁待出账交易、创建 statement/item 快照、标记交易已归账、写 Outbox event。</p>
  */

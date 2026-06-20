@@ -13,6 +13,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 恢复长期停留在 PROCESSING 的 Outbox events。
+ *
+ * <p>关键词：Outbox 恢复, 发布租约, 重试, outbox recovery,
+ * processing lease, retry, アウトボックス復旧(アウトボックスふっきゅう),
+ * 発行リース(はっこうリース)。</p>
  */
 @Component
 @ConditionalOnProperty(
@@ -24,10 +28,16 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class OutboxRecoverer {
 
+    /** 查询 lease 超时事件并更新 delivery state。 */
     private final OutboxEventRepository outboxEventRepository;
+    /** batch size 和 maxAttempts。 */
     private final OutboxProperties properties;
+    /** 当前时间来源。 */
     private final Clock clock;
 
+    /**
+     * 恢复卡在 PROCESSING 的 Outbox events。
+     */
     @Scheduled(
             fixedDelayString = "${outbox.publisher.recovery-fixed-delay-ms:5000}",
             scheduler = "outboxTaskScheduler"
@@ -40,6 +50,7 @@ public class OutboxRecoverer {
                 properties.batchSize()
         );
         for (OutboxEvent event : events) {
+            // 超时发布按一次失败处理；超过 maxAttempts 后转 DEAD，避免无限打 Kafka。
             event.markProcessingTimedOut(now, properties.maxAttempts());
             outboxEventRepository.updateDeliveryState(event);
             log.warn(

@@ -14,6 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 从 integration event 创建通知请求的 application use case。
  *
+ * <p>关键词：通知请求, Inbox 幂等, 事件消费, notification request,
+ * consumer idempotency, integration event, 通知依頼(つうちいらい),
+ * 重複配信(じゅうふくはいしん)。</p>
+ *
  * <p>类名按业务动作命名，而不是按 Kafka consumption 命名。
  * 这样 authorization、card transaction、statement listener 都可以复用同一个 use case。</p>
  */

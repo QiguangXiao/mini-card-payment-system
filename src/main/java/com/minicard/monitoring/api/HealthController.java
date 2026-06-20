@@ -5,16 +5,21 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Lightweight public liveness endpoint.
+ * 轻量公开 liveness endpoint。
  *
- * <p>This endpoint only proves that the HTTP application is running. Detailed
- * dependency health, metrics, and operational diagnostics belong to Spring
- * Boot Actuator rather than being reimplemented in this controller.</p>
+ * <p>关键词：健康检查, liveness, HTTP endpoint, health check,
+ * monitoring, ヘルスチェック, 生存確認(せいぞんかくにん)。</p>
+ *
+ * <p>这个 endpoint 只证明 HTTP 应用正在运行。依赖健康、metrics 和运维诊断应交给
+ * Spring Boot Actuator，而不是在这个 controller 里重复实现。</p>
  */
 @RestController
 @RequestMapping("/api")
 public class HealthController {
 
+    /**
+     * 返回应用存活状态。
+     */
     @GetMapping("/health")
     public HealthResponse health() {
         return HealthResponse.ok();

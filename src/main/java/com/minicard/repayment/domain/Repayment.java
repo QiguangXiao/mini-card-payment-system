@@ -16,6 +16,10 @@ import lombok.experimental.Accessors;
 /**
  * 还款 aggregate root，表达一次客户还款从 idempotency claim 到成功入账的生命周期。
  *
+ * <p>关键词：还款聚合, 幂等 claim, 入账事件, repayment aggregate,
+ * idempotency claim, repayment received, 入金集約(にゅうきんしゅうやく),
+ * 支払い済み(しはらいずみ)。</p>
+ *
  * <p>它不负责直接修改 statement/account；这些跨 aggregate 协作由 RepaymentService 在一个
  * transaction boundary 内完成。Repayment 自己负责记录“这笔还款已收到”这个业务事实。</p>
  */

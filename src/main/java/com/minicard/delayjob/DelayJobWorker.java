@@ -13,6 +13,10 @@ import org.springframework.transaction.support.TransactionOperations;
 /**
  * Delay job worker，负责执行业务 handler，并由 worker 自己 finalize。
  *
+ * <p>关键词：任务执行, lease 校验, finalize, delay job worker,
+ * processing lease, retry policy, ジョブ実行(ジョブじっこう),
+ * リース検証(リースけんしょう)。</p>
+ *
  * <p>面试重点：claim 已经在短事务内完成；worker 只处理已经拿到 PROCESSING lease 的 job。
  * 成功后标 DONE，失败后按 retry policy 回到 PENDING 或进入 DEAD。</p>
  */
@@ -20,10 +24,15 @@ import org.springframework.transaction.support.TransactionOperations;
 @Slf4j
 public class DelayJobWorker {
 
+    /** finalize 前会重新 FOR UPDATE 锁住 job row。 */
     private final DelayJobRepository delayJobRepository;
+    /** 最大重试次数等 retry policy。 */
     private final DelayJobProperties properties;
+    /** jobType -> handler 的 dispatch map。 */
     private final Map<DelayJobType, DelayJobHandler> handlers;
+    /** 统一时间来源。 */
     private final Clock clock;
+    /** 显式事务工具，用于拆分 handler transaction 和 finalize transaction。 */
     private final TransactionOperations transactionOperations;
 
     public DelayJobWorker(
@@ -43,6 +52,7 @@ public class DelayJobWorker {
     public void handleClaimedJob(DelayJob claimedJob) {
         DelayJobHandler handler = handlers.get(claimedJob.jobType());
         if (handler == null) {
+            // 没有 handler 是配置错误，必须进入失败路径而不是静默跳过。
             markFailed(claimedJob, "no handler registered for job type " + claimedJob.jobType(), null);
             return;
         }
@@ -64,6 +74,7 @@ public class DelayJobWorker {
     }
 
     public void markRejectedForRetry(DelayJob claimedJob, RuntimeException exception) {
+        // worker pool 拒绝也按失败处理，把 job 从 PROCESSING 放回 retry/DEAD。
         markFailed(claimedJob, "worker pool rejected job", exception);
     }
 
@@ -128,6 +139,11 @@ public class DelayJobWorker {
         return job;
     }
 
+    /**
+     * 把 Spring 注入的 handler list 转成按 enum 查找的 map。
+     *
+     * <p>EnumMap 是 Java 针对 enum key 优化的 Map，实现简单且比 HashMap 更省。</p>
+     */
     private Map<DelayJobType, DelayJobHandler> handlersByType(List<DelayJobHandler> handlers) {
         Map<DelayJobType, DelayJobHandler> result = new EnumMap<>(DelayJobType.class);
         for (DelayJobHandler handler : handlers) {

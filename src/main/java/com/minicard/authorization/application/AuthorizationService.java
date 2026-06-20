@@ -30,6 +30,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 授权用例的 application service，负责串起 idempotency、风控、卡状态、额度预占和事件写入。
  *
+ * <p>关键词：授权用例, 幂等, 额度预占, authorization service,
+ * idempotency, amount hold, オーソリ処理(オーソリしょり),
+ * 利用可能額の確保(りようかのうがくのかくほ)。</p>
+ *
  * <p>面试重点：这里是 transaction boundary。Controller 不做业务决策，domain aggregate
  * 不直接访问数据库，service 负责把多个 aggregate 和 repository 按正确顺序组合起来。</p>
  */

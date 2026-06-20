@@ -2,9 +2,18 @@ package com.minicard.infrastructure.web.error;
 
 import java.time.Instant;
 
+/**
+ * 统一错误响应 DTO。
+ *
+ * <p>关键词：错误响应, API 错误码, 时间戳, error response,
+ * API error, timestamp, エラーレスポンス, エラーコード。</p>
+ */
 public record ErrorResponse(
+        /** 机器可读错误码。 */
         String code,
+        /** 人类可读错误信息。 */
         String message,
+        /** API 层生成错误响应的时间。 */
         Instant timestamp
 ) {
 }

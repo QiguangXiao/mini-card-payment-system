@@ -12,6 +12,10 @@ import lombok.experimental.Accessors;
 /**
  * 信用账户 aggregate root，负责维护总额度、已预占额度、已入账余额和账户状态。
  *
+ * <p>关键词：额度账户聚合, 可用额度, 行锁, credit account aggregate,
+ * available credit, row lock, 利用枠管理集約(りようわくかんりしゅうやく),
+ * 利用可能枠(りようかのうわく)。</p>
+ *
  * <p>面试重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
  * 再调用这个 aggregate 的 reserve/release 来保护额度 invariant。</p>
  */

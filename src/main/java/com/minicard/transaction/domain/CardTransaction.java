@@ -16,6 +16,10 @@ import lombok.experimental.Accessors;
 /**
  * 持卡人可见的卡交易流水(card transaction)。
  *
+ * <p>关键词：卡交易聚合, presentment, 账单分配, card transaction aggregate,
+ * posted transaction, statement assignment, 取引集約(とりひきしゅうやく),
+ * 請求明細への紐づけ(せいきゅうめいさいへのひもづけ)。</p>
+ *
  * <p>这里的 CardTransaction 不是 Card aggregate 的子对象，而是发卡行业常见的“卡交易”概念：
  * 一笔消费入账后，后续 refund/reversal/dispute 会继续围绕这条交易生命周期展开。
  * 它也不是 ledger entry；double-entry ledger 可以在后续阶段基于这个业务事实再补。</p>
