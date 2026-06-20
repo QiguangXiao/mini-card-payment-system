@@ -63,7 +63,7 @@ class AutoRepaymentServiceTest {
                 ArgumentCaptor.forClass(BankDebitRequest.class);
         verify(bankDebitGateway).debit(debitRequest.capture());
         assertThat(debitRequest.getValue().amount().amount()).isEqualByComparingTo("1500.00");
-        assertThat(debitRequest.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-10"));
+        assertThat(debitRequest.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
         ArgumentCaptor<ReceiveRepaymentCommand> command =
                 ArgumentCaptor.forClass(ReceiveRepaymentCommand.class);
         verify(repaymentService).receive(command.capture());
@@ -90,7 +90,7 @@ class AutoRepaymentServiceTest {
                 ACCOUNT_ID,
                 LocalDate.parse("2026-05-16"),
                 LocalDate.parse("2026-06-15"),
-                LocalDate.parse("2026-07-10"),
+                LocalDate.parse("2026-07-27"),
                 List.of(new StatementTransaction(
                         UUID.randomUUID(),
                         "ntx-001",
@@ -112,13 +112,13 @@ class AutoRepaymentServiceTest {
                 "fingerprint",
                 statement.id(),
                 statement.remainingAmount(),
-                Instant.parse("2026-07-10T00:00:00Z")
+                Instant.parse("2026-07-27T00:00:00Z")
         );
         repayment.markReceived(
                 statement.creditAccountId(),
                 statement.totalAmount(),
                 money("0.00"),
-                Instant.parse("2026-07-10T00:00:01Z")
+                Instant.parse("2026-07-27T00:00:01Z")
         );
         repayment.pullDomainEvents();
         return repayment;

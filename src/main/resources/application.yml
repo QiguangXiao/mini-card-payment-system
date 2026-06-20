@@ -83,10 +83,10 @@ statement:
     # Scheduler 每分钟醒一次做轻量检查；只有“关账日次日”才真正跑 billing batch。
     fixed-delay-ms: 60000
     # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
-    # 默认 15 日关账，16 日凌晨批处理上一周期，避免 15 日白天迟到交易漏入账单。
-    close-day-of-month: 15
-    # 自动扣款日使用下一个固定 10 日；例如 6/15 关账，7/10 从银行账户扣款。
-    payment-day-of-month: 10
+    # 默认 31 表示月末关账；次日批处理上一周期，避免关账日白天迟到交易漏入账单。
+    close-day-of-month: 31
+    # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
+    payment-base-day-of-month: 27
     max-accounts-per-run: 100
   policy:
     # minimum payment = min(total, max(total * rate, currency floor)).

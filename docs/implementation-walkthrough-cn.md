@@ -608,23 +608,30 @@ StatementBatchPoller
 当前默认产品规则：
 
 ```text
-close-day-of-month = 15
-payment-day-of-month = 10
+close-day-of-month = 31
+payment-base-day-of-month = 27
 ```
 
-例如 6 月 15 日关账，scheduler 在 6 月 16 日跑批处理：
+例如 6 月 30 日关账，scheduler 在 7 月 1 日跑批处理：
 
 ```text
-periodStart = 5 月 16 日
-periodEnd   = 6 月 15 日
-dueDate     = 7 月 10 日
+periodStart = 6 月 1 日
+periodEnd   = 6 月 30 日
+dueDate     = 7 月 27 日
 ```
 
 为什么是关账日次日执行：
 
-- 如果 6 月 15 日白天刚开始就关账，当天后续 posting 的交易可能变成迟到交易。
-- 当前项目统一用 UTC 日切，先让 6 月 15 日完整结束，再在 6 月 16 日批处理。
+- 如果 6 月 30 日白天刚开始就关账，当天后续 posting 的交易可能变成迟到交易。
+- 当前项目统一用 UTC 日切，先让 6 月 30 日完整结束，再在 7 月 1 日批处理。
 - 生产系统通常会把 billing timezone 放在产品或账户配置中。
+
+为什么扣款日用 27 日并顺延到日本营业日：
+
+- 25 日常见为工资日，当天银行入账和资金可用可能有时间差。
+- 默认 27 日扣款更保守，给工资入账和用户资金准备留出缓冲。
+- `JapaneseBusinessDayCalendar` 会把周末、日本法定节假日、振替休日和国民の休日视为非营业日。
+- 如果 27 日不是日本营业日，就顺延到之后第一个营业日。
 
 手动 backfill / 学习入口仍然保留：
 
@@ -635,7 +642,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
     "creditAccountId": "11111111-1111-1111-1111-111111111111",
     "periodStart": "2026-06-01",
     "periodEnd": "2026-06-30",
-    "dueDate": "2026-07-25"
+    "dueDate": "2026-07-27"
   }'
 ```
 

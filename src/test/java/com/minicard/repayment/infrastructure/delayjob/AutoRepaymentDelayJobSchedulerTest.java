@@ -43,7 +43,7 @@ class AutoRepaymentDelayJobSchedulerTest {
         assertThat(job.getValue().aggregateType()).isEqualTo("Statement");
         assertThat(job.getValue().aggregateId()).isEqualTo(statement.id().toString());
         assertThat(job.getValue().scheduledAt())
-                .isEqualTo(Instant.parse("2026-07-10T00:00:00Z"));
+                .isEqualTo(Instant.parse("2026-07-27T00:00:00Z"));
         assertThat(job.getValue().nextAttemptAt()).isEqualTo(job.getValue().scheduledAt());
     }
 
@@ -52,7 +52,7 @@ class AutoRepaymentDelayJobSchedulerTest {
                 UUID.fromString("11111111-1111-1111-1111-111111111111"),
                 LocalDate.parse("2026-05-16"),
                 LocalDate.parse("2026-06-15"),
-                LocalDate.parse("2026-07-10"),
+                LocalDate.parse("2026-07-27"),
                 List.of(new StatementTransaction(
                         UUID.randomUUID(),
                         "ntx-001",

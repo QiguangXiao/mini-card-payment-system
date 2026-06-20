@@ -27,6 +27,7 @@ public class StatementBatchService {
     private final StatementBatchRepository batchRepository;
     private final StatementService statementService;
     private final StatementBatchProperties properties;
+    private final BusinessDayCalendar businessDayCalendar;
     private final Clock clock;
 
     public StatementBatchResult runDueBatch() {
@@ -113,9 +114,13 @@ public class StatementBatchService {
 
     private LocalDate paymentDateAfter(LocalDate periodEnd) {
         YearMonth candidateMonth = YearMonth.from(periodEnd);
-        LocalDate candidate = dayInMonth(candidateMonth, properties.paymentDayOfMonth());
+        LocalDate candidate = businessDayCalendar.nextBusinessDayOnOrAfter(
+                dayInMonth(candidateMonth, properties.paymentBaseDayOfMonth())
+        );
         if (!candidate.isAfter(periodEnd)) {
-            candidate = dayInMonth(candidateMonth.plusMonths(1), properties.paymentDayOfMonth());
+            candidate = businessDayCalendar.nextBusinessDayOnOrAfter(
+                    dayInMonth(candidateMonth.plusMonths(1), properties.paymentBaseDayOfMonth())
+            );
         }
         return candidate;
     }

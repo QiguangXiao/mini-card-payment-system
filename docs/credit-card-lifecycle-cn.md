@@ -273,9 +273,9 @@ Issuer account / statement domain
 当前项目默认采用产品级固定日期：
 
 ```text
-每月 15 日关账
+每月月末关账
 次日由 StatementBatchPoller 跑 billing batch
-下一个固定 10 日作为 dueDate / auto debit date
+次月 27 日作为扣款基准日；如果 27 日不是日本营业日，则顺延到之后第一个营业日
 ```
 
 这里先不做客户自定义扣款日，因为当前更值得练习和解释的是：
@@ -304,7 +304,7 @@ CardTransactions in billing cycle
 - 便利店消费 1,000 JPY
 - 餐厅消费 3,000 JPY
 statementBalance = 4,000 JPY
-dueDate = 7 月 10 日
+dueDate = 7 月 27 日
 ```
 
 ### 5.3 面试重点

@@ -13,7 +13,7 @@ public record StatementBatchProperties(
         boolean enabled,
         long fixedDelayMs,
         int closeDayOfMonth,
-        int paymentDayOfMonth,
+        int paymentBaseDayOfMonth,
         int maxAccountsPerRun
 ) {
 
@@ -22,7 +22,7 @@ public record StatementBatchProperties(
             throw new IllegalArgumentException("fixedDelayMs must be positive");
         }
         validateDay(closeDayOfMonth, "closeDayOfMonth");
-        validateDay(paymentDayOfMonth, "paymentDayOfMonth");
+        validateDay(paymentBaseDayOfMonth, "paymentBaseDayOfMonth");
         if (maxAccountsPerRun <= 0) {
             throw new IllegalArgumentException("maxAccountsPerRun must be positive");
         }

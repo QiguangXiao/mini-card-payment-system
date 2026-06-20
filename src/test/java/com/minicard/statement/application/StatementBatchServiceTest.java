@@ -36,42 +36,58 @@ class StatementBatchServiceTest {
         service = new StatementBatchService(
                 batchRepository,
                 statementService,
-                new StatementBatchProperties(true, 60000, 15, 10, 100),
-                Clock.fixed(Instant.parse("2026-06-16T00:00:00Z"), ZoneOffset.UTC)
+                new StatementBatchProperties(true, 60000, 31, 27, 100),
+                new JapaneseBusinessDayCalendar(),
+                Clock.fixed(Instant.parse("2026-07-01T00:00:00Z"), ZoneOffset.UTC)
         );
     }
 
     @Test
     void runsBatchOnDayAfterCloseDate() {
         when(batchRepository.findCreditAccountIdsWithUnbilledPostedTransactions(
-                eq(Instant.parse("2026-05-16T00:00:00Z")),
-                eq(Instant.parse("2026-06-16T00:00:00Z")),
+                eq(Instant.parse("2026-06-01T00:00:00Z")),
+                eq(Instant.parse("2026-07-01T00:00:00Z")),
                 eq(100)
         )).thenReturn(List.of(ACCOUNT_ID));
 
         StatementBatchResult result = service.runDueBatch();
 
         assertThat(result.due()).isTrue();
-        assertThat(result.periodStart()).isEqualTo(LocalDate.parse("2026-05-16"));
-        assertThat(result.periodEnd()).isEqualTo(LocalDate.parse("2026-06-15"));
-        assertThat(result.dueDate()).isEqualTo(LocalDate.parse("2026-07-10"));
+        assertThat(result.periodStart()).isEqualTo(LocalDate.parse("2026-06-01"));
+        assertThat(result.periodEnd()).isEqualTo(LocalDate.parse("2026-06-30"));
+        assertThat(result.dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
         assertThat(result.generatedCount()).isEqualTo(1);
         ArgumentCaptor<GenerateStatementCommand> command =
                 ArgumentCaptor.forClass(GenerateStatementCommand.class);
         verify(statementService).generate(command.capture());
         assertThat(command.getValue().creditAccountId()).isEqualTo(ACCOUNT_ID);
-        assertThat(command.getValue().periodStart()).isEqualTo(LocalDate.parse("2026-05-16"));
-        assertThat(command.getValue().periodEnd()).isEqualTo(LocalDate.parse("2026-06-15"));
-        assertThat(command.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-10"));
+        assertThat(command.getValue().periodStart()).isEqualTo(LocalDate.parse("2026-06-01"));
+        assertThat(command.getValue().periodEnd()).isEqualTo(LocalDate.parse("2026-06-30"));
+        assertThat(command.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
     }
 
     @Test
     void skipsWhenTodayDoesNotFollowCloseDate() {
-        StatementBatchResult result = service.runDueBatch(LocalDate.parse("2026-06-15"));
+        StatementBatchResult result = service.runDueBatch(LocalDate.parse("2026-06-30"));
 
         assertThat(result.due()).isFalse();
         verify(batchRepository, never())
                 .findCreditAccountIdsWithUnbilledPostedTransactions(any(), any(), anyInt());
         verify(statementService, never()).generate(any());
+    }
+
+    @Test
+    void movesDueDateToNextBusinessDayWhenBaseDayIsWeekend() {
+        when(batchRepository.findCreditAccountIdsWithUnbilledPostedTransactions(
+                eq(Instant.parse("2026-08-01T00:00:00Z")),
+                eq(Instant.parse("2026-09-01T00:00:00Z")),
+                eq(100)
+        )).thenReturn(List.of(ACCOUNT_ID));
+
+        StatementBatchResult result = service.runDueBatch(LocalDate.parse("2026-09-01"));
+
+        assertThat(result.periodStart()).isEqualTo(LocalDate.parse("2026-08-01"));
+        assertThat(result.periodEnd()).isEqualTo(LocalDate.parse("2026-08-31"));
+        assertThat(result.dueDate()).isEqualTo(LocalDate.parse("2026-09-28"));
     }
 }

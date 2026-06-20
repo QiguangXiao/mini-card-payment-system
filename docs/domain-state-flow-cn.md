@@ -3,7 +3,7 @@
 这份文档专门解释一条完整主链路：
 
 ```text
-Authorization -> Presentment Posting -> Statement -> Repayment
+Authorization -> Presentment Posting -> Statement Batch -> Auto/Manual Repayment
 ```
 
 重点不是 API 用法本身，而是你在面试里要讲清楚的几个问题：
@@ -18,7 +18,9 @@ Authorization -> Presentment Posting -> Statement -> Repayment
 
 - `AuthorizationService.authorize(...)`
 - `PostingService.post(...)`
+- `StatementBatchService.runDueBatch()`
 - `StatementService.generate(...)`
+- `AutoRepaymentService.debitStatement(...)`
 - `RepaymentService.receive(...)`
 - `AuthorizationExpiryService.expire(...)`
 - `schema.sql`
@@ -36,11 +38,12 @@ Authorization -> Presentment Posting -> Statement -> Repayment
   CardTransaction: PENDING -> POSTED
   CreditAccount: reserved_amount 减少, posted_balance 增加
 
-账单生成
+月度账单批处理
   Statement: 新建 CLOSED
   CardTransaction: statement_id 从 NULL 变成 statementId
+  DelayJob: 新建 AUTO_REPAYMENT/PENDING
 
-客户还款
+客户主动还款 / 到期自动扣款
   Repayment: PENDING -> RECEIVED
   Statement: CLOSED -> PARTIALLY_PAID -> PAID
   CreditAccount: posted_balance 减少
@@ -93,6 +96,7 @@ cardTransactionPostedEventId = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee3
 statementId = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
 statementItemId = dddddddd-dddd-dddd-dddd-dddddddddd01
 statementClosedEventId = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee4
+autoRepaymentDelayJobId = ffffffff-ffff-ffff-ffff-fffffffffff1
 repaymentId1 = 99999999-9999-9999-9999-999999999991
 repaymentReceivedEventId1 = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee5
 repaymentId2 = 99999999-9999-9999-9999-999999999992
@@ -108,8 +112,9 @@ repaymentReceivedEventId2 = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee6
 | `Authorization` / `authorizations.status` | `PENDING`, `APPROVED`, `DECLINED`, `POSTED`, `EXPIRED` | `PENDING -> APPROVED -> POSTED` | 授权 API、presentment API、expiry job |
 | `CreditAccount` / `credit_accounts` | `status`, `reserved_amount`, `posted_balance` | `reserved 0 -> 1500 -> 0`, `posted 0 -> 1500 -> 1000 -> 0` | 授权、posting、repayment、expiry |
 | `CardTransaction` / `card_transactions.status` | `PENDING`, `POSTED` | `PENDING -> POSTED`，之后被 statement 收录 | presentment API、statement generation |
-| `Statement` / `statements.status` | `CLOSED`, `PARTIALLY_PAID`, `PAID`, `OVERDUE` | 新建 `CLOSED -> PARTIALLY_PAID -> PAID` | statement generation、repayment |
-| `Repayment` / `repayments.status` | `PENDING`, `RECEIVED` | 每次还款 `PENDING -> RECEIVED` | repayment API |
+| `Statement` / `statements.status` | `CLOSED`, `PARTIALLY_PAID`, `PAID`, `OVERDUE` | 新建 `CLOSED -> PARTIALLY_PAID -> PAID` | statement batch、repayment |
+| `Repayment` / `repayments.status` | `PENDING`, `RECEIVED` | 每次还款 `PENDING -> RECEIVED` | repayment API、auto debit |
+| `DelayJob` / `delay_jobs.status` | `PENDING`, `PROCESSING`, `DONE`, `DEAD` | `AUTO_REPAYMENT` 从 `PENDING -> DONE` | due-date auto repayment |
 | `OutboxEvent` / `outbox_events.status` | `PENDING`, `PROCESSING`, `PUBLISHED`, `DEAD` | 每个业务事件先 `PENDING`，后台发布后 `PUBLISHED` | 各业务 service、Outbox worker |
 | `Notification` / `notifications.status` | `PENDING`, `SENT`, `FAILED` | Kafka consumer 创建 `PENDING` 通知 | Notification listener |
 
@@ -640,11 +645,37 @@ posted_at = 2026-07-01T10:05:00Z
 - `AuthorizationExpiryService` 未来执行时会看到 authorization 已经 `POSTED`，不会释放额度。
 - Notification 会异步消费 `card_transaction.posted` 创建入账通知。
 
-## 7. 请求三：Statement 账单生成
+## 7. 请求三：Statement 月度批处理生成账单
 
 ### 7.1 触发者
 
-触发者可以理解为账单批处理 / 后台操作。当前项目用 HTTP API 表达：
+真实主路径是月度账单批处理：
+
+```text
+StatementBatchPoller
+-> StatementBatchService
+-> StatementService.generate(...)
+```
+
+当前默认产品规则：
+
+```text
+close-day-of-month = 31
+payment-base-day-of-month = 27
+```
+
+本例中：
+
+```text
+periodStart = 2026-07-01
+periodEnd   = 2026-07-31
+dueDate     = 2026-08-27
+```
+
+由于 2026-08-27 是日本营业日，本例 dueDate 不需要顺延。
+如果 27 日遇到周末、日本法定节假日、振替休日或国民の休日，当前代码会顺延到之后第一个营业日。
+
+HTTP API 仍保留为本地学习和运营 backfill 入口：
 
 ```bash
 curl -X POST http://localhost:8080/api/statements/generate \
@@ -653,7 +684,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
     "creditAccountId": "11111111-1111-1111-1111-111111111111",
     "periodStart": "2026-07-01",
     "periodEnd": "2026-07-31",
-    "dueDate": "2026-08-25"
+    "dueDate": "2026-08-27"
   }'
 ```
 
@@ -666,6 +697,12 @@ T3 = 2026-08-01T00:00:00Z
 入口：
 
 ```text
+Batch path:
+StatementBatchPoller.closeDueBillingCycles()
+-> StatementBatchService.runDueBatch()
+-> StatementBatchRepository.findCreditAccountIdsWithUnbilledPostedTransactions(...)
+
+Backfill/API path:
 StatementController.generate(...)
 -> GenerateStatementCommand
 -> StatementService.generate(...)
@@ -812,7 +849,21 @@ StatementController.generate(...)
    - 这不是 `CardTransaction` 新状态。
    - 它是归属关系变化：这笔交易已经被某期 statement 收录。
 
-7. 同事务写 Outbox。
+7. 同事务写 `AUTO_REPAYMENT` DelayJob。
+
+   ```text
+   delay_jobs.id = ffffffff-ffff-ffff-ffff-fffffffffff1
+   job_type = AUTO_REPAYMENT
+   aggregate_type = Statement
+   aggregate_id = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
+   status = PENDING
+   scheduled_at = 2026-08-27T00:00:00Z
+   ```
+
+   这里用 DelayJob，因为自动扣款是 dueDate 未来业务动作；
+   `statement.closed` 才是要发布给下游的 integration event。
+
+8. 同事务写 Outbox。
 
    ```text
    outbox_events.id = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee4
@@ -823,7 +874,7 @@ StatementController.generate(...)
    status = PENDING
    ```
 
-8. 事务 commit。
+9. 事务 commit。
 
    释放锁：
 
@@ -856,14 +907,16 @@ minimum_payment_amount = 1000.00
 
 - `CreditAccount.posted_balance` 不变，因为账单生成不是还款。
 - `CardTransaction` 不再是未出账候选。
+- `DelayJob` 后续到 `dueDate` 会触发 `AUTO_REPAYMENT`。
 - Notification 异步消费 `statement.closed` 创建 `STATEMENT_READY` 通知。
 - 现在 `Repayment` 可以针对这张 statement 入账。
 
-## 8. 请求四：第一次 Repayment 部分还款 500 JPY
+## 8. 请求四：客户提前主动部分还款 500 JPY
 
 ### 8.1 触发者
 
-触发者可以是客户主动还款、银行入金回调、内部 payment processor。
+触发者是客户在 dueDate 之前主动还款。
+这个例子故意保留，是为了展示 `Statement.CLOSED -> PARTIALLY_PAID` 的中间状态。
 
 当前项目用 API 表达：
 
@@ -1112,28 +1165,44 @@ availableCredit = 99000.00
 - `StatementItem` 不变，账单明细快照不被还款改写。
 - Notification 异步消费 `repayment.received` 创建 `REPAYMENT_RECEIVED` 通知。
 
-## 9. 请求五：第二次 Repayment 还清剩余 1000 JPY
+## 9. 请求五：dueDate 自动扣款还清剩余 1000 JPY
 
 ### 9.1 触发者
 
-客户再次还款：
+到 `dueDate = 2026-08-27`，`AUTO_REPAYMENT` DelayJob 到期。
+当前模拟银行扣款默认成功，所以系统自动扣剩余 1000 JPY。
 
-```bash
-curl -X POST http://localhost:8080/api/repayments \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: demo-repayment-1000-001' \
-  -d '{
-    "statementId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
-    "amount": 1000.00,
-    "currency": "JPY"
-  }'
+入口：
+
+```text
+DelayJobPoller.pollDueJobs()
+-> DelayJobWorker.handleClaimedJob(job)
+-> AutoRepaymentDelayJobHandler.handle(job)
+-> AutoRepaymentService.debitStatement(statementId)
+-> SimulatedBankDebitGateway.debit(request)
+-> RepaymentService.receive(command)
 ```
 
 时间：
 
 ```text
-T5 = 2026-08-15T09:00:00Z
+T5 = 2026-08-27T00:00:00Z
 ```
+
+自动构造的 repayment command：
+
+```text
+idempotencyKey = auto-debit:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
+statementId = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
+amount = 1000.00
+currency = JPY
+```
+
+为什么不是直接改账单：
+
+- bank debit result = `SUCCESS` 之后，才可以入账。
+- `FAILED` 时不能创建 `RECEIVED` repayment，否则会把没到账的资金记成已还。
+- 自动扣款成功后仍复用 `RepaymentService.receive(...)`，避免复制一套余额和账单状态更新逻辑。
 
 ### 9.2 与第一次还款相同的锁顺序
 
@@ -1175,6 +1244,7 @@ remainingAmount: 0.00
 
 ```text
 repayments.id = 99999999-9999-9999-9999-999999999992
+idempotency_key = auto-debit:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
 status: PENDING -> RECEIVED
 amount = 1000.00
 ```
@@ -1279,6 +1349,35 @@ Notification 自己用两层幂等：
 
 - 不 rollback repayment。
 - Kafka listener retry / DLT 处理。
+
+### 10.4 DelayJob 是未来业务动作
+
+Statement 生成时，同事务写入：
+
+```text
+delay_jobs
+job_type = AUTO_REPAYMENT
+aggregate_type = Statement
+aggregate_id = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
+scheduled_at = 2026-08-27T00:00:00Z
+status = PENDING
+```
+
+到 `dueDate` 后：
+
+```text
+DelayJob PENDING -> PROCESSING
+-> AutoRepaymentService
+-> bank debit SUCCESS
+-> RepaymentService.receive(...)
+-> DelayJob DONE
+```
+
+如果 bank debit result = `FAILED`：
+
+- 不会创建 `RECEIVED` repayment。
+- DelayJob 会按 retry/backoff/DEAD 记录失败路径。
+- 未来可以在这个分支接失败通知、再次扣款、逾期标记。
 
 ## 11. 常见并发冲突怎么被挡住
 
@@ -1398,9 +1497,8 @@ statement remaining = 1000 JPY
 
 ## 12. 你可以这样在面试里讲
 
-> 这个项目把状态变化放在 aggregate 里：Authorization 负责 PENDING/APPROVED/POSTED/EXPIRED，CardTransaction 负责 PENDING/POSTED 和 statement assignment，Statement 负责 CLOSED/PARTIALLY_PAID/PAID，Repayment 负责 PENDING/RECEIVED。Application service 负责 transaction boundary 和跨 aggregate 编排。所有会改变额度的操作都要锁同一条 credit account row，用 MySQL `SELECT ... FOR UPDATE` 串行化，而不是用 JVM lock。Outbox row 和业务状态同事务提交，Kafka/Notification 在事务后异步处理，所以消息失败不会扩大主交易锁时间。
+> 这个项目把状态变化放在 aggregate 里：Authorization 负责 PENDING/APPROVED/POSTED/EXPIRED，CardTransaction 负责 PENDING/POSTED 和 statement assignment，Statement 负责 CLOSED/PARTIALLY_PAID/PAID，Repayment 负责 PENDING/RECEIVED。Application service 负责 transaction boundary 和跨 aggregate 编排。Statement batch 用固定关账日生成账单，并写 `AUTO_REPAYMENT` DelayJob 作为 due-date 未来业务动作。所有会改变额度的操作都要锁同一条 credit account row，用 MySQL `SELECT ... FOR UPDATE` 串行化，而不是用 JVM lock。Outbox row 和业务状态同事务提交，Kafka/Notification 在事务后异步处理，所以消息失败不会扩大主交易锁时间。
 
 更短一点：
 
-> Authorization 先 hold 额度，Posting 把 hold 转成 posted balance，Statement 固定账单快照，Repayment 减少 posted balance 并推进 statement paid status。每一步都有明确 idempotency key、row lock 和 domain state transition。
-
+> Authorization 先 hold 额度，Posting 把 hold 转成 posted balance，Statement batch 固定账单快照并计划 due-date 自动扣款，Repayment 减少 posted balance 并推进 statement paid status。每一步都有明确 idempotency key、row lock 和 domain state transition。
