@@ -29,6 +29,44 @@ spring:
     listener:
       ack-mode: record
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # 只暴露面试和本地排查最常用的 Actuator endpoint；heapdump/env 等高风险诊断端点不要公开。
+        include:
+          - health
+          - info
+          - metrics
+  endpoint:
+    health:
+      # 开启 /actuator/health/liveness 和 /actuator/health/readiness，
+      # 方便解释 liveness/readiness probe 的区别。
+      probes:
+        enabled: true
+      group:
+        readiness:
+          # MySQL 是授权、入账、还款等状态变更的核心依赖；DB 不可用时应停止接新流量，而不是误报 ready。
+          include:
+            - readinessState
+            - db
+      show-details: never
+  info:
+    env:
+      enabled: true
+    java:
+      enabled: true
+    os:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+info:
+  app:
+    name: ${spring.application.name}
+    purpose: mini credit-card issuer backend for learning and interview practice
+
 mybatis:
   mapper-locations: classpath:mappers/**/*.xml
 

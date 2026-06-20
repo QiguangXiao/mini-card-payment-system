@@ -379,7 +379,6 @@ repayment.received
 | Recoverer | `OutboxRecoverer` | `DelayJobRecoverer` | 恢复 lease 超时的 `PROCESSING` rows |
 | State row | `OutboxEvent` | `DelayJob` | 都有 attempts、nextAttemptAt、lastError、retry/DEAD |
 
-这种对称结构方便interview解释：
 
 ```text
 poller 只负责醒来和提交任务

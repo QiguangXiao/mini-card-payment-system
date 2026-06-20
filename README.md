@@ -54,7 +54,7 @@ idempotency behavior remain explicit while repetitive JDBC row mapping is
 reduced. `JdbcRiskVelocityCounter` intentionally remains implemented with
 `JdbcTemplate` behind a small `RiskVelocityCounter` port as a comparison example.
 
-The `monitoring` module currently exposes a lightweight public liveness check:
+The `monitoring` module exposes a lightweight public liveness check:
 
 ```http
 GET /api/health
@@ -64,10 +64,23 @@ GET /api/health
 {"status":"OK"}
 ```
 
-It intentionally does not query MySQL or Kafka. Dependency health, metrics, and
-operational diagnostics belong to Spring Boot Actuator; future public
-operational APIs can be added under `monitoring` when a concrete requirement
-exists.
+It intentionally does not query MySQL or Kafka. JVM runtime data, dependency
+health, metrics, and operational diagnostics belong to Spring Boot Actuator:
+
+```http
+GET /actuator/health
+GET /actuator/health/liveness
+GET /actuator/health/readiness
+GET /actuator/info
+GET /actuator/metrics
+GET /actuator/metrics/jvm.memory.used
+GET /actuator/metrics/jvm.gc.pause
+GET /actuator/metrics/jvm.threads.live
+```
+
+See [JVM Monitoring Notes](docs/jvm-monitoring-learning-cn.md) for the
+interview-oriented explanation of heap, GC, threads, liveness/readiness, and why
+JVM diagnostics stay outside the public business API.
 
 Create an authorization:
 

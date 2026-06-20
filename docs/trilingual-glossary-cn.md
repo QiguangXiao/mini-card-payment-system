@@ -183,7 +183,13 @@
 | 可用性 | availability | 可用性 | かようせい | 服务能否持续响应。 |
 | 背压 | backpressure | バックプレッシャー | バックプレッシャー | 下游慢时控制上游速度。 |
 | 健康检查 | health check | ヘルスチェック | ヘルスチェック | liveness/readiness 的入口。 |
+| 存活探针 | liveness probe | liveness probe | ライブネスプローブ | 判断实例是否应该被重启。 |
+| 就绪探针 | readiness probe | readiness probe | レディネスプローブ | 判断实例是否应该接收流量。 |
 | 可观测性 | observability | オブザーバビリティ | オブザーバビリティ | logs、metrics、traces。 |
+| JVM 堆内存 | JVM heap memory | JVM ヒープメモリ | ヒープメモリ | Java object 主要分配区域。 |
+| 垃圾回收暂停 | GC pause | GC ポーズ | ジーシーポーズ | GC 导致应用线程短暂停顿。 |
+| 元空间 | metaspace | メタスペース | メタスペース | 类元数据所在的 non-heap 内存区域。 |
+| 运行时指标 | runtime metrics | ランタイムメトリクス | ランタイムメトリクス | JVM、process、thread、GC 等运行状态指标。 |
 
 ## 参考来源
 
