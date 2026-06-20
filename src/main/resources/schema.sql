@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS card_transactions (
     INDEX idx_card_transactions_statement_candidates (
         credit_account_id, status, statement_id, posted_at, id
     ),
+    INDEX idx_card_transactions_billing_batch (
+        status, statement_id, posted_at, credit_account_id
+    ),
     CONSTRAINT fk_card_transactions_authorization FOREIGN KEY (authorization_id)
         REFERENCES authorizations (id),
     CONSTRAINT fk_card_transactions_credit_account FOREIGN KEY (credit_account_id)

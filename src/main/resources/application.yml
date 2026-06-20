@@ -78,6 +78,16 @@ authorization:
       USD: 1000.00
 
 statement:
+  batch:
+    enabled: true
+    # Scheduler 每分钟醒一次做轻量检查；只有“关账日次日”才真正跑 billing batch。
+    fixed-delay-ms: 60000
+    # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
+    # 默认 15 日关账，16 日凌晨批处理上一周期，避免 15 日白天迟到交易漏入账单。
+    close-day-of-month: 15
+    # 自动扣款日使用下一个固定 10 日；例如 6/15 关账，7/10 从银行账户扣款。
+    payment-day-of-month: 10
+    max-accounts-per-run: 100
   policy:
     # minimum payment = min(total, max(total * rate, currency floor)).
     # 当前只是教学用简化规则，真实发卡系统会按产品条款、余额分层和监管要求配置。
@@ -85,6 +95,12 @@ statement:
     minimum-payment-floors:
       JPY: 1000.00
       USD: 25.00
+
+repayment:
+  auto-debit:
+    # 默认模拟银行扣款成功；改成 FAILED 可演示 DelayJob retry/DEAD 的失败路径。
+    simulated-result: SUCCESS
+    failure-reason: simulated insufficient bank balance
 
 risk:
   local:

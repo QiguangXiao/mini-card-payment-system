@@ -18,8 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Statement API controller。
  *
- * <p>Controller 只做 request/response mapping。账单生成的 idempotency、row lock、
- * transaction boundary 和 snapshot 规则都在 StatementService/domain 内。</p>
+ * <p>真实主路径是 StatementBatchPoller 触发的 monthly batch。
+ * 这个 HTTP 入口保留为学习/运营 backfill 用；账单生成的 idempotency、row lock、
+ * transaction boundary、snapshot 和 due-date DelayJob 仍在 StatementService/domain 内。</p>
  */
 @RestController
 @RequestMapping("/api/statements")

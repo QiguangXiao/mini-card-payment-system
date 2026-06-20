@@ -30,6 +30,12 @@ public class PollingSchedulerConfiguration {
         return taskScheduler("delay-job-scheduler-", 2);
     }
 
+    @Bean(name = "statementBatchTaskScheduler")
+    public ThreadPoolTaskScheduler statementBatchTaskScheduler() {
+        // Statement batch 只做轻量触发；每个账户的出账事务在 application service 内独立执行。
+        return taskScheduler("statement-batch-scheduler-", 1);
+    }
+
     private ThreadPoolTaskScheduler taskScheduler(String threadNamePrefix, int poolSize) {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.setThreadNamePrefix(threadNamePrefix);

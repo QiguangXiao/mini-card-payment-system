@@ -7,8 +7,8 @@ import java.util.UUID;
 /**
  * 生成账单 use case 的输入 command。
  *
- * <p>当前阶段先显式传入 billing cycle，方便用 API 学习和测试。
- * 未来可以由 scheduler 根据账户账单日自动构造同一个 command。</p>
+ * <p>真实主路径由 StatementBatchService 根据固定 billing day 自动构造。
+ * 手动 API 仍复用同一个 command，方便本地学习、测试和运营 backfill。</p>
  */
 public record GenerateStatementCommand(
         UUID creditAccountId,

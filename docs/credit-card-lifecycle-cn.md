@@ -270,6 +270,20 @@ Issuer account / statement domain
 ```
 
 这通常不是外部实时请求，而是周期性批处理。
+当前项目默认采用产品级固定日期：
+
+```text
+每月 15 日关账
+次日由 StatementBatchPoller 跑 billing batch
+下一个固定 10 日作为 dueDate / auto debit date
+```
+
+这里先不做客户自定义扣款日，因为当前更值得练习和解释的是：
+
+- batch 怎么避免重复出账？
+- batch 和 posting 并发怎么办？
+- due-date 后续动作怎么可靠执行？
+- 失败账户会不会拖垮整批？
 
 ### 5.2 做什么
 
@@ -290,7 +304,7 @@ CardTransactions in billing cycle
 - 便利店消费 1,000 JPY
 - 餐厅消费 3,000 JPY
 statementBalance = 4,000 JPY
-dueDate = 7 月 27 日
+dueDate = 7 月 10 日
 ```
 
 ### 5.3 面试重点
@@ -305,9 +319,12 @@ dueDate = 7 月 27 日
 
 当前项目已经实现基础 statement generation：
 
+- `StatementBatchPoller` 每分钟轻量检查一次，只有关账日次日才真正跑 batch。
+- `StatementBatchService` 计算 billing cycle 和 dueDate，并逐个账户调用 `StatementService.generate(...)`。
 - `StatementService.generate(...)` 按 billing cycle 汇总未出账的 `POSTED` transactions。
 - `statements` 保存账单汇总，`statement_items` 保存交易快照。
 - `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
+- `StatementService` 在同一事务里写 `AUTO_REPAYMENT` DelayJob，计划 dueDate 自动扣款。
 - `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_READY` 通知，未来 PDF 生成、还款提醒也可以消费。
 
 账单生成只固定金额，不恢复信用额度；当前项目已经通过简化的 `Repayment` 领域处理还款入账。
@@ -319,9 +336,9 @@ dueDate = 7 月 27 日
 主动者可能是：
 
 ```text
-持卡人主动还款
 自动扣款系统
 银行入金通知
+持卡人主动还款
 ```
 
 响应者：
@@ -345,7 +362,8 @@ Payment received
 
 ```text
 statementBalance = 4,000 JPY
-持卡人还款 4,000 JPY
+dueDate 自动扣款 4,000 JPY
+bank debit result = SUCCESS
 postedBalance / outstanding balance 减少
 availableCredit 恢复
 statement 标记为 paid
@@ -365,11 +383,15 @@ statement 标记为 paid
 
 当前项目已经实现简化版 Repayment：
 
+- `AUTO_REPAYMENT` DelayJob 到期后由 `AutoRepaymentDelayJobHandler` 调用 `AutoRepaymentService`。
+- 当前不建 `bank_accounts` 表，先假设客户已有默认银行扣款授权。
+- `SimulatedBankDebitGateway` 默认返回 `SUCCESS`；配置成 `FAILED` 时不会入账，失败交给 DelayJob retry/DEAD 路径记录。
+- 自动扣款成功后用确定性幂等键 `auto-debit:{statementId}` 调用 `RepaymentService.receive(...)`。
 - `POST /api/repayments` 通过 `Idempotency-Key` 防止重复还款。
 - `RepaymentService.receive(...)` 在同一 transaction boundary 内更新 `repayments`、`credit_accounts.posted_balance` 和 `statements.paid_amount/status`。
 - 锁顺序保持 `credit account row lock -> statement row lock`，避免和账单生成流程产生相反锁顺序。
 - `repayment.received` 通过 Outbox 发布，Notification 已消费它创建 `REPAYMENT_RECEIVED` 通知。
-- 当前不支持 overpayment、多账单自动分摊、银行资金清算和 ledger 分录。
+- 当前不支持 overpayment、多账单自动分摊、真实银行资金清算和 ledger 分录。
 
 ## 7. 正向流程总图
 
@@ -392,11 +414,12 @@ statement 标记为 paid
    postedBalance increases
 
 4. Statement generation
-   Issuer billing job
+   Issuer billing batch
    posted transactions -> statement
+   statement dueDate -> AUTO_REPAYMENT DelayJob
 
 5. Payment
-   Cardholder / bank debit -> Issuer
+   Auto debit / Cardholder payment -> Issuer
    outstanding balance decreases
    available credit restored
 ```

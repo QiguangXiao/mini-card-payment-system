@@ -44,6 +44,7 @@ class StatementServiceTest {
     private CardTransactionRepository transactionRepository;
     private CreditAccountRepository creditAccountRepository;
     private StatementDomainEventPublisher eventPublisher;
+    private StatementDueJobScheduler dueJobScheduler;
     private StatementService service;
 
     @BeforeEach
@@ -52,11 +53,13 @@ class StatementServiceTest {
         transactionRepository = mock(CardTransactionRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         eventPublisher = mock(StatementDomainEventPublisher.class);
+        dueJobScheduler = mock(StatementDueJobScheduler.class);
         service = new StatementService(
                 statementRepository,
                 transactionRepository,
                 creditAccountRepository,
                 eventPublisher,
+                dueJobScheduler,
                 new StatementPolicyProperties(
                         new BigDecimal("0.10"),
                         Map.of("JPY", new BigDecimal("1000.00"))
@@ -92,6 +95,7 @@ class StatementServiceTest {
         assertThat(second.statementId()).contains(statement.id());
         verify(statementRepository).insert(statement);
         verify(transactionRepository).assignStatement(List.of(first, second));
+        verify(dueJobScheduler).scheduleAutoRepayment(statement);
         ArgumentCaptor<StatementDomainEvent> event =
                 ArgumentCaptor.forClass(StatementDomainEvent.class);
         verify(eventPublisher).append(event.capture());
@@ -115,6 +119,7 @@ class StatementServiceTest {
         verify(transactionRepository, never())
                 .findUnbilledPostedByCreditAccountForUpdate(any(), any(), any());
         verify(statementRepository, never()).insert(any());
+        verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
         verify(eventPublisher, never()).append(any());
     }
 
@@ -137,6 +142,7 @@ class StatementServiceTest {
                 .isInstanceOf(StatementGenerationRejectedException.class)
                 .hasMessageContaining("no unbilled posted transactions");
         verify(statementRepository, never()).insert(any());
+        verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
     }
 
     private GenerateStatementCommand command() {

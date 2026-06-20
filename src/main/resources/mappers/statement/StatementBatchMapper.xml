@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.statement.infrastructure.mybatis.StatementBatchMapper">
+
+    <!--
+      Billing batch 只挑候选 account id，不在这里加 FOR UPDATE。
+      每个账户后续进入 StatementService.generate(...) 后才持有 account row lock，
+      避免一个大批次长时间锁住大量账户。
+    -->
+    <select id="findCreditAccountIdsWithUnbilledPostedTransactions" resultType="java.lang.String">
+        SELECT DISTINCT credit_account_id
+        FROM card_transactions
+        WHERE status = 'POSTED'
+          AND statement_id IS NULL
+          AND posted_at &gt;= #{periodStartInclusive}
+          AND posted_at &lt; #{periodEndExclusive}
+        ORDER BY credit_account_id
+        LIMIT #{limit}
+    </select>
+
+</mapper>

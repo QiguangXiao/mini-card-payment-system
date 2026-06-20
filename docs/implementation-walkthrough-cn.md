@@ -146,8 +146,8 @@ credit_account_id + period_start + period_end
 核心字段：
 
 - `id`：delay job id，由 scheduler adapter 生成 UUID。
-- `job_type`：当前只有 `AUTHORIZATION_EXPIRY`，以后可以增加其他延迟任务类型。
-- `aggregate_type` / `aggregate_id`：指向业务对象，例如 `Authorization` + authorization id。
+- `job_type`：当前有 `AUTHORIZATION_EXPIRY` 和 `AUTO_REPAYMENT`。
+- `aggregate_type` / `aggregate_id`：指向业务对象，例如 `Authorization` + authorization id，或 `Statement` + statement id。
 - `status`：`PENDING`、`PROCESSING`、`DONE`、`DEAD`。
 - `scheduled_at`：业务上应该开始执行的时间。
 - `next_attempt_at`：下一次可尝试执行的时间，也用于 retry/backoff/lease。
@@ -588,15 +588,45 @@ PayPay Card 面试提示：
 - 本阶段把 settlement 留到后面，是因为 settlement 处理资金清算，不是用户账户入账。
 - posting 成功通知通过 `CardTransactionPostedDomainEvent -> Outbox -> Kafka -> Notification Inbox` 异步完成，不扩大 posting 的 transaction boundary。
 
-## 5. 核心流程三：Statement 账单生成
+## 5. 核心流程三：Statement 月度批处理生成账单
 
 当前业务目标：
 
 - 把一个 billing cycle 内已经 `POSTED`、但还没有进入账单的 `CardTransaction` 汇总成 statement。
 - 固定账单金额、最低还款额和行项目快照。
 - 标记这些交易已经被该 statement 收录，避免下次重复出账。
+- 为账单 `dueDate` 写入 `AUTO_REPAYMENT` DelayJob，到期后自动模拟银行扣款。
 
-示例请求：
+真实主路径：
+
+```text
+StatementBatchPoller
+-> StatementBatchService
+-> StatementService.generate(...)
+```
+
+当前默认产品规则：
+
+```text
+close-day-of-month = 15
+payment-day-of-month = 10
+```
+
+例如 6 月 15 日关账，scheduler 在 6 月 16 日跑批处理：
+
+```text
+periodStart = 5 月 16 日
+periodEnd   = 6 月 15 日
+dueDate     = 7 月 10 日
+```
+
+为什么是关账日次日执行：
+
+- 如果 6 月 15 日白天刚开始就关账，当天后续 posting 的交易可能变成迟到交易。
+- 当前项目统一用 UTC 日切，先让 6 月 15 日完整结束，再在 6 月 16 日批处理。
+- 生产系统通常会把 billing timezone 放在产品或账户配置中。
+
+手动 backfill / 学习入口仍然保留：
 
 ```bash
 curl -X POST http://localhost:8080/api/statements/generate \
@@ -611,14 +641,38 @@ curl -X POST http://localhost:8080/api/statements/generate \
 
 入口：
 
+- `StatementBatchPoller.closeDueBillingCycles()`
+- `StatementBatchService.runDueBatch()`
+- `StatementBatchRepository.findCreditAccountIdsWithUnbilledPostedTransactions(...)`
 - `StatementController.generate(...)`
 - `GenerateStatementCommand`
 - `StatementService.generate(command)`
 - `Statement.close(...)`
 - `CardTransaction.assignToStatement(statementId, now)`
+- `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
 - `StatementOutboxAdapter.append(event)`
 
-### 5.1 Controller 和 Command 阶段
+### 5.1 Batch 和 Command 阶段
+
+`StatementBatchPoller` 是很薄的 scheduler：
+
+- 用 `@Scheduled` 每分钟醒一次。
+- 只有“关账日次日”才真正运行 batch。
+- 不在 scheduler 方法里持有大事务。
+- 不直接拼 SQL 锁业务表。
+
+`StatementBatchService` 负责：
+
+- 根据 `statement.batch.close-day-of-month` 判断昨天是否是关账日。
+- 计算 `periodStart / periodEnd / dueDate`。
+- 查询有未出账 posted transactions 的 candidate account ids。
+- 对每个账户分别调用 `StatementService.generate(...)`。
+
+这里刻意不是一个大事务：
+
+- 一个账户失败不能拖垮整批。
+- 每个账户自己的 statement generation 都有清楚的 transaction boundary。
+- 行锁持有时间短，便于未来横向扩展 batch worker。
 
 `StatementController` 只负责 HTTP request/response mapping：
 
@@ -631,8 +685,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - `periodEnd` 不能早于 `periodStart`。
 - `dueDate` 必须晚于 `periodEnd`。
 
-当前阶段用 API 手动传入 billing cycle，方便学习和本地验证。
-未来可以由 scheduler 根据账户账单日自动构造同一个 command。
+HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 backfill 的辅助入口。
 
 ### 5.2 StatementService transaction boundary
 
@@ -733,13 +786,31 @@ curl -X POST http://localhost:8080/api/statements/generate \
    这不是把交易变成 statement 的子对象，而是记录这笔 posted transaction 已经被哪期账单收录。
    下次生成账单时 `statement_id IS NULL` 条件会跳过它。
 
-8. `StatementClosedDomainEvent`
+8. `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
+
+   这一步写入 `delay_jobs/PENDING`：
+
+   ```text
+   job_type = AUTO_REPAYMENT
+   aggregate_type = Statement
+   aggregate_id = statement.id
+   scheduled_at = dueDate 00:00 UTC
+   ```
+
+   为什么用 DelayJob：
+
+   - 自动扣款是未来某一天要执行的业务动作，不是“现在发布一条消息”。
+   - DelayJob 的 `PROCESSING lease`、retry 和 `DEAD` 状态适合表达到期执行与失败恢复。
+   - 这条 job 和 statement/items/transaction assignment 在同一个 MySQL transaction boundary 内提交，
+     防止“账单生成了，但没有自动扣款计划”。
+
+9. `StatementClosedDomainEvent`
 
    `Statement.close(...)` 在 aggregate 内部记录 `StatementClosedDomainEvent`。
    `StatementService` 保存账单和交易归属后，调用 `statement.pullDomainEvents()`，
    再交给 `StatementOutboxAdapter` 写入 `outbox_events/PENDING`。
 
-9. Outbox 后续异步发布 `statement.closed`
+10. Outbox 后续异步发布 `statement.closed`
 
    - 主 statement transaction 不直接调用 Notification，也不等待短信/邮件/Push provider。
    - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
@@ -762,6 +833,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 - `statement_items` 新增多行，保存账单行项目快照。
 - 被收录的 `card_transactions.statement_id` 指向该 statement。
 - 被收录的 `card_transactions.statement_assigned_at` 记录归账时间。
+- `delay_jobs` 新增 `AUTO_REPAYMENT/PENDING`，计划在 `dueDate` 自动扣款。
 - `outbox_events` 新增 `statement.closed/PENDING`。
 
 不会变化：
@@ -778,9 +850,11 @@ curl -X POST http://localhost:8080/api/statements/generate \
 ### 5.4 PayPay Card 面试提示
 
 - Statement 是 posted transaction 的账单快照，不是实时查询结果。
+- 真实主路径是 billing batch，不是用户实时请求；HTTP generate 只是 backfill/学习入口。
 - 账单周期用自然唯一键实现 idempotency：同一账户同一周期只能有一张账单。
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
+- `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；`statement.closed` 使用 Outbox，因为它是 integration event。
 - `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_READY` 通知；未来 PDF 生成、还款提醒也可以独立消费。
 - 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
 
@@ -788,7 +862,9 @@ curl -X POST http://localhost:8080/api/statements/generate \
 
 当前业务目标：
 
-- 客户针对一张已生成 statement 还款。
+- 到 `dueDate` 后自动从银行账户扣款，默认模拟成功。
+- 也保留客户/API 主动还款入口，方便学习和测试。
+- 银行扣款成功后，针对一张已生成 statement 入账。
 - 还款成功后减少 `credit_accounts.posted_balance`，恢复可用额度。
 - 同时推进 `statements.paid_amount/status`。
 - 发布 `repayment.received`，让 Notification、未来 ledger/reconciliation 可以异步消费。
@@ -797,7 +873,23 @@ curl -X POST http://localhost:8080/api/statements/generate \
 
 - 不支持 overpayment。
 - 不把一笔还款自动分摊到多张 statement。
-- 不引入外部银行扣款、资金清算或 double-entry ledger。
+- 不新增客户自定义扣款日或 `bank_accounts` 表；`SimulatedBankDebitGateway` 先假设客户已有默认扣款授权。
+- 不引入真实银行网络、资金清算文件或 double-entry ledger。
+
+自动扣款主路径：
+
+```text
+AUTO_REPAYMENT DelayJob due
+-> AutoRepaymentDelayJobHandler
+-> AutoRepaymentService.debitStatement(statementId)
+-> SimulatedBankDebitGateway
+-> RepaymentService.receive(...)
+```
+
+银行结果当前有两种预设：
+
+- `SUCCESS`：默认配置，进入 `RepaymentService.receive(...)` 完成入账。
+- `FAILED`：不调用 `RepaymentService`，让 DelayJob 记录失败并按 retry/DEAD 策略处理；未来可扩展失败通知、再次扣款或逾期流程。
 
 示例请求：
 
@@ -812,7 +904,65 @@ curl -X POST http://localhost:8080/api/repayments \
   }'
 ```
 
-### 6.1 Controller 和 Command 阶段
+### 6.1 AutoRepayment due-date 阶段
+
+入口：
+
+- `DelayJobPoller.pollDueJobs()`
+- `DelayJobWorker.handleClaimedJob(job)`
+- `AutoRepaymentDelayJobHandler.handle(job)`
+- `AutoRepaymentService.debitStatement(statementId)`
+- `SimulatedBankDebitGateway.debit(request)`
+- `RepaymentService.receive(command)`
+
+关键点：
+
+1. `AutoRepaymentDelayJobHandler`
+
+   `DelayJobWorker` 根据 `job_type = AUTO_REPAYMENT` 找到 handler。
+   handler 校验 `aggregate_type = Statement`，再把 `aggregate_id` 转成 statement id。
+
+2. `AutoRepaymentService.debitStatement(...)`
+
+   先读取 statement：
+
+   - 如果已经 `PAID`，说明用户可能提前主动还款或上一次 retry 已经成功，直接返回。
+   - 否则用 `statement.remainingAmount()` 作为自动扣款金额。
+
+3. `SimulatedBankDebitGateway`
+
+   当前默认返回：
+
+   ```text
+   BankDebitStatus.SUCCESS
+   ```
+
+   如果配置成 `FAILED`，service 会抛 `AutoRepaymentFailedException`。
+   这时不会写 `repayments`，因为银行资金并没有到账。
+
+4. 自动构造 `ReceiveRepaymentCommand`
+
+   成功时使用确定性幂等键：
+
+   ```text
+   auto-debit:{statementId}
+   ```
+
+   这让 DelayJob worker 宕机、超时、重复执行时不会重复入账。
+
+5. 复用 `RepaymentService.receive(...)`
+
+   自动扣款成功后的入账，和 API 主动还款走同一套：
+
+   - repayment idempotency claim
+   - credit account row lock
+   - statement row lock
+   - account/statement 状态更新
+   - `repayment.received` Outbox
+
+这样做的重点是：自动扣款只是 repayment 的上游资金来源，真正“账单已还款”的一致性逻辑不复制一份。
+
+### 6.2 Controller 和 Command 阶段
 
 入口：
 
@@ -836,7 +986,7 @@ statementId | amount | currency
 - 但不能第一次给 statement A 还 500，第二次拿同一个 key 给 statement B 还 1000。
 - 这种请求会抛 `RepaymentConflictException`，API 返回 `REPAYMENT_CONFLICT`。
 
-### 6.2 RepaymentService transaction boundary
+### 6.3 RepaymentService transaction boundary
 
 入口：
 
@@ -929,7 +1079,7 @@ credit account row lock -> statement row lock
    - Listener 把业务事实映射成 `NotificationType.REPAYMENT_RECEIVED`。
    - `RequestNotificationService` 用 `consumer_inbox` 和 `notifications.source_event_id` 做 consumer-side idempotency。
 
-### 6.3 本次事务提交后的数据变化
+### 6.4 本次事务提交后的数据变化
 
 成功还款后：
 
@@ -950,10 +1100,12 @@ credit account row lock -> statement row lock
 - 还款改变的是账户余额和账单还款状态，不改变历史交易流水和账单行快照。
 - audit trail 里“消费发生过”和“后来还款了”是两类事实。
 
-### 6.4 PayPay Card 面试提示
+### 6.5 PayPay Card 面试提示
 
 - Repayment 是独立业务领域，不应该塞进 `transaction` 或 `statement` 里当普通 helper。
 - 还款 API 同样需要 idempotency，因为客户端重试或支付回调重复很常见。
+- 自动扣款使用确定性 `auto-debit:{statementId}` 幂等键，避免 DelayJob retry 造成 double repayment。
+- 银行扣款成功/失败和 repayment 入账要分清：失败不能创建 `repayments/RECEIVED`。
 - 锁顺序保持 `credit account -> statement`，是为了和账单生成保持一致，避免死锁。
 - `Statement` 负责保护 `paidAmount/status`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
 - `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification row` 让通知失败不影响还款主事务。
@@ -1066,11 +1218,12 @@ PayPay Card 面试提示：
 - `FOR UPDATE SKIP LOCKED` 支持多实例 publisher 横向扩展。
 - `PROCESSING lease` 处理 publisher 宕机恢复；`DEAD` 状态用于 poison message 和人工修复。
 
-## 8. 核心流程六：DelayJob 自动过期授权
+## 8. 核心流程六：DelayJob 未来业务动作
 
 当前业务目标：
 
 - 7 天内没有 posting 的 approved authorization，需要自动撤销 hold，并恢复额度。
+- statement 到 `dueDate` 后，需要自动模拟银行扣款，并在成功后进入 repayment 入账。
 
 入口：
 
@@ -1078,7 +1231,9 @@ PayPay Card 面试提示：
 - `DelayJobClaimer.claimDueJobs()`
 - `DelayJobWorker.handleClaimedJob(job)`
 - `AuthorizationExpiryDelayJobHandler.handle(job)`
+- `AutoRepaymentDelayJobHandler.handle(job)`
 - `AuthorizationExpiryService.expire(authorizationId)`
+- `AutoRepaymentService.debitStatement(statementId)`
 
 触发方式：
 
@@ -1092,6 +1247,8 @@ PayPay Card 面试提示：
 - `com.minicard.delayjob` 是通用 DelayJob 机制，包含任务状态机、repository port、poller、claimer、worker、recoverer、handler interface。
 - `com.minicard.delayjob.mybatis` 是 DelayJob 的 MyBatis persistence 细节。
 - `com.minicard.authorization.infrastructure.delayjob` 是 Authorization 使用 DelayJob 的 adapter，只负责写入到期任务。
+- `com.minicard.repayment.infrastructure.delayjob` 是 Statement due-date 自动扣款使用 DelayJob 的 adapter。
+- `com.minicard.repayment.application.AutoRepaymentDelayJobHandler` 是 `AUTO_REPAYMENT` 的业务 handler。
 - `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置。
 - `com.minicard.infrastructure.async` 只放后台 worker executor 配置。
 - `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper。
@@ -1144,6 +1301,11 @@ PayPay Card 面试提示：
 - 新增 enum。
 - 新增 handler。
 - 新增业务 scheduler adapter。
+
+当前已注册的类型：
+
+- `AUTHORIZATION_EXPIRY`：authorization 到期释放 hold。
+- `AUTO_REPAYMENT`：statement 到期后模拟银行扣款，成功后调用 repayment 入账。
 
 ### 8.3 Business transaction
 
@@ -1282,7 +1444,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 | --- | --- | --- |
 | 目标 | 可靠发布消息 | 到时间执行业务动作 |
 | 表 | `outbox_events` | `delay_jobs` |
-| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed`, `repayment.received` | `AUTHORIZATION_EXPIRY` |
+| 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed`, `repayment.received` | `AUTHORIZATION_EXPIRY`, `AUTO_REPAYMENT` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
 | 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |

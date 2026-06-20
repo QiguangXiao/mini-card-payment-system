@@ -38,6 +38,7 @@ public class StatementService {
     private final CardTransactionRepository transactionRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final StatementDomainEventPublisher eventPublisher;
+    private final StatementDueJobScheduler dueJobScheduler;
     private final StatementPolicyProperties policyProperties;
     private final Clock clock;
 
@@ -123,6 +124,9 @@ public class StatementService {
         // 表达它已经被某一期 statement snapshot 收录，避免下次账单重复计入。
         transactions.forEach(transaction -> transaction.assignToStatement(statement.id(), now));
         transactionRepository.assignStatement(transactions);
+        // 自动扣款计划是 future business action，使用 DelayJob 而不是 Outbox。
+        // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
+        dueJobScheduler.scheduleAutoRepayment(statement);
         publishDomainEvents(statement);
         return statement;
     }
