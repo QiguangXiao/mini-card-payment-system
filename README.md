@@ -30,6 +30,9 @@ consumer idempotency, partition ordering, and failure-recovery decisions.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.
+See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
+authorization-to-repayment state transitions, lock ordering, row-level lock
+scope, and request-by-request examples.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is

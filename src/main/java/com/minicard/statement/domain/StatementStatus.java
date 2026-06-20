@@ -2,15 +2,15 @@ package com.minicard.statement.domain;
 
 public enum StatementStatus {
     /**
-     * Billing cycle 已关闭，账单金额已经固定，等待后续 Payment 阶段处理。
+     * Billing cycle 已关闭，账单金额已经固定，等待 Repayment 阶段处理。
      */
     CLOSED,
     /**
-     * 未来还款阶段使用：已还一部分，但还没有完全结清。
+     * Repayment 已还一部分，但还没有完全结清。
      */
     PARTIALLY_PAID,
     /**
-     * 未来还款阶段使用：账单已完全结清。
+     * Repayment 已完全结清账单。
      */
     PAID,
     /**
