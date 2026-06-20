@@ -28,7 +28,11 @@ class RiskFeatureProjectionServiceTest {
         when(inbox.claim(eq(RiskFeatureProjectionService.CONSUMER_NAME), eq(eventId), any()))
                 .thenReturn(true);
 
-        service(inbox, mapper).project(eventId, "card-123", "DECLINED", NOW);
+        service(inbox, mapper).project(ProjectRiskFeatureCommand.declined(
+                eventId,
+                "card-123",
+                NOW
+        ));
 
         verify(mapper).upsertDecision("card-123", "DECLINED", NOW);
     }
@@ -41,7 +45,11 @@ class RiskFeatureProjectionServiceTest {
         when(inbox.claim(eq(RiskFeatureProjectionService.CONSUMER_NAME), eq(eventId), any()))
                 .thenReturn(false);
 
-        service(inbox, mapper).project(eventId, "card-123", "DECLINED", NOW);
+        service(inbox, mapper).project(ProjectRiskFeatureCommand.declined(
+                eventId,
+                "card-123",
+                NOW
+        ));
 
         verify(mapper, never()).upsertDecision(any(), any(), any());
     }

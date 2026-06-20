@@ -1,6 +1,8 @@
 package com.minicard.messaging.kafka;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -90,5 +92,20 @@ public class IntegrationEventReader {
             throw new EventContractException(fieldName + " is required");
         }
         return value.asText();
+    }
+
+    /**
+     * 从 payload 中读取必填 ISO-8601 instant 字段。
+     *
+     * <p>时间字段属于 event contract。格式坏了不应表现成低层 DateTimeParseException，
+     * 而应进入 Kafka error handler 的 contract failure 路径。</p>
+     */
+    public Instant requiredInstant(JsonNode root, String fieldName) {
+        String value = requiredText(root, fieldName);
+        try {
+            return Instant.parse(value);
+        } catch (DateTimeParseException exception) {
+            throw new EventContractException(fieldName + " must be an ISO-8601 instant", exception);
+        }
     }
 }

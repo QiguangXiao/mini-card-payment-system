@@ -35,6 +35,8 @@ class IntegrationEventReaderTest {
         assertThat(parsed.eventType()).isEqualTo("authorization.approved");
         assertThat(reader.requiredText(parsed.payload(), "authorizationId"))
                 .isEqualTo(event.payload().get("authorizationId").asText());
+        assertThat(reader.requiredInstant(parsed.payload(), "approvedAt"))
+                .isEqualTo(Instant.parse("2026-06-14T00:00:00Z"));
     }
 
     @Test
@@ -69,6 +71,16 @@ class IntegrationEventReaderTest {
         assertThatThrownBy(() -> reader.read(record))
                 .isInstanceOf(EventContractException.class)
                 .hasMessage("eventType header does not match payload");
+    }
+
+    @Test
+    void rejectsInvalidInstantPayloadFieldAsContractFailure() {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("approvedAt", "not-an-instant");
+
+        assertThatThrownBy(() -> reader.requiredInstant(payload, "approvedAt"))
+                .isInstanceOf(EventContractException.class)
+                .hasMessage("approvedAt must be an ISO-8601 instant");
     }
 
     private IntegrationEvent event(String eventType, int version) {

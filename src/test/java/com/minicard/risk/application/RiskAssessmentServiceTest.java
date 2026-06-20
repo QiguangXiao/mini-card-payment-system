@@ -12,7 +12,6 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
-import com.minicard.risk.infrastructure.JdbcRiskVelocityRepository;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,38 +26,38 @@ class RiskAssessmentServiceTest {
 
     @Test
     void localBlockedMerchantShortCircuitsExternalRisk() {
-        JdbcRiskVelocityRepository velocityRepository = mock(JdbcRiskVelocityRepository.class);
-        ExternalRiskService externalRiskService = mock(ExternalRiskService.class);
-        RiskAssessmentService service = service(velocityRepository, externalRiskService);
+        RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
+        RiskAssessmentService service = service(velocityCounter, externalRiskGateway);
 
         RiskDecision decision = service.assess(request("merchant-blocked", "100.00"));
 
         assertThat(decision.declineReason()).isEqualTo(RiskDeclineReason.BLOCKED_MERCHANT);
-        verify(externalRiskService, never()).assess(request("merchant-blocked", "100.00"));
+        verify(externalRiskGateway, never()).assess(request("merchant-blocked", "100.00"));
     }
 
     @Test
     void callsExternalRiskAfterLocalChecksPass() {
-        JdbcRiskVelocityRepository velocityRepository = mock(JdbcRiskVelocityRepository.class);
-        ExternalRiskService externalRiskService = mock(ExternalRiskService.class);
+        RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
         RiskAssessmentRequest request = request("merchant-123", "100.00");
-        when(velocityRepository.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
+        when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
                 .thenReturn(1);
-        when(externalRiskService.assess(request)).thenReturn(RiskDecision.approve(10));
+        when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
 
-        RiskDecision decision = service(velocityRepository, externalRiskService).assess(request);
+        RiskDecision decision = service(velocityCounter, externalRiskGateway).assess(request);
 
         assertThat(decision.approved()).isTrue();
-        verify(externalRiskService).assess(request);
+        verify(externalRiskGateway).assess(request);
     }
 
     private RiskAssessmentService service(
-            JdbcRiskVelocityRepository velocityRepository,
-            ExternalRiskService externalRiskService
+            RiskVelocityCounter velocityCounter,
+            ExternalRiskGateway externalRiskGateway
     ) {
         return new RiskAssessmentService(
-                velocityRepository,
-                externalRiskService,
+                velocityCounter,
+                externalRiskGateway,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );

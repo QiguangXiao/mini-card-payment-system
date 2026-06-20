@@ -1,10 +1,9 @@
 package com.minicard.risk.infrastructure.messaging;
 
-import java.time.Instant;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
+import com.minicard.risk.application.ProjectRiskFeatureCommand;
 import com.minicard.risk.application.RiskFeatureProjectionService;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -38,21 +37,19 @@ public class AuthorizationRiskFeatureListener {
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {
-            projectionService.project(
+            projectionService.project(ProjectRiskFeatureCommand.approved(
                     event.eventId(),
                     eventReader.requiredText(payload, "cardId"),
-                    "APPROVED",
-                    Instant.parse(eventReader.requiredText(payload, "approvedAt"))
-            );
+                    eventReader.requiredInstant(payload, "approvedAt")
+            ));
             return;
         }
         if (AUTHORIZATION_DECLINED.equals(event.eventType())) {
-            projectionService.project(
+            projectionService.project(ProjectRiskFeatureCommand.declined(
                     event.eventId(),
                     eventReader.requiredText(payload, "cardId"),
-                    "DECLINED",
-                    Instant.parse(eventReader.requiredText(payload, "declinedAt"))
-            );
+                    eventReader.requiredInstant(payload, "declinedAt")
+            ));
         }
     }
 }

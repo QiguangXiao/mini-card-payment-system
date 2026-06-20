@@ -583,7 +583,8 @@ interview回答：
 ```text
 RiskAssessmentService
 -> local checks
--> ExternalRiskService
+-> ExternalRiskGateway
+-> ExternalRiskGatewayAdapter
 -> ExternalRiskClient
 -> CircuitBreaker fallback
 ```

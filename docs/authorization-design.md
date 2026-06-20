@@ -89,8 +89,11 @@ extra abstractions.
 
 - Local checks run directly inside `RiskAssessmentService`: blocked merchant,
   recent authorization velocity, high amount per currency, and country mismatch.
-- `ExternalRiskService` calls a simulated third-party risk API through Feign and
-  protects that call with Resilience4j circuit breaker fallback.
+- `RiskVelocityCounter` is the application port for the velocity COUNT query;
+  the current adapter is `JdbcRiskVelocityCounter`.
+- `ExternalRiskGateway` is the application port for third-party risk scoring;
+  the current adapter is `ExternalRiskGatewayAdapter`, backed by Feign and
+  protected with Resilience4j circuit breaker fallback.
 
 The current fallback is fail-closed: if external risk is unavailable, the
 authorization is declined with `RISK_EXTERNAL_UNAVAILABLE`. That is conservative
@@ -179,9 +182,9 @@ them into domain objects through constructors and `restore` methods. This keeps
 MyBatis concerns, mutable persistence conventions, and SQL mapping outside the
 domain model.
 
-`JdbcRiskVelocityRepository` intentionally remains a small JdbcTemplate example
-for a simple velocity query; most other database access in the project uses
-MyBatis.
+`JdbcRiskVelocityCounter` intentionally remains a small JdbcTemplate example
+for a simple velocity query behind the `RiskVelocityCounter` port; most other
+database access in the project uses MyBatis.
 
 `schema.sql` is currently used only for this early local-development stage.
 A production system should replace it with versioned schema migrations before

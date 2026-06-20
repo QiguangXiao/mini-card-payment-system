@@ -323,6 +323,8 @@ curl -X POST http://localhost:8080/api/authorizations \
 3. `riskAssessmentService.assess(command.toRiskAssessmentRequest())`
 
    做风控判断。
+   本地 velocity 查询通过 `RiskVelocityCounter` port 进入当前 JDBC adapter；
+   外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
 
 4. `creditAccountRepository.findByIdForUpdate(...)`

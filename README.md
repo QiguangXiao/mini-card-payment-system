@@ -51,8 +51,8 @@ topics.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
-reduced. `JdbcRiskVelocityRepository` intentionally remains implemented with
-`JdbcTemplate` as a small comparison example.
+reduced. `JdbcRiskVelocityCounter` intentionally remains implemented with
+`JdbcTemplate` behind a small `RiskVelocityCounter` port as a comparison example.
 
 The `monitoring` module currently exposes a lightweight public liveness check:
 

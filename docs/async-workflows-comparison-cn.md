@@ -203,7 +203,7 @@ Consumer 侧的共同规则：
 | Notification | `CardTransactionNotificationListener` | transaction topic | `card_transaction.posted` | 创建交易入账通知 | 同上 | 同上 |
 | Notification | `StatementNotificationListener` | statement topic | `statement.closed` | 创建 `STATEMENT_READY` 通知 | 同上 | 同上 |
 | Notification | `RepaymentNotificationListener` | repayment topic | `repayment.received` | 创建还款成功通知 | 同上 | 同上 |
-| Risk | `AuthorizationRiskFeatureListener` | authorization topic | `authorization.approved`, `authorization.declined` | 更新卡片风控特征投影 | `consumer_inbox(risk-feature-v1, eventId)` | `mini-card.authorization-risk-feature.dlt.v1` |
+| Risk | `AuthorizationRiskFeatureListener` -> `ProjectRiskFeatureCommand` | authorization topic | `authorization.approved`, `authorization.declined` | 更新卡片风控特征投影 | `consumer_inbox(risk-feature-v1, eventId)` | `mini-card.authorization-risk-feature.dlt.v1` |
 | Ledger | `CardTransactionLedgerListener` | transaction topic | `card_transaction.posted` | 记录消费入账 DEBIT 分录 | `consumer_inbox(ledger-v1, eventId)` + `ledger_entries(source_event_id, entry_type)` unique | `mini-card.ledger.dlt.v1` |
 | Ledger | `RepaymentLedgerListener` | repayment topic | `repayment.received` | 记录还款 CREDIT 分录 | 同上 | 同上 |
 

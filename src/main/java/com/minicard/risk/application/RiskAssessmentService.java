@@ -11,7 +11,6 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
-import com.minicard.risk.infrastructure.JdbcRiskVelocityRepository;
 import org.springframework.stereotype.Service;
 
 /**
@@ -26,20 +25,20 @@ import org.springframework.stereotype.Service;
 @Service
 public class RiskAssessmentService {
 
-    private final JdbcRiskVelocityRepository velocityRepository;
-    private final ExternalRiskService externalRiskService;
+    private final RiskVelocityCounter velocityCounter;
+    private final ExternalRiskGateway externalRiskGateway;
     private final RiskProperties properties;
     private final Clock clock;
     private final Map<Currency, Money> highRiskAmountThresholds;
 
     public RiskAssessmentService(
-            JdbcRiskVelocityRepository velocityRepository,
-            ExternalRiskService externalRiskService,
+            RiskVelocityCounter velocityCounter,
+            ExternalRiskGateway externalRiskGateway,
             RiskProperties properties,
             Clock clock
     ) {
-        this.velocityRepository = velocityRepository;
-        this.externalRiskService = externalRiskService;
+        this.velocityCounter = velocityCounter;
+        this.externalRiskGateway = externalRiskGateway;
         this.properties = properties;
         this.clock = clock;
         this.highRiskAmountThresholds = properties.local().highRiskAmountThresholds()
@@ -58,7 +57,7 @@ public class RiskAssessmentService {
             return localDecision;
         }
 
-        return externalRiskService.assess(request);
+        return externalRiskGateway.assess(request);
     }
 
     private RiskDecision assessLocally(RiskAssessmentRequest request) {
@@ -69,7 +68,7 @@ public class RiskAssessmentService {
         Instant since = Instant.now(clock).minus(
                 Duration.ofSeconds(properties.local().velocityWindowSeconds())
         );
-        int recentCount = velocityRepository.countRecentAuthorizations(request.cardId(), since);
+        int recentCount = velocityCounter.countRecentAuthorizations(request.cardId(), since);
         if (recentCount > properties.local().maxAuthorizationsPerWindow()) {
             return RiskDecision.decline(RiskDeclineReason.VELOCITY_EXCEEDED, 90);
         }

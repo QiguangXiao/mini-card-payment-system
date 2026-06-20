@@ -2,7 +2,6 @@ package com.minicard.risk.application;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.UUID;
 
 import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import com.minicard.risk.infrastructure.mybatis.CardRiskFeatureProjectionMapper;
@@ -28,13 +27,18 @@ public class RiskFeatureProjectionService {
     private final Clock clock;
 
     @Transactional
-    public void project(UUID eventId, String cardId, String status, Instant decidedAt) {
-        if (!inboxRepository.claim(CONSUMER_NAME, eventId, Instant.now(clock))) {
-            log.info("risk_feature_event_duplicate eventId={}", eventId);
+    public void project(ProjectRiskFeatureCommand command) {
+        if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), Instant.now(clock))) {
+            log.info("risk_feature_event_duplicate eventId={}", command.sourceEventId());
             return;
         }
 
-        mapper.upsertDecision(cardId, status, decidedAt);
-        log.info("risk_feature_projected eventId={} cardId={} status={}", eventId, cardId, status);
+        mapper.upsertDecision(command.cardId(), command.outcome().name(), command.decidedAt());
+        log.info(
+                "risk_feature_projected eventId={} cardId={} outcome={}",
+                command.sourceEventId(),
+                command.cardId(),
+                command.outcome()
+        );
     }
 }
