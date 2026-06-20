@@ -1164,7 +1164,7 @@ credit account row lock -> statement row lock
 入口：
 
 - `OutboxPoller.pollPublishableEvents()`
-- `OutboxPoller.claimPublishableEvents()`
+- `OutboxClaimer.claimPublishableEvents()`
 - `OutboxWorker.publishClaimedEvent(event)`
 - `OutboxRecoverer.recoverStuckEvents()`
 
@@ -1176,9 +1176,9 @@ credit account row lock -> statement row lock
 
 关键步骤：
 
-1. `OutboxPoller.claimPublishableEvents()`
+1. `OutboxClaimer.claimPublishableEvents()`
 
-   poller 在短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
+   claimer 在短事务内调用 `findPublishableBatchForUpdate(now, batchSize)`。
    MyBatis XML 使用：
 
    ```sql
@@ -1525,7 +1525,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 | 表 | `outbox_events` | `delay_jobs` |
 | 当前例子 | `authorization.approved`, `authorization.declined`, `authorization.posted`, `authorization.expired`, `card_transaction.posted`, `statement.closed`, `repayment.received` | `AUTHORIZATION_EXPIRY`, `AUTO_REPAYMENT` |
 | 生产者 | 业务事务中的 event publisher | 业务事务中的 job scheduler adapter |
-| 消费者 | `OutboxPoller` + `OutboxWorker` | `DelayJobPoller` + `DelayJobWorker` |
+| 消费者 | `OutboxPoller` + `OutboxClaimer` + `OutboxWorker` | `DelayJobPoller` + `DelayJobClaimer` + `DelayJobWorker` |
 | 并发控制 | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
 | 失败处理 | retry/backoff/DEAD | retry/backoff/PROCESSING lease/DEAD |
 | 幂等重点 | consumer 用 eventId 去重 | handler 读取业务 source of truth |

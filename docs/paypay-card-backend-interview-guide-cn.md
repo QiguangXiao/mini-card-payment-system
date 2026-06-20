@@ -369,7 +369,7 @@ Kafka publish 成功
 ```text
 业务事务内写业务表 + outbox_events
 事务提交后
-OutboxPoller claim
+OutboxClaimer claim
 OutboxWorker publish Kafka
 publish 成功后 mark PUBLISHED
 失败则 retry / DEAD
@@ -383,7 +383,7 @@ publish 成功后 mark PUBLISHED
 
 | 机制 | 解决什么问题 | 项目例子 |
 | --- | --- | --- |
-| Outbox | 本服务状态变化后可靠发布事件 | `outbox_events`, `OutboxPoller`, `OutboxWorker` |
+| Outbox | 本服务状态变化后可靠发布事件 | `outbox_events`, `OutboxPoller`, `OutboxClaimer`, `OutboxWorker` |
 | Inbox | 本服务消费外部事件时防重复 side effect | `consumer_inbox` |
 | DLT | 消息无法处理时隔离坏消息 | `mini-card.notification.dlt.v1`, `mini-card.authorization-risk-feature.dlt.v1`, `mini-card.ledger.dlt.v1` |
 

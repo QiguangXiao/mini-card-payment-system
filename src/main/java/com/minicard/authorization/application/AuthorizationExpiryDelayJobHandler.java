@@ -18,6 +18,9 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
+    /** DelayJob aggregate_type 必须和计划写入时一致，避免把其他聚合 id 当成 authorizationId。 */
+    private static final String AGGREGATE_TYPE = "Authorization";
+
     private final AuthorizationExpiryService expiryService;
 
     @Override
@@ -28,6 +31,10 @@ public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
     @Override
     public void handle(DelayJob job) {
+        if (!AGGREGATE_TYPE.equals(job.aggregateType())) {
+            // 错误 contract 不能静默忽略，否则 job 可能被标 DONE 但授权额度没有释放。
+            throw new IllegalArgumentException("AUTHORIZATION_EXPIRY job must target Authorization aggregate");
+        }
         // DelayJob 只保存通用 aggregateId；handler 把它转换成业务用的 authorizationId。
         expiryService.expire(UUID.fromString(job.aggregateId()));
     }

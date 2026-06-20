@@ -29,6 +29,10 @@ See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
 See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
 consumer idempotency, partition ordering, and failure-recovery decisions.
+See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
+side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
+producer/consumer contexts, and why their names are similar or intentionally
+different.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
