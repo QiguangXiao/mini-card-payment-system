@@ -8,6 +8,10 @@ import com.minicard.card.domain.CardStatus;
 /**
  * Card 的缓存快照。
  *
+ * <p>关键词：卡片快照, 卡状态, Card snapshot, reference data,
+ * card lifecycle, カード状態(カードじょうたい),
+ * 参照データ(さんしょうデータ)。</p>
+ *
  * <p>Card 本身是很小的 immutable aggregate，但这里仍然单独建 snapshot，是为了把
  * Redis JSON contract 和 domain object 解耦：以后 Card aggregate 增加行为方法时，
  * cache 仍然只保存可重建的字段。</p>

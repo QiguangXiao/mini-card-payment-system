@@ -17,6 +17,10 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 /**
  * Caffeine L1 + Redis L2 的 read-through cache。
  *
+ * <p>关键词：两级缓存, 缓存穿透保护, Caffeine L1, Redis L2,
+ * read-through cache, single-flight, 二段階キャッシュ(にだんかいキャッシュ),
+ * 読み込みキャッシュ(よみこみキャッシュ)。</p>
+ *
  * <p>L1 负责同 JVM 热点读取，L2 负责跨实例共享。MySQL 仍然是 source of truth：
  * Redis 失败、JSON 损坏或 cache miss 都会回到 loader，不让低风险 cache 影响主查询可用性。</p>
  */

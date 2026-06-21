@@ -9,6 +9,10 @@ import com.minicard.statement.domain.StatementItem;
 /**
  * Statement item 的低风险 read model。
  *
+ * <p>关键词：账单明细快照, 交易快照, statement item read model,
+ * line item snapshot, query projection, 明細スナップショット(めいさいスナップショット),
+ * 取引明細(とりひきめいさい)。</p>
+ *
  * <p>它只承载查询响应需要的快照字段，不包含 domain state transition 方法，
  * 因此可以安全放入 Caffeine/Redis。</p>
  */

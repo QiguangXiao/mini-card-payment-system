@@ -78,6 +78,8 @@ where they do not improve clarity.
 
 - 关键类、方法、代码路径和字段要添加中文解释性注释，并在必要处保留关键英文词汇，例如
   `idempotency`、`row lock`、`transaction boundary`、`aggregate`、`eventual consistency`。
+- 新增或重写关键类的类级 Javadoc 时，要包含 `关键词：...`，并覆盖中文业务词、
+  关键 English anchor 和 Japanese 术语/读音，方便中英日对照学习。
 - Comments should explain why the code is written this way, especially ordering,
   transaction boundaries, locking, retries, id generation, and state transitions.
   Do not merely repeat what the code already says.
@@ -92,6 +94,9 @@ where they do not improve clarity.
   business terminology.
 - Prefer request-shaped examples in learning docs instead of high-level
   architecture summaries only.
+- Final responses should not include modified line numbers by default. Mention
+  changed files or areas only, unless the user explicitly asks for line numbers
+  or code-review style findings.
 
 ## Financial Backend Priorities
 

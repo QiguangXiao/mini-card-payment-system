@@ -12,6 +12,10 @@ import org.springframework.stereotype.Component;
 /**
  * Caffeine L1 + Redis L2 read-through cache factory。
  *
+ * <p>关键词：两级缓存工厂, 本地缓存, 分布式缓存, Caffeine L1,
+ * Redis L2, read-through cache, キャッシュファクトリ,
+ * 分散キャッシュ(ぶんさんキャッシュ)。</p>
+ *
  * <p>业务模块只声明 cache name、value type 和 key encoder；TTL、key prefix、
  * Redis fallback 等生产细节集中在 infrastructure，避免每个模块复制一套缓存代码。</p>
  */

@@ -9,6 +9,10 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Card snapshot cache wiring。
  *
+ * <p>关键词：卡片缓存装配, Bean 配置, Card snapshot cache,
+ * cache name versioning, Bean wiring, Bean定義(Beanていぎ),
+ * カードキャッシュ。</p>
+ *
  * <p>Card id 是外部请求入口字段，用它作为 cache key；cache name 带版本号，方便以后字段变化时切 key。</p>
  */
 @Configuration

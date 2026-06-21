@@ -9,6 +9,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * Snapshot cache 的 transaction-aware evict helper。
  *
+ * <p>关键词：事务后失效, 缓存删除, after commit,
+ * transaction synchronization, cache eviction, トランザクション後処理(あとしょり),
+ * キャッシュ削除(キャッシュさくじょ)。</p>
+ *
  * <p>写路径改了 source of truth 后，应该在 transaction commit 后再删缓存。
  * 如果提交前 evict，其他请求可能读到旧 DB 值并重新写回 Redis，制造 stale snapshot。</p>
  */

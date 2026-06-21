@@ -10,6 +10,10 @@ import org.springframework.stereotype.Service;
 /**
  * Statement 查询 read model service。
  *
+ * <p>关键词：账单查询服务, 缓存边界, Statement read model service,
+ * cache boundary, after-commit eviction, 請求照会(せいきゅうしょうかい),
+ * キャッシュ境界(キャッシュきょうかい)。</p>
+ *
  * <p>这里是 GET /api/statements/{id} 的 cache boundary：Controller 不知道 L1/L2，
  * StatementService 仍然负责从 repository 读取 aggregate，cache 只保存 presentation-friendly
  * read model。</p>

@@ -8,6 +8,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Snapshot cache 配置。
  *
+ * <p>关键词：缓存参数, TTL, 抖动, snapshot cache properties,
+ * expiration, TTL jitter, 有効期限(ゆうこうきげん),
+ * ジッター。</p>
+ *
  * <p>配置按 cache name 拆开，是为了之后继续加入别的低风险 snapshot 时，只新增一个命名 cache，
  * 不需要复制 Caffeine/Redis 组合逻辑。</p>
  */

@@ -5,6 +5,10 @@ import java.util.function.Supplier;
 /**
  * 低风险业务快照专用缓存接口。
  *
+ * <p>关键词：业务快照缓存, 低风险读缓存, snapshot cache,
+ * source of truth, cache boundary, キャッシュ境界(キャッシュきょうかい),
+ * スナップショット。</p>
+ *
  * <p>它故意不暴露通用 Spring Cache annotation，避免把状态变更 use case 随手缓存。
  * 当前项目只缓存可从数据库重建的 snapshot，例如 statement read model 和 card snapshot；
  * 金额扣减、额度预占、幂等 claim 等写入结果仍以 MySQL transaction boundary 和 row lock 为准。</p>

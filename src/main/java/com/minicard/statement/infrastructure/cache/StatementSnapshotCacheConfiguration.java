@@ -11,6 +11,10 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Statement snapshot cache wiring。
  *
+ * <p>关键词：账单缓存装配, 查询快照, Statement read model cache,
+ * cache name versioning, Bean wiring, 請求キャッシュ(せいきゅうキャッシュ),
+ * Bean定義(Beanていぎ)。</p>
+ *
  * <p>cache name 带版本号；如果 response/read model 字段发生不兼容变化，改名即可自然切换 Redis key。</p>
  */
 @Configuration

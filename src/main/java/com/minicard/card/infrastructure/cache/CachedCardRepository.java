@@ -16,6 +16,10 @@ import org.springframework.stereotype.Repository;
 /**
  * CardRepository 的 cache decorator。
  *
+ * <p>关键词：卡片缓存仓储, 仓储装饰器, Card snapshot cache,
+ * repository decorator, negative cache, リポジトリ装飾(リポジトリそうしょく),
+ * カード参照(カードさんしょう)。</p>
+ *
  * <p>Card snapshot 是授权链路里的低频变化 reference data：card 是否存在、是否 blocked/expired、
  * 以及它指向哪个 credit account。缓存它可以减少高频 authorization/posting 对 cards 表的重复读取；
  * 但它仍然会影响授权决策，所以 TTL 比 statement read model 更短，并且不做 negative cache。</p>
