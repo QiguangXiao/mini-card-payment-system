@@ -38,6 +38,9 @@ different.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
+See [PayPay Card JD Fit Guide](docs/paypay-card-jd-fit-cn.md) for a JD-to-project
+evidence map, prioritized gap analysis, and answer templates tied to this
+project.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.
