@@ -23,7 +23,7 @@ Authorization -> Presentment Posting -> Statement Batch -> Auto/Manual Repayment
 - `AutoRepaymentService.debitStatement(...)`
 - `RepaymentService.receive(...)`
 - `AuthorizationExpiryService.expire(...)`
-- `schema.sql`
+- Liquibase changelog: `src/main/resources/db/changelog/db.changelog-master.yaml`
 - MyBatis mapper XML 中的 `SELECT ... FOR UPDATE`
 
 ## 1. 一句话总图

@@ -78,9 +78,20 @@ GET /actuator/metrics/jvm.gc.pause
 GET /actuator/metrics/jvm.threads.live
 ```
 
-See [JVM Monitoring Notes](docs/jvm-monitoring-learning-cn.md) for the
-interview-oriented explanation of heap, GC, threads, liveness/readiness, and why
-JVM diagnostics stay outside the public business API.
+See [JVM Core, GC, and Monitoring Notes](docs/jvm-monitoring-learning-cn.md) for
+the interview-oriented explanation of JVM memory structure, request-allocation
+growth, GC, threads, liveness/readiness, production troubleshooting, and why JVM
+diagnostics stay outside the public business API.
+See [Thread Runtime Notes](docs/thread-runtime-learning-cn.md) for the
+project-specific runtime thread model covering Tomcat request threads,
+schedulers, worker pools, Kafka listeners, OS thread mapping, thread states, and
+production troubleshooting.
+See [Local DB Schema Sync Notes](docs/db-schema-sync-2026-06-21-cn.md) for the
+2026-06-21 local MySQL schema drift fix, including updated columns, indexes,
+constraints, data backfill, and runtime verification.
+See [Database Migration Notes](docs/database-migration-liquibase-cn.md) for the
+Liquibase migration setup, local operations, and examples of outdated table
+structures.
 
 Create an authorization:
 
@@ -214,16 +225,23 @@ docker compose down
 Named Docker volumes keep MySQL and Kafka data between restarts. To also remove
 local database and Kafka data, run `docker compose down -v`.
 
-This early project stage uses `schema.sql` instead of a migration tool. After
-pulling a schema change, recreate the local development database with:
+Database schema is managed by Liquibase on application startup. The changelog
+entry point is:
 
-```bash
-docker compose down -v
-docker compose up -d
+```text
+src/main/resources/db/changelog/db.changelog-master.yaml
 ```
 
-Do not use this reset approach for valuable or production data. Production
-schema evolution requires versioned migrations.
+For normal local development, start MySQL/Kafka and then run the app; Liquibase
+applies pending changesets automatically:
+
+```bash
+docker compose up -d
+./gradlew bootRun
+```
+
+For details and outdated-schema examples, see
+[Database Migration Notes](docs/database-migration-liquibase-cn.md).
 
 ## Run Application
 

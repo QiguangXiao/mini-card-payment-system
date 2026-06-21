@@ -186,9 +186,10 @@ domain model.
 for a simple velocity query behind the `RiskVelocityCounter` port; most other
 database access in the project uses MyBatis.
 
-`schema.sql` is currently used only for this early local-development stage.
-A production system should replace it with versioned schema migrations before
-multiple environments or valuable data are introduced.
+Database schema is managed by Liquibase changelogs under
+`src/main/resources/db/changelog`. This keeps local schema drift visible and
+lets schema changes include historical data backfill, indexes, and constraints
+instead of relying on `CREATE TABLE IF NOT EXISTS`.
 
 ## Deliberately Deferred Production Concerns
 
@@ -199,4 +200,5 @@ multiple environments or valuable data are introduced.
 - Production-grade double-entry ledger and reconciliation reports.
 - Optimistic versioning for later aggregate updates.
 - User/cardholder identity, authentication, authorization, and PII handling.
-- Versioned database migrations.
+- Production-grade migration deployment controls such as online DDL review,
+  rollout windows, and forward-fix playbooks.

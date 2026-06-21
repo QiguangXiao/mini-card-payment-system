@@ -8,7 +8,11 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
-      mode: always
+      # Schema migration 交给 Liquibase；不要再启用 Spring SQL init，
+      # 否则会绕过 versioned migration，旧表也仍然不会被真正迁移。
+      mode: never
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:

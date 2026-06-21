@@ -209,8 +209,9 @@ credit_account_id + period_start + period_end
 - `recipient_key` 不是生产系统里的真实用户 id。
 - 以后加入 Cardholder/User 后，应该在 Notification 侧根据 subject 查 customerId 和 notification preference。
 - 不要在 authorization/posting/statement 主事务里直接发 push/email/sms。
-- 当前项目还没引入 Flyway/Liquibase，`schema.sql` 的 `CREATE TABLE IF NOT EXISTS`
-  不会自动修改已经存在的旧 `notifications` 表；本地已有数据库可能需要手动重建或迁移这张表。
+- 当前项目已经引入 Liquibase，`0002-sync-known-local-schema-drift.sql` 会把旧的
+  `authorization_id` / `card_id` 通知表迁移到 `subject_type` / `subject_id` /
+  `recipient_key`；这类字段语义升级不能只靠 `CREATE TABLE IF NOT EXISTS`。
 
 ## 3. 核心流程一：创建授权
 
@@ -1714,12 +1715,11 @@ FOR UPDATE SKIP LOCKED
 当前实现已经适合学习interview核心点。
 如果继续扩展，建议按这个顺序：
 
-1. 引入 Flyway 或 Liquibase，管理 schema migration，而不是只靠 `schema.sql`。
-2. 增加 minimal ledger，记录 posting、statement、repayment 对内部会计账本的影响。
-3. 增加 reconciliation，对比内部 posted transaction、repayment 和外部清算/资金文件。
-4. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
-5. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
-6. 补充少量并发测试，验证同账户多个 authorization、posting、statement generation 和 repayment 不会互相漏算。
+1. 后续每次表结构变化都追加 Liquibase changeset，并同步更新 walkthrough。
+2. 增加 reconciliation，对比内部 posted transaction、repayment 和外部清算/资金文件。
+3. 给 outbox/delay job 增加 metrics，例如 pending 数、dead 数、处理耗时。
+4. 增加 dead job/admin replay endpoint，但要加权限控制后再做。
+5. 补充少量并发测试，验证同账户多个 authorization、posting、statement generation 和 repayment 不会互相漏算。
 
 这一阶段最应该讲清楚的是：
 

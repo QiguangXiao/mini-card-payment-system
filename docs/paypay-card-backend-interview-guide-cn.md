@@ -52,7 +52,7 @@ interview时的推荐回答结构：
 | P0 | Outbox / Inbox / Kafka | 为什么 Kafka 不能替代本地事务，为什么 consumer 还要幂等 | `outbox_events`, `consumer_inbox`, `KafkaMessagingConfiguration` |
 | P1 | 状态机 | 哪些状态转换合法，非法转换如何拒绝 | `Authorization`, `CardTransaction`, `Statement`, `Repayment` |
 | P1 | DDD 边界 | domain、application service、repository、infrastructure 各做什么 | `domain`, `application`, `infrastructure/mybatis` |
-| P1 | MyBatis / SQL | SQL 如何支持并发安全、索引、唯一约束和可审计性 | mapper XML, `schema.sql` |
+| P1 | MyBatis / SQL / Migration | SQL 如何支持并发安全、索引、唯一约束、schema migration 和可审计性 | mapper XML, Liquibase changelog |
 | P1 | 失败恢复 | worker 宕机、Kafka 失败、外部服务失败、重复投递怎么办 | `OutboxWorker`, `DelayJobWorker`, DLT, CircuitBreaker |
 | P2 | 高流量取舍 | 如何扩容、如何减少锁时间、何时考虑缓存或拆服务 | worker pool, partition key, lock scope |
 
