@@ -11,6 +11,8 @@ import java.util.UUID;
 import com.minicard.authorization.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
 import com.minicard.statement.application.StatementGenerationRejectedException;
+import com.minicard.statement.application.StatementReadModel;
+import com.minicard.statement.application.StatementReadModelService;
 import com.minicard.statement.application.StatementService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementTransaction;
@@ -38,6 +40,9 @@ class StatementControllerTest {
 
     @MockitoBean
     private StatementService statementService;
+
+    @MockitoBean
+    private StatementReadModelService statementReadModelService;
 
     @Test
     void generatesStatement() throws Exception {
@@ -85,7 +90,7 @@ class StatementControllerTest {
     @Test
     void getsStatement() throws Exception {
         Statement statement = statement();
-        when(statementService.get(statement.id())).thenReturn(statement);
+        when(statementReadModelService.get(statement.id())).thenReturn(StatementReadModel.from(statement));
 
         mockMvc.perform(get("/api/statements/{id}", statement.id()))
                 .andExpect(status().isOk())
@@ -96,7 +101,8 @@ class StatementControllerTest {
     @Test
     void returnsNotFoundForUnknownStatement() throws Exception {
         UUID id = UUID.randomUUID();
-        when(statementService.get(id)).thenThrow(new NoSuchElementException("statement not found: " + id));
+        when(statementReadModelService.get(id))
+                .thenThrow(new NoSuchElementException("statement not found: " + id));
 
         mockMvc.perform(get("/api/statements/{id}", id))
                 .andExpect(status().isNotFound())

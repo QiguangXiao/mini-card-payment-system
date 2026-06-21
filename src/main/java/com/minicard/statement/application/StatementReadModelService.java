@@ -1,0 +1,55 @@
+package com.minicard.statement.application;
+
+import java.util.UUID;
+
+import com.minicard.infrastructure.cache.ReadModelCache;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+/**
+ * Statement 查询 read model service。
+ *
+ * <p>这里是 GET /api/statements/{id} 的 cache boundary：Controller 不知道 L1/L2，
+ * StatementService 仍然负责从 repository 读取 aggregate，cache 只保存 presentation-friendly
+ * read model。</p>
+ */
+@Service
+public class StatementReadModelService implements StatementReadModelCacheInvalidator {
+
+    private final StatementService statementService;
+    private final ReadModelCache<UUID, StatementReadModel> statementReadModelCache;
+
+    public StatementReadModelService(
+            StatementService statementService,
+            @Qualifier("statementReadModelCache")
+            ReadModelCache<UUID, StatementReadModel> statementReadModelCache
+    ) {
+        this.statementService = statementService;
+        this.statementReadModelCache = statementReadModelCache;
+    }
+
+    public StatementReadModel get(UUID id) {
+        // 只缓存 GET read model。NoSuchElementException 不做 negative cache，
+        // 防止先查 404 后很快生成同 id 测试数据时被短期错误缓存挡住。
+        return statementReadModelCache.get(
+                id,
+                () -> StatementReadModel.from(statementService.get(id))
+        );
+    }
+
+    @Override
+    public void evictAfterCommit(UUID statementId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            statementReadModelCache.evict(statementId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                statementReadModelCache.evict(statementId);
+            }
+        });
+    }
+}

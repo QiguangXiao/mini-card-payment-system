@@ -5,6 +5,7 @@ import java.util.UUID;
 import com.minicard.statement.api.dto.GenerateStatementRequest;
 import com.minicard.statement.api.dto.StatementResponse;
 import com.minicard.statement.application.GenerateStatementCommand;
+import com.minicard.statement.application.StatementReadModelService;
 import com.minicard.statement.application.StatementService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class StatementController {
 
     private final StatementService statementService;
+    private final StatementReadModelService statementReadModelService;
 
     @PostMapping("/generate")
     public StatementResponse generate(@Valid @RequestBody GenerateStatementRequest request) {
@@ -42,6 +44,6 @@ public class StatementController {
 
     @GetMapping("/{id}")
     public StatementResponse get(@PathVariable UUID id) {
-        return StatementResponse.from(statementService.get(id));
+        return StatementResponse.from(statementReadModelService.get(id));
     }
 }

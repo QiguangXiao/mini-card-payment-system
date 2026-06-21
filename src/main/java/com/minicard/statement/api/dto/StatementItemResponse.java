@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.minicard.statement.application.StatementItemReadModel;
 import com.minicard.statement.domain.StatementItem;
 
 /**
@@ -44,6 +45,22 @@ public record StatementItemResponse(
                 item.cardId(),
                 item.amount().amount(),
                 item.amount().currency().getCurrencyCode(),
+                item.postedAt()
+        );
+    }
+
+    /**
+     * 从 cached read model 转成 API 明细 DTO。
+     */
+    public static StatementItemResponse from(StatementItemReadModel item) {
+        return new StatementItemResponse(
+                item.id(),
+                item.cardTransactionId(),
+                item.networkTransactionId(),
+                item.authorizationId(),
+                item.cardId(),
+                item.amount(),
+                item.currency(),
                 item.postedAt()
         );
     }

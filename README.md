@@ -12,6 +12,7 @@ Backend Engineer interview.
 - Spring Boot 3.x
 - Gradle with Gradle Wrapper
 - MySQL 8.4 LTS with Docker Compose
+- Redis with Caffeine L1 for low-risk read model caching
 - MyBatis for primary repository implementations
 - JdbcTemplate retained for one focused comparison example
 - Apache Kafka with Transactional Outbox event publication
@@ -23,7 +24,8 @@ The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
 checks, minimal Ledger projection, Kafka-based event delivery, Transactional
-Outbox, Consumer Inbox, and DelayJob scheduling.
+Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 caching
+for the statement read model.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
@@ -132,6 +134,9 @@ Statement generation snapshots posted transactions into `statement_items`, and
 repayment reduces `posted_balance` while advancing statement payment status.
 Minimal Ledger then consumes posted transaction and repayment events to record
 append-only internal accounting entries.
+`GET /api/statements/{id}` caches only the low-risk statement read model:
+Caffeine handles short-lived in-process hits, Redis shares a TTL-based L2 cache
+across app instances, and repayment evicts the cached statement after commit.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
@@ -168,9 +173,9 @@ Local development includes these sample cards:
 - `card-account-blocked`: active card linked to a blocked account
 - `card-usd`: active USD account with a `1000.00` credit limit
 
-## Local MySQL
+## Local Dependencies
 
-Start MySQL and Kafka:
+Start MySQL, Kafka, and Redis:
 
 ```bash
 docker compose up -d
@@ -191,6 +196,9 @@ mini-card.transaction-events.v1
 mini-card.statement-events.v1
 mini-card.repayment-events.v1
 ```
+
+Local Redis is available at `localhost:6379`. It is used as the L2 cache for
+statement read models; Caffeine remains the per-JVM L1 cache.
 
 Describe a topic or inspect events:
 
@@ -222,8 +230,8 @@ Stop local services:
 docker compose down
 ```
 
-Named Docker volumes keep MySQL and Kafka data between restarts. To also remove
-local database and Kafka data, run `docker compose down -v`.
+Named Docker volumes keep MySQL, Kafka, and Redis data between restarts. To also
+remove local dependency data, run `docker compose down -v`.
 
 Database schema is managed by Liquibase on application startup. The changelog
 entry point is:

@@ -1500,6 +1500,8 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - `AuthorizationController.get(id)`
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
+- `StatementReadModelService.get(id)`
+- `ReadModelCache<UUID, StatementReadModel>`
 - `StatementService.get(id)`
 - `RepaymentController.get(id)`
 - `RepaymentService.get(id)`
@@ -1511,6 +1513,78 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
+
+### 9.1 `GET /api/statements/{id}` 的 L1/L2 read model cache
+
+当前只缓存一类低风险读模型：
+
+```bash
+curl http://localhost:8080/api/statements/{statementId}
+```
+
+真实链路：
+
+```text
+StatementController.get(id)
+-> StatementReadModelService.get(id)
+-> ReadModelCache<UUID, StatementReadModel>
+   -> Caffeine L1
+   -> Redis L2
+   -> StatementService.get(id)
+   -> StatementRepository.findById(id)
+```
+
+为什么缓存 `StatementReadModel`，而不是缓存 `Statement` aggregate：
+
+- `Statement` aggregate 有还款状态转换和不变量保护，属于写模型。
+- `StatementReadModel` 只包含 response 需要的字段，没有 business behavior。
+- 这样可以明确表达：cache 只是 read acceleration，不是 source of truth。
+
+当前配置：
+
+- cache name：`statement-response-v1`。
+- Redis key 形状：`mini-card:cache:statement-response-v1:{statementId}`。
+- L1：Caffeine，`local-ttl = 30s`，`maximum-size = 1000`。
+- L2：Redis，`remote-ttl = 5m`，`remote-ttl-jitter = 30s`。
+- 不缓存 404 negative result。`statement not found` 仍然直接来自 DB/source of truth。
+
+读取策略：
+
+1. 先查 Caffeine L1。
+2. L1 miss 后查 Redis L2。
+3. L2 hit 时回填 L1。
+4. L1/L2 都 miss 时调用 `StatementService.get(id)`，从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
+5. Redis 读写失败时降级回 DB，不让低风险缓存影响 GET 可用性。
+
+为什么 Redis TTL 要加 jitter：
+
+- 如果大量 statement 在同一秒写入 Redis，又在同一秒过期，下一波请求会同时打到 DB。
+- `remote-ttl-jitter` 把过期时间错开，降低 cache avalanche 风险。
+
+为什么还需要 evict：
+
+- `statement_items` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
+- 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
+- `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和 statement 后，
+  调用 `StatementReadModelCacheInvalidator.evictAfterCommit(statement.id())`。
+- after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
+  造成 stale read model。
+
+当前 evict 范围：
+
+- 当前 JVM 的 Caffeine L1。
+- Redis L2。
+- 其他 pod 的 Caffeine L1 不会收到本地内存通知，因此 L1 TTL 必须短。
+  如果生产要求“还款提交后所有 pod 立即不可读旧账单”，可以在这个 invalidation port 后面增加 Redis Pub/Sub、
+  Kafka invalidation event 或集中式 cache invalidation service。
+
+interview可以这样解释：
+
+- 只缓存可重建的 read model，不缓存写模型和强一致决策。
+- DB 仍然是 source of truth；cache miss 或 Redis 故障不会改变业务结果。
+- L1 降低同 JVM 热点开销，L2 让多实例共享缓存。
+- TTL 负责最终兜底，evict 负责业务更新后的及时失效。
+- after-commit evict 避免 transaction boundary 内的 stale reload 竞态。
 
 这个接口适合观察状态变化：
 

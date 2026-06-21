@@ -32,6 +32,11 @@ spring:
       auto-offset-reset: earliest
     listener:
       ack-mode: record
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 1s
 
 management:
   endpoints:
@@ -115,6 +120,20 @@ delay-jobs:
     processing-timeout-seconds: 60
     worker-pool-size: 4
     worker-queue-capacity: 100
+
+read-model-cache:
+  enabled: true
+  key-prefix: mini-card
+  caches:
+    statement-response-v1:
+      # L1 Caffeine 只做很短的 in-process cache，降低高频 GET 打到 Redis/DB 的压力。
+      # 多 pod 场景下其他实例的 L1 不会被本实例 evict，所以 local TTL 必须短。
+      local-ttl: 30s
+      maximum-size: 1000
+      # L2 Redis 保存跨实例共享读模型，TTL 比 L1 长，但仍不缓存写模型或强一致决策。
+      remote-ttl: 5m
+      # 给 Redis TTL 加抖动，避免一批账单在同一秒一起过期造成 cache avalanche。
+      remote-ttl-jitter: 30s
 
 authorization:
   policy:

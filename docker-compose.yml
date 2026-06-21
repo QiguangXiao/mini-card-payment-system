@@ -48,6 +48,29 @@ services:
       retries: 12
       start_period: 30s
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: mini-card-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
 volumes:
   mysql_data:
   kafka_data:
+  redis_data:

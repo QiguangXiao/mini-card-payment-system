@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+import com.minicard.statement.application.StatementReadModel;
 import com.minicard.statement.domain.Statement;
 
 /**
@@ -67,6 +68,32 @@ public record StatementResponse(
                 statement.generatedAt(),
                 statement.items().stream()
                         // Java Stream mapping；这里只做 presentation 转换，不改变业务状态。
+                        .map(StatementItemResponse::from)
+                        .toList()
+        );
+    }
+
+    /**
+     * 从 cached read model 转成 API DTO。
+     *
+     * <p>GET 查询路径只需要展示字段，不需要 domain behavior；缓存 read model 可以降低
+     * Redis/L1 miss 后 DB 重建成本，同时避免把 aggregate 放进 cache。</p>
+     */
+    public static StatementResponse from(StatementReadModel statement) {
+        return new StatementResponse(
+                statement.id(),
+                statement.creditAccountId(),
+                statement.periodStart(),
+                statement.periodEnd(),
+                statement.dueDate(),
+                statement.totalAmount(),
+                statement.minimumPaymentAmount(),
+                statement.paidAmount(),
+                statement.currency(),
+                statement.transactionCount(),
+                statement.status(),
+                statement.generatedAt(),
+                statement.items().stream()
                         .map(StatementItemResponse::from)
                         .toList()
         );
