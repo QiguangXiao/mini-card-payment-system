@@ -4,9 +4,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Read model cache infrastructure configuration。
+ * Snapshot cache infrastructure configuration。
  */
 @Configuration
-@EnableConfigurationProperties(ReadModelCacheProperties.class)
-public class ReadModelCacheConfiguration {
+@EnableConfigurationProperties(SnapshotCacheProperties.class)
+public class SnapshotCacheConfiguration {
 }

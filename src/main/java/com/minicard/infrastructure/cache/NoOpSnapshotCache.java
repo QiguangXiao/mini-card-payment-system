@@ -3,7 +3,7 @@ package com.minicard.infrastructure.cache;
 import java.util.Objects;
 import java.util.function.Supplier;
 
-final class NoOpReadModelCache<K, V> implements ReadModelCache<K, V> {
+final class NoOpSnapshotCache<K, V> implements SnapshotCache<K, V> {
 
     @Override
     public V get(K key, Supplier<V> loader) {

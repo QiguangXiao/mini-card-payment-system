@@ -21,13 +21,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * Redis 失败、JSON 损坏或 cache miss 都会回到 loader，不让低风险 cache 影响主查询可用性。</p>
  */
 @Slf4j
-final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
+final class TwoLevelSnapshotCache<K, V> implements SnapshotCache<K, V> {
 
     private static final String KEY_SEPARATOR = ":";
 
     private final String keyPrefix;
     private final String cacheName;
-    private final ReadModelCacheProperties.CacheSpec spec;
+    private final SnapshotCacheProperties.CacheSpec spec;
     private final Cache<K, V> localCache;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -35,10 +35,10 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
     private final Function<K, String> keyEncoder;
     private final ConcurrentHashMap<K, Object> localLocks = new ConcurrentHashMap<>();
 
-    TwoLevelReadModelCache(
+    TwoLevelSnapshotCache(
             String keyPrefix,
             String cacheName,
-            ReadModelCacheProperties.CacheSpec spec,
+            SnapshotCacheProperties.CacheSpec spec,
             Cache<K, V> localCache,
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
@@ -102,7 +102,7 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
         } catch (RuntimeException exception) {
             // evict 失败时当前 JVM 的 L1 已经清掉；Redis 短 TTL 兜底，查询仍以 DB 为准。
             log.warn(
-                    "Redis evict failed for read model cache {} key {}; local cache was invalidated",
+                    "Redis evict failed for snapshot cache {} key {}; local cache was invalidated",
                     cacheName,
                     redisKey,
                     exception
@@ -123,7 +123,7 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
             // 否则一个坏 JSON 会让所有后续查询不断失败。
             deleteCorruptRemoteValue(redisKey);
             log.warn(
-                    "Invalid JSON in read model cache {} key {}; evicted Redis value and reloading from DB",
+                    "Invalid JSON in snapshot cache {} key {}; evicted Redis value and reloading from DB",
                     cacheName,
                     redisKey,
                     exception
@@ -131,7 +131,7 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
             return Optional.empty();
         } catch (RuntimeException exception) {
             log.warn(
-                    "Redis read failed for read model cache {} key {}; falling back to DB",
+                    "Redis read failed for snapshot cache {} key {}; falling back to DB",
                     cacheName,
                     redisKey,
                     exception
@@ -147,16 +147,16 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
             String json = objectMapper.writeValueAsString(value);
             redisTemplate.opsForValue().set(redisKey, json, remoteTtlWithJitter());
         } catch (JsonProcessingException exception) {
-            // 序列化失败通常代表 read model 设计问题；不写 Redis，但 L1 和 DB 查询仍可工作。
+            // 序列化失败通常代表 snapshot 设计问题；不写 Redis，但 L1 和 DB 查询仍可工作。
             log.warn(
-                    "Failed to serialize read model cache {} key {}; Redis write skipped",
+                    "Failed to serialize snapshot cache {} key {}; Redis write skipped",
                     cacheName,
                     redisKey,
                     exception
             );
         } catch (RuntimeException exception) {
             log.warn(
-                    "Redis write failed for read model cache {} key {}; local cache still holds value",
+                    "Redis write failed for snapshot cache {} key {}; local cache still holds value",
                     cacheName,
                     redisKey,
                     exception
@@ -190,7 +190,7 @@ final class TwoLevelReadModelCache<K, V> implements ReadModelCache<K, V> {
             redisTemplate.delete(redisKey);
         } catch (RuntimeException exception) {
             log.warn(
-                    "Failed to delete corrupt Redis value for read model cache {} key {}",
+                    "Failed to delete corrupt Redis value for snapshot cache {} key {}",
                     cacheName,
                     redisKey,
                     exception

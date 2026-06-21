@@ -2,11 +2,10 @@ package com.minicard.statement.application;
 
 import java.util.UUID;
 
-import com.minicard.infrastructure.cache.ReadModelCache;
+import com.minicard.infrastructure.cache.SnapshotCache;
+import com.minicard.infrastructure.cache.TransactionAwareSnapshotCacheEvictor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Statement 查询 read model service。
@@ -16,24 +15,27 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * read model。</p>
  */
 @Service
-public class StatementReadModelService implements StatementReadModelCacheInvalidator {
+public class StatementReadModelService implements StatementSnapshotCacheInvalidator {
 
     private final StatementService statementService;
-    private final ReadModelCache<UUID, StatementReadModel> statementReadModelCache;
+    private final SnapshotCache<UUID, StatementReadModel> statementSnapshotCache;
+    private final TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor;
 
     public StatementReadModelService(
             StatementService statementService,
-            @Qualifier("statementReadModelCache")
-            ReadModelCache<UUID, StatementReadModel> statementReadModelCache
+            @Qualifier("statementSnapshotCache")
+            SnapshotCache<UUID, StatementReadModel> statementSnapshotCache,
+            TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor
     ) {
         this.statementService = statementService;
-        this.statementReadModelCache = statementReadModelCache;
+        this.statementSnapshotCache = statementSnapshotCache;
+        this.snapshotCacheEvictor = snapshotCacheEvictor;
     }
 
     public StatementReadModel get(UUID id) {
         // 只缓存 GET read model。NoSuchElementException 不做 negative cache，
         // 防止先查 404 后很快生成同 id 测试数据时被短期错误缓存挡住。
-        return statementReadModelCache.get(
+        return statementSnapshotCache.get(
                 id,
                 () -> StatementReadModel.from(statementService.get(id))
         );
@@ -41,15 +43,6 @@ public class StatementReadModelService implements StatementReadModelCacheInvalid
 
     @Override
     public void evictAfterCommit(UUID statementId) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            statementReadModelCache.evict(statementId);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                statementReadModelCache.evict(statementId);
-            }
-        });
+        snapshotCacheEvictor.evictAfterCommit(statementSnapshotCache, statementId);
     }
 }

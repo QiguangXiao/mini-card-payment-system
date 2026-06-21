@@ -17,28 +17,28 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class ReadModelCacheFactory {
+public class SnapshotCacheFactory {
 
-    private final ReadModelCacheProperties properties;
+    private final SnapshotCacheProperties properties;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public <K, V> ReadModelCache<K, V> create(
+    public <K, V> SnapshotCache<K, V> create(
             String cacheName,
             Class<V> valueType,
             Function<K, String> keyEncoder
     ) {
         if (!properties.enabled()) {
-            return new NoOpReadModelCache<>();
+            return new NoOpSnapshotCache<>();
         }
 
-        ReadModelCacheProperties.CacheSpec spec = properties.cache(cacheName);
+        SnapshotCacheProperties.CacheSpec spec = properties.cache(cacheName);
         Cache<K, V> localCache = Caffeine.newBuilder()
                 .maximumSize(spec.maximumSize())
                 .expireAfterWrite(spec.localTtl())
                 .recordStats()
                 .build();
-        return new TwoLevelReadModelCache<>(
+        return new TwoLevelSnapshotCache<>(
                 properties.keyPrefix(),
                 cacheName,
                 spec,

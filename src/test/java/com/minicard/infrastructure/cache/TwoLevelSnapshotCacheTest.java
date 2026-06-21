@@ -22,14 +22,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class TwoLevelReadModelCacheTest {
+class TwoLevelSnapshotCacheTest {
 
     private static final String REDIS_KEY = "mini-card:cache:test-cache-v1:statement-1";
 
     private StringRedisTemplate redisTemplate;
     private ValueOperations<String, String> valueOperations;
     private ObjectMapper objectMapper;
-    private TwoLevelReadModelCache<String, CachedView> cache;
+    private TwoLevelSnapshotCache<String, CachedView> cache;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -40,10 +40,10 @@ class TwoLevelReadModelCacheTest {
                 .findAndAddModules()
                 .build();
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        cache = new TwoLevelReadModelCache<>(
+        cache = new TwoLevelSnapshotCache<>(
                 "mini-card",
                 "test-cache-v1",
-                new ReadModelCacheProperties.CacheSpec(
+                new SnapshotCacheProperties.CacheSpec(
                         Duration.ofSeconds(30),
                         100,
                         Duration.ofMinutes(5),

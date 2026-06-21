@@ -12,7 +12,8 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 import com.minicard.authorization.domain.Money;
-import com.minicard.infrastructure.cache.ReadModelCache;
+import com.minicard.infrastructure.cache.SnapshotCache;
+import com.minicard.infrastructure.cache.TransactionAwareSnapshotCacheEvictor;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementTransaction;
 import org.junit.jupiter.api.AfterEach;
@@ -34,14 +35,18 @@ class StatementReadModelServiceTest {
             UUID.fromString("11111111-1111-1111-1111-111111111111");
 
     private StatementService statementService;
-    private FakeReadModelCache cache;
+    private FakeSnapshotCache cache;
     private StatementReadModelService service;
 
     @BeforeEach
     void setUp() {
         statementService = mock(StatementService.class);
-        cache = new FakeReadModelCache();
-        service = new StatementReadModelService(statementService, cache);
+        cache = new FakeSnapshotCache();
+        service = new StatementReadModelService(
+                statementService,
+                cache,
+                new TransactionAwareSnapshotCacheEvictor()
+        );
     }
 
     @AfterEach
@@ -136,8 +141,8 @@ class StatementReadModelServiceTest {
         return new Money(new BigDecimal(amount), Currency.getInstance("JPY"));
     }
 
-    private static final class FakeReadModelCache
-            implements ReadModelCache<UUID, StatementReadModel> {
+    private static final class FakeSnapshotCache
+            implements SnapshotCache<UUID, StatementReadModel> {
 
         private final Map<UUID, StatementReadModel> values = new HashMap<>();
         private final List<UUID> evictedKeys = new ArrayList<>();

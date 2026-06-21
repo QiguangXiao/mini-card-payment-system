@@ -3,11 +3,11 @@ package com.minicard.statement.application;
 import java.util.UUID;
 
 /**
- * Statement read model cache invalidation port。
+ * Statement snapshot cache invalidation port。
  *
  * <p>写路径只知道 statement read model 需要失效，不依赖 Redis/Caffeine 细节。</p>
  */
-public interface StatementReadModelCacheInvalidator {
+public interface StatementSnapshotCacheInvalidator {
 
     /**
      * 在当前 transaction commit 后 evict。

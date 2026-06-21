@@ -121,11 +121,11 @@ delay-jobs:
     worker-pool-size: 4
     worker-queue-capacity: 100
 
-read-model-cache:
+snapshot-cache:
   enabled: true
   key-prefix: mini-card
   caches:
-    statement-response-v1:
+    statement-read-model-v1:
       # L1 Caffeine 只做很短的 in-process cache，降低高频 GET 打到 Redis/DB 的压力。
       # 多 pod 场景下其他实例的 L1 不会被本实例 evict，所以 local TTL 必须短。
       local-ttl: 30s
@@ -134,6 +134,13 @@ read-model-cache:
       remote-ttl: 5m
       # 给 Redis TTL 加抖动，避免一批账单在同一秒一起过期造成 cache avalanche。
       remote-ttl-jitter: 30s
+    card-snapshot-v1:
+      # Card snapshot 会参与 authorization/posting 决策，风险高于纯展示型 read model。
+      # 因此 TTL 设置得更短；未来如果加入 block/unblock card API，写路径必须 after-commit evict。
+      local-ttl: 10s
+      maximum-size: 5000
+      remote-ttl: 1m
+      remote-ttl-jitter: 10s
 
 authorization:
   policy:

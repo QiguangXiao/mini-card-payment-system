@@ -318,8 +318,12 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 2. `cardRepository.findById(...)`
 
-   查询 card aggregate。
+   查询 card aggregate。当前实际 Bean 是 `CachedCardRepository`：
+   先查 `card-snapshot-v1`，miss 时再回到 `MyBatisCardRepository` 查询 `cards` 表。
+
    Card 回答“这张卡是否存在、是否被 blocked、是否过期”。
+   这个 cache 只保存 `CardSnapshot(id, creditAccountId, status)`，不缓存额度，也不替代后面的
+   `credit_accounts` row lock。
 
 3. `riskAssessmentService.assess(command.toRiskAssessmentRequest())`
 
@@ -1416,6 +1420,8 @@ repayment.received
 4. `cardRepository.findById(...)`
 
    根据 authorization.cardId 找到 card，再找到 creditAccountId。
+   这里同样会经过 `CachedCardRepository` 的 Card snapshot cache；但释放额度仍必须以后面的
+   `creditAccountRepository.findByIdForUpdate(...)` 为准。
 
 5. `creditAccountRepository.findByIdForUpdate(...)`
 
@@ -1501,7 +1507,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
 - `StatementReadModelService.get(id)`
-- `ReadModelCache<UUID, StatementReadModel>`
+- `SnapshotCache<UUID, StatementReadModel>`
 - `StatementService.get(id)`
 - `RepaymentController.get(id)`
 - `RepaymentService.get(id)`
@@ -1514,7 +1520,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - 不写 delay job。
 - 不修改额度。
 
-### 9.1 `GET /api/statements/{id}` 的 L1/L2 read model cache
+### 9.1 `GET /api/statements/{id}` 的 L1/L2 snapshot cache
 
 当前只缓存一类低风险读模型：
 
@@ -1527,7 +1533,7 @@ curl http://localhost:8080/api/statements/{statementId}
 ```text
 StatementController.get(id)
 -> StatementReadModelService.get(id)
--> ReadModelCache<UUID, StatementReadModel>
+-> SnapshotCache<UUID, StatementReadModel>
    -> Caffeine L1
    -> Redis L2
    -> StatementService.get(id)
@@ -1542,8 +1548,8 @@ StatementController.get(id)
 
 当前配置：
 
-- cache name：`statement-response-v1`。
-- Redis key 形状：`mini-card:cache:statement-response-v1:{statementId}`。
+- cache name：`statement-read-model-v1`。
+- Redis key 形状：`mini-card:cache:statement-read-model-v1:{statementId}`。
 - L1：Caffeine，`local-ttl = 30s`，`maximum-size = 1000`。
 - L2：Redis，`remote-ttl = 5m`，`remote-ttl-jitter = 30s`。
 - 不缓存 404 negative result。`statement not found` 仍然直接来自 DB/source of truth。
@@ -1566,7 +1572,7 @@ StatementController.get(id)
 - `statement_items` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
 - 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
 - `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和 statement 后，
-  调用 `StatementReadModelCacheInvalidator.evictAfterCommit(statement.id())`。
+  调用 `StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())`。
 - after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
   造成 stale read model。
 
@@ -1585,6 +1591,43 @@ interview可以这样解释：
 - L1 降低同 JVM 热点开销，L2 让多实例共享缓存。
 - TTL 负责最终兜底，evict 负责业务更新后的及时失效。
 - after-commit evict 避免 transaction boundary 内的 stale reload 竞态。
+
+### 9.2 Card snapshot cache
+
+Card snapshot 不是一个公开 GET API，而是 authorization/posting/expiry 流程里的 reference snapshot：
+
+```text
+AuthorizationService.decideAndReserve(...)
+-> CardRepository.findById(cardId)
+-> CachedCardRepository
+-> SnapshotCache<String, CardSnapshot>
+   -> Caffeine L1
+   -> Redis L2
+   -> MyBatisCardRepository.findById(cardId)
+   -> cards
+```
+
+当前配置：
+
+- cache name：`card-snapshot-v1`。
+- Redis key 形状：`mini-card:cache:card-snapshot-v1:{cardId}`。
+- L1：Caffeine，`local-ttl = 10s`，`maximum-size = 5000`。
+- L2：Redis，`remote-ttl = 1m`，`remote-ttl-jitter = 10s`。
+- 不缓存 card-not-found negative result。
+
+为什么 Card 可以缓存，但要比 statement 更保守：
+
+- Card 状态和 account 归属通常变化低频，适合做 reference data cache。
+- 但 Card 会影响授权批准/拒绝，stale `ACTIVE` 可能让刚 blocked 的卡短时间继续通过卡状态检查。
+- 因此 Card snapshot TTL 比 statement read model 短。
+- 当前项目还没有 card block/unblock API；未来加入时，状态变更写路径必须在 transaction commit 后
+  通过 `CardSnapshotCacheInvalidator.evictAfterCommit(cardId)` evict `card-snapshot-v1:{cardId}`。
+
+为什么不缓存额度：
+
+- 额度是高并发写模型，必须读 `credit_accounts` 并使用 `SELECT ... FOR UPDATE`。
+- 如果缓存 available credit，会绕开 row lock，产生超额授权风险。
+- Card snapshot 只让系统少查一张低频变化的 `cards` 表，不改变额度一致性边界。
 
 这个接口适合观察状态变化：
 

@@ -6,13 +6,13 @@ import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * Read model cache 配置。
+ * Snapshot cache 配置。
  *
- * <p>配置按 cache name 拆开，是为了之后继续加入别的低风险读模型时，只新增一个命名 cache，
+ * <p>配置按 cache name 拆开，是为了之后继续加入别的低风险 snapshot 时，只新增一个命名 cache，
  * 不需要复制 Caffeine/Redis 组合逻辑。</p>
  */
-@ConfigurationProperties(prefix = "read-model-cache")
-public record ReadModelCacheProperties(
+@ConfigurationProperties(prefix = "snapshot-cache")
+public record SnapshotCacheProperties(
         boolean enabled,
         String keyPrefix,
         Map<String, CacheSpec> caches
@@ -20,7 +20,7 @@ public record ReadModelCacheProperties(
 
     private static final String DEFAULT_KEY_PREFIX = "mini-card";
 
-    public ReadModelCacheProperties {
+    public SnapshotCacheProperties {
         if (keyPrefix == null || keyPrefix.isBlank()) {
             keyPrefix = DEFAULT_KEY_PREFIX;
         }

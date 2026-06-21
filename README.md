@@ -24,8 +24,8 @@ The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
 checks, minimal Ledger projection, Kafka-based event delivery, Transactional
-Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 caching
-for the statement read model.
+Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 snapshot
+caching for statement and card snapshots.
 
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
@@ -47,6 +47,9 @@ scope, and request-by-request examples.
 See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
 issuer-side business concepts such as authorization, presentment, statement,
 payment, refund, dispute, ledger, and reconciliation.
+See [Snapshot Cache Design](docs/cache-snapshot-design-cn.md) for the Caffeine
+L1 + Redis L2 cache design, naming choices, TTL/evict behavior, and why only
+low-risk snapshots are cached.
 See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
 for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
 topics.
@@ -134,9 +137,11 @@ Statement generation snapshots posted transactions into `statement_items`, and
 repayment reduces `posted_balance` while advancing statement payment status.
 Minimal Ledger then consumes posted transaction and repayment events to record
 append-only internal accounting entries.
-`GET /api/statements/{id}` caches only the low-risk statement read model:
-Caffeine handles short-lived in-process hits, Redis shares a TTL-based L2 cache
-across app instances, and repayment evicts the cached statement after commit.
+The cache layer stores only low-risk snapshots: `GET /api/statements/{id}` uses
+a cached statement read model, and authorization/posting/expiry use a cached
+card snapshot. Caffeine handles short-lived in-process hits, Redis shares a
+TTL-based L2 cache across app instances, and repayment evicts the cached
+statement after commit.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
@@ -198,7 +203,7 @@ mini-card.repayment-events.v1
 ```
 
 Local Redis is available at `localhost:6379`. It is used as the L2 cache for
-statement read models; Caffeine remains the per-JVM L1 cache.
+statement read models and card snapshots; Caffeine remains the per-JVM L1 cache.
 
 Describe a topic or inspect events:
 
