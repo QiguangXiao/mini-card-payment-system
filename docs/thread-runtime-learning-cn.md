@@ -323,7 +323,7 @@ http-nio-8080-exec-N
   - 一个 `http-nio-8080-exec-*` 处理 `/api/authorizations`，等待 Feign 响应。
   - 另一个 `http-nio-8080-exec-*` 处理 `/external-risk/assess`，并在 `Thread.sleep(100ms)` 里 `TIMED_WAITING`。
 
-这在本地学习很好理解，但生产里外部风控通常是独立服务。面试时可以说：本地模拟让调用链可运行，生产要关注外部服务 timeout、bulkhead、circuit breaker 和 request thread 占用。
+这在本地学习很好理解，但生产里外部风控通常是独立服务。interview时可以说：本地模拟让调用链可运行，生产要关注外部服务 timeout、bulkhead、circuit breaker 和 request thread 占用。
 
 ### 5.5 Tomcat request thread 什么时候是 `BLOCKED`
 
@@ -627,7 +627,7 @@ spring.kafka.listener.ack-mode: record
 - statement event key 使用 creditAccountId，保证同一账户账单顺序。
 - repayment event key 使用 creditAccountId，方便同账户还款通知/对账投影按顺序处理。
 
-面试重点：
+interview重点：
 
 > concurrency 提高的是不同 partition 的并行处理能力。同一个 partition 内仍由一个 consumer 顺序处理。要保证同一 aggregate 的事件顺序，关键是稳定 partition key，而不是让所有 consumer 串行。
 
@@ -665,7 +665,7 @@ listener thread 慢会带来：
 - Kafka listener service 的 transaction 在 Kafka consumer thread 上。
 - 如果你在一个 `@Transactional` 方法里手动开新线程，新线程不会自动继承原 transaction。
 
-面试表达：
+interview表达：
 
 > Spring transaction 是 thread-bound 的。不要在一个事务里随便异步开线程去写库，否则 transaction boundary、connection、rollback 语义都会变得不清楚。
 
@@ -987,7 +987,7 @@ jcmd <pid> Thread.print -l
 - 大量 worker thread 等 Kafka ack timeout。
 - 大量 thread sleep 来自本地模拟外部风控，说明测试流量把模拟接口也压住了。
 
-## 13. 面试重点回答模板
+## 13. interview重点回答模板
 
 ### Q1：这个工程启动后有哪些业务相关线程？
 

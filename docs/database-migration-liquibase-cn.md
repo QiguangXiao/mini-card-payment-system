@@ -31,7 +31,7 @@ Liquibase 的作用是把 schema 变化变成有版本记录的变更历史：
 - 应用启动时只执行还没执行过的 changeset。
 - 每个字段、索引、约束、数据回填都可以作为明确步骤记录下来。
 
-对 PayPay Card 这类金融系统面试，可以这样表达：
+对 PayPay Card 这类金融系统interview，可以这样表达：
 
 > Schema migration 不是简单建表。它要处理历史数据、兼容旧版本代码、约束补齐、失败恢复和审计记录。否则代码发布后，旧表结构可能导致请求失败，或者更糟糕的是让金额、状态和幂等约束失效。
 
@@ -205,7 +205,7 @@ WHERE recipient_key IS NULL
 4. 删除旧列。
 5. 加新索引和新 constraint。
 
-面试重点：这是 schema migration 里的 data backfill。字段改名通常不是纯 DDL，它还包含历史数据语义转换。
+interview重点：这是 schema migration 里的 data backfill。字段改名通常不是纯 DDL，它还包含历史数据语义转换。
 
 ### 例子三：约束规则过时
 
@@ -230,7 +230,7 @@ reserved_amount + posted_balance <= credit_limit
 3. 添加 `posted_balance >= 0`。
 4. 添加 `reserved_amount + posted_balance <= credit_limit`。
 
-面试重点：constraint 是业务 invariant 的数据库防线。业务模型变了，数据库约束也要跟着变，否则并发或 bug 可能绕过 Java 层保护。
+interview重点：constraint 是业务 invariant 的数据库防线。业务模型变了，数据库约束也要跟着变，否则并发或 bug 可能绕过 Java 层保护。
 
 ### 例子四：枚举值过时
 
@@ -251,7 +251,7 @@ ALTER TABLE notifications
     );
 ```
 
-面试重点：Java enum、数据库 check constraint、消息 payload 里的 event type 要一起演进，否则应用代码已经支持新类型，落库时仍可能失败。
+interview重点：Java enum、数据库 check constraint、消息 payload 里的 event type 要一起演进，否则应用代码已经支持新类型，落库时仍可能失败。
 
 ### 例子五：查询方式变了，需要补索引
 
@@ -271,7 +271,7 @@ CREATE INDEX idx_card_transactions_billing_batch
     ON card_transactions (status, statement_id, posted_at, credit_account_id);
 ```
 
-面试重点：migration 不只负责 columns，也负责 indexes。业务查询路径变了，但索引没跟上，高流量下会变成慢 SQL 或锁等待。
+interview重点：migration 不只负责 columns，也负责 indexes。业务查询路径变了，但索引没跟上，高流量下会变成慢 SQL 或锁等待。
 
 ## 6. 写 migration 的顺序原则
 
@@ -297,7 +297,7 @@ CREATE INDEX idx_card_transactions_billing_batch
 
 - 没有做自动 rollback。金融系统里的 rollback 往往不是简单反向 DDL，而是要设计 forward fix。
 - MySQL DDL 很多时候会隐式提交，不要假设所有 DDL 都在一个普通业务事务里。
-- 大表变更需要评估锁表、复制延迟、在线 DDL 和灰度发布，这里只保留面试解释点，不引入额外工具。
+- 大表变更需要评估锁表、复制延迟、在线 DDL 和灰度发布，这里只保留interview解释点，不引入额外工具。
 - 本地 seed data 是为了学习和手动 API 验证，不代表生产数据初始化方式。
 
 ## 8. 参考

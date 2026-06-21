@@ -157,6 +157,6 @@ Content-Type: application/json
 - 汇报时明确列出改了哪些 columns、indexes、constraints、data backfill。
 - 如果改动影响主流程，跑一条真实请求验证 API、Outbox/Kafka consumer 和最终落库。
 
-面试表达：
+interview表达：
 
 > Schema drift 是线上常见问题。金融系统里不能只依赖应用启动时自动建表，更要把字段变更、历史数据回填、约束补齐和回滚策略作为 migration 的一部分。本项目现在用 Liquibase 记录版本化 migration；生产系统还需要补充在线 DDL、发布窗口和 forward-fix 策略。

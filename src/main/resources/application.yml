@@ -37,7 +37,7 @@ management:
   endpoints:
     web:
       exposure:
-        # 只暴露面试和本地排查最常用的 Actuator endpoint；heapdump/env 等高风险诊断端点不要公开。
+        # 只暴露interview和本地排查最常用的 Actuator endpoint；heapdump/env 等高风险诊断端点不要公开。
         include:
           - health
           - info
