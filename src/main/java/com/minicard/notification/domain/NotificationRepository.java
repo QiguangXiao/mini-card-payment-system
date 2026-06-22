@@ -12,5 +12,7 @@ public interface NotificationRepository {
     /**
      * 使用 sourceEventId 唯一性作为并发安全的创建边界。
      */
+    // insertIfAbsent 把 DuplicateKeyException 封装在 adapter 内。
+    // 如果 application service 直接 catch SQL 异常，就会依赖 MyBatis/Spring DAO 细节。
     boolean insertIfAbsent(Notification notification);
 }

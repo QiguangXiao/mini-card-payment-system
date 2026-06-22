@@ -12,5 +12,7 @@ package com.minicard.card.application;
  */
 public interface CardSnapshotCacheInvalidator {
 
+    // 方法名带 AfterCommit，提醒调用方缓存失效要等 DB commit 成功。
+    // 如果事务中先删缓存然后 rollback，后续回源可能把旧状态重新写入 cache。
     void evictAfterCommit(String cardId);
 }

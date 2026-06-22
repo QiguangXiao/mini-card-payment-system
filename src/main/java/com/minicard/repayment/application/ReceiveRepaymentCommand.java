@@ -25,10 +25,12 @@ public record ReceiveRepaymentCommand(
 ) {
 
     public Money money() {
+        // Money 把 BigDecimal 和 Currency 绑定；如果 service 里传散参数，币种错配更难发现。
         return new Money(amount, currency);
     }
 
     public String requestFingerprint() {
+        // canonical request 必须字段顺序稳定；如果用 JSON toString 或 Map iteration，digest 可能随实现变化。
         String canonicalRequest = String.join(
                 "|",
                 statementId.toString(),
@@ -36,6 +38,7 @@ public record ReceiveRepaymentCommand(
                 currency.getCurrencyCode()
         );
         try {
+            // SHA-256 是 JDK 标准算法；NoSuchAlgorithmException 理论上不应发生，但 checked exception 必须处理。
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(
                     canonicalRequest.getBytes(StandardCharsets.UTF_8)

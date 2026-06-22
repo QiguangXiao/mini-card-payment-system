@@ -11,6 +11,8 @@ import java.util.UUID;
  */
 public interface CardTransactionDomainEvent {
 
+    // 事件接口只暴露业务身份和发生时间，不暴露 Kafka topic/header。
+    // 如果 domain event 直接带 infrastructure 字段，领域模型会被发布技术绑住。
     UUID cardTransactionId();
 
     Instant occurredAt();

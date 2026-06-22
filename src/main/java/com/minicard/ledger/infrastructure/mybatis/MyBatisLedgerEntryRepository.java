@@ -21,6 +21,8 @@ public class MyBatisLedgerEntryRepository implements LedgerEntryRepository {
     @Override
     public boolean appendIfAbsent(LedgerEntry entry) {
         try {
+            // append-only projection 只 INSERT，不 UPDATE。
+            // 如果 ledger entry 可以被普通 update，审计语义会比业务状态表更难解释。
             return mapper.insert(new LedgerEntryRow(
                     entry.id().toString(),
                     entry.sourceEventId().toString(),
@@ -35,6 +37,8 @@ public class MyBatisLedgerEntryRepository implements LedgerEntryRepository {
                     entry.createdAt()
             )) == 1;
         } catch (DuplicateKeyException exception) {
+            // DuplicateKeyException 在这里代表同一 source event 已经投影过。
+            // 如果让异常冒泡，Kafka duplicate delivery 会被误当成消费失败。
             // Kafka at-least-once 或人工 replay 下，重复 source event 不应该生成第二条分录。
             return false;
         }

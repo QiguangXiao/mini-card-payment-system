@@ -6,6 +6,7 @@ package com.minicard.notification.domain;
  * <p>Notification 是独立 bounded context，不应该只认识 Authorization。
  * 用 subjectType + subjectId 可以同时承接授权、交易入账、账单生成和还款通知。</p>
  */
+// subjectType + subjectId 是泛化关联方式；如果每种通知建一套字段/表，学习项目会过早复杂化。
 public enum NotificationSubjectType {
     AUTHORIZATION,
     CARD_TRANSACTION,

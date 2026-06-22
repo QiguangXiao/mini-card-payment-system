@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
  * row lock 和 Outbox/DelayJob 写入都在 application service 内完成。</p>
  */
 @Component
+// ConditionalOnProperty 让本地/测试可以关闭 batch poller。
+// 如果没有开关，测试启动 Spring context 时可能不断触发后台出账任务。
 @ConditionalOnProperty(
         prefix = "statement.batch",
         name = "enabled",
@@ -26,6 +28,8 @@ public class StatementBatchPoller {
 
     private final StatementBatchService batchService;
 
+    // @Scheduled 只负责触发，不负责持有大事务。
+    // scheduler 指定专用线程池，避免 statement batch 和 outbox/delayjob 互相占用默认调度线程。
     @Scheduled(
             fixedDelayString = "${statement.batch.fixed-delay-ms:60000}",
             scheduler = "statementBatchTaskScheduler"

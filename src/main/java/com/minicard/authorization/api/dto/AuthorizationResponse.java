@@ -28,6 +28,7 @@ public record AuthorizationResponse(
 
     public static AuthorizationResponse from(Authorization authorization) {
         // API mapping 放在 DTO，避免 domain object 直接暴露给 HTTP 层。
+        // 如果直接返回 Authorization，Jackson 会把 Optional、Money、内部 enum 结构暴露成外部 contract。
         return new AuthorizationResponse(
                 authorization.id(),
                 authorization.cardId(),

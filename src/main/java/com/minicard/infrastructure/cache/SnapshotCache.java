@@ -19,6 +19,8 @@ public interface SnapshotCache<K, V> {
      * 按 key 读取缓存；L1/L2 都 miss 时调用 loader 从 source of truth 重建。
      * loader 可以返回 null，表示不做 negative cache。
      */
+    // Supplier 延迟执行 DB loader；缓存命中时不会触发数据库查询。
+    // 如果调用方先查 DB 再 put，cache hit 也会付出 DB 成本。
     V get(K key, Supplier<V> loader);
 
     /**

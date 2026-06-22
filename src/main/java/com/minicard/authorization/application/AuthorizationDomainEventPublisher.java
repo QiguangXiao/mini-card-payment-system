@@ -10,5 +10,7 @@ import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
  */
 public interface AuthorizationDomainEventPublisher {
 
+    // append 表达“事务内追加事件”，不是同步发送 Kafka。
+    // 如果 service 直接调用 Kafka，DB rollback 后仍可能留下已经发出的幽灵消息。
     void append(AuthorizationDomainEvent event);
 }

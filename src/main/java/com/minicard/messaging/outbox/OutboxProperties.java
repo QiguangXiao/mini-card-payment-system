@@ -9,6 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * publisher retry, processing lease, アウトボックス設定(アウトボックスせってい),
  * 発行リトライ(はっこうリトライ)。</p>
  */
+// typed configuration 比散落 @Value 更适合这类成组参数。
+// 如果 workerPoolSize、batchSize、timeout 分散在多个类中，默认值和校验很容易不一致。
 @ConfigurationProperties(prefix = "outbox.publisher")
 public record OutboxProperties(
         /** 是否启用 Outbox poller/recoverer。 */

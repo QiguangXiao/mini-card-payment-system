@@ -14,5 +14,7 @@ public interface ExternalRiskGateway {
     /**
      * 调用外部风控并返回统一的 RiskDecision。
      */
+    // 这个 port 是防腐层入口：Feign response、HTTP status、timeout 都在 adapter 里转换成 RiskDecision。
+    // 如果 service 直接依赖 Feign DTO，外部 API 字段会侵入业务判断。
     RiskDecision assess(RiskAssessmentRequest request);
 }

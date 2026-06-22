@@ -17,5 +17,7 @@ public interface BankDebitGateway {
      *
      * <p>返回 SUCCESS 才允许 repayment posting；FAILED 必须走失败恢复/通知路径。</p>
      */
+    // port interface 让 application 依赖“扣款能力”，而不是依赖 Feign、文件上传或本地模拟类。
+    // 如果 service 直接 new 模拟 gateway，未来接真实银行时会改动核心用例。
     BankDebitResult debit(BankDebitRequest request);
 }

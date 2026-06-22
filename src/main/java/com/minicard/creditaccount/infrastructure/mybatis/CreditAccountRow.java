@@ -9,6 +9,7 @@ import java.math.BigDecimal;
  * credit limit, posted balance, 利用枠管理行(りようわくかんりぎょう),
  * 利用可能枠(りようかのうわく)。</p>
  */
+// BigDecimal 保留数据库 decimal 语义；不要在 row 层用 double，否则金额精度会丢。
 public record CreditAccountRow(
         /** credit account id。 */
         String id,

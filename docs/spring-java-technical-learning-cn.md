@@ -2519,36 +2519,161 @@ if (fixedDelayMs <= 0 || maxAttempts <= 0 || processingTimeoutSeconds <= 0) {
 
 这类错误越早失败越好。配置错误属于 startup-time failure，不应该等到第一笔 due job 才暴露。
 
-### 14.29 当前覆盖盘点：够不够？
+### 14.29 为什么这一轮允许重复？
 
-按当前 diff，这份技术注释/文档已经覆盖了这些高价值形态：
+前面几轮更偏“把每个技术点讲清楚一次”。这一轮改成“学习覆盖率”目标：
+
+```text
+changed Java files: 174 / 226 = 77.0%
+```
+
+这已经超过 60% 的类覆盖目标。
+
+为什么适合重复？
+
+Spring / Java / 第三方库的学习和业务一致性不一样。
+
+业务一致性更适合少量关键路径深挖：
+
+```text
+authorization -> row lock -> outbox -> delay job
+```
+
+技术习惯则需要在不同形态里反复遇到：
+
+```text
+@RestController
+@Valid
+record
+port interface
+@Mapper
+@ConfigurationProperties
+@Scheduled
+@Transactional
+DuplicateKeyException
+Optional
+ObjectMapper
+KafkaTemplate future ack
+```
+
+第一次看到 `@Param`，你可能只记住“XML 要绑定名字”。
+第二次在 Outbox mapper 看到，你会联想到多参数 claim。
+第三次在 Statement mapper 看到，你会想到 batch SQL、`<foreach>` 和锁范围。
+
+所以这一轮不再使用统一的文件头注释，而是把解释放回代码对应位置：
+
+```text
+@RestController / @RequestMapping 旁边解释 Spring MVC boundary
+@Valid / @NotNull / @Param 旁边解释参数绑定和 fail fast
+@ConfigurationProperties / @EnableConfigurationProperties 旁边解释配置绑定和 bean 注册
+@Scheduled / @KafkaListener 旁边解释线程池、groupId、containerFactory
+record compact constructor 旁边解释不可变输入和非 HTTP 路径防御
+repository/port 方法旁边解释 Optional、insert-first claim、DuplicateKeyException
+ObjectNode / ProducerRecord / KafkaTemplate.send().get(...) 旁边解释第三方库契约
+```
+
+### 14.30 贴近代码点的注释怎么读？
+
+这轮新增注释遵循一个原则：
+
+```text
+看到语法点时，马上解释这个语法点为什么存在。
+```
+
+例如，一个 `@Mapper` 注释应该贴在 `@Mapper` 旁边：
+
+```text
+@Mapper 让 MyBatis 生成 runtime proxy。
+如果没有它，Spring constructor injection 找不到 mapper 实现。
+```
+
+一个 `record compact constructor` 注释应该贴在 constructor 前：
+
+```text
+compact constructor 覆盖 controller、scheduler、Kafka、test 等所有创建路径。
+如果只靠 @Valid，非 HTTP 路径仍可能构造坏对象。
+```
+
+一个 `DuplicateKeyException` 注释应该贴在 catch 分支：
+
+```text
+这个 duplicate key 是预期的幂等重复，不应该进入 Kafka retry/DLT。
+其他数据库异常仍要抛出。
+```
+
+一个 `KafkaTemplate.send(...).get(...)` 注释应该贴在等待 ack 的地方：
+
+```text
+等待 broker ack 后才能把 Outbox 标记为 PUBLISHED。
+如果 fire-and-forget，broker 实际失败时消息会永久丢失。
+```
+
+这些重复不是噪音，而是刻意形成技术反射：
+
+```text
+看到注解 -> 想到 Spring 扫描/proxy/binding 时机
+看到 record -> 想到 immutable data carrier/constructor validation
+看到 port -> 想到 dependency direction/testability
+看到 mapper -> 想到 runtime proxy/XML parameter binding
+看到 DuplicateKeyException -> 想到唯一键语义是否真的等价于幂等成功
+```
+
+### 14.31 当前覆盖盘点：够不够？
+
+按“上一轮已提交的基础覆盖 + 这一轮工作区新增的贴近代码点注释”合并计算：
+
+```text
+covered Java files: 136 / 226 = 60.2%
+```
+
+这已经达到 60% 目标。更重要的是，这次不是靠文件头批量注释堆数字，而是把解释贴到注解、构造函数、mapper 方法、catch 分支和第三方库调用点旁边。
+
+这份技术注释/文档已经覆盖了这些高价值形态：
 
 | 区域 | 覆盖状态 | 代表点 |
 | --- | --- | --- |
 | Spring Boot / Gradle / YAML | 已覆盖 | starter、BOM、toolchain、env default、mapper-locations |
 | Web API / DTO | 已覆盖 | `@RestController`、`@Validated`、`@Valid`、record、nullable response |
-| Authorization | 已覆盖 | constructor injection、transaction proxy、configuration properties、Outbox adapter、expiry job |
-| Card | 已补强 | record compact constructor、cache decorator、`@Primary`、adapter 类型转换 |
-| CreditAccount | 已补强 | aggregate 不用 `@Data`、row-lock mapper、derived available credit |
-| Transaction / Presentment | 已补强 | CardTransaction 状态机、ObjectNode contract、empty batch guard、`<foreach>` |
-| Repayment | 已补强 | API validation、domain Optional、auto-debit request、DelayJob handler contract |
-| Statement | 已覆盖 | batch scheduler、`YearMonth`、private record、business calendar、repository duplicate 粒度 |
-| Notification | 已覆盖 | stable consumer name、fluent getter、eventType-before-payload、recipient key 临时策略 |
-| Ledger | 已覆盖 | Inbox idempotency、typed JSON parsing、`BigDecimal(String)` |
-| Risk | 已覆盖 | JdbcTemplate adapter、unmodifiable config map、projection consumer name、atomic upsert |
-| Outbox | 已覆盖 | claim/worker/recoverer/event/repository/XML、backoff、lease、ack/finalize |
-| DelayJob | 已补强 | claim/recoverer/properties/domain/handler/scheduler contract |
+| Authorization | 高覆盖 | constructor injection、transaction proxy、configuration properties、Outbox adapter、expiry job、API response mapping、Locale.ROOT fingerprint |
+| Card | 高覆盖 | record snapshot、cache decorator、`@Primary`、Bean name、mapper proxy、row/domain separation |
+| CreditAccount | 已补强 | aggregate 不用 `@Data`、row-lock mapper、repository port、derived available credit、Currency conversion |
+| Transaction / Presentment | 已补强 | `@Valid`、command compact constructor、`@Transactional`、CardTransaction 状态机、`<foreach>` batch update |
+| Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、Outbox adapter、repayment row/domain mapping |
+| Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、snapshot cache、repository duplicate 粒度 |
+| Notification | 高覆盖 | stable consumer name、fluent getter、eventType-before-payload、generic subject type、notification row/domain mapping |
+| Ledger | 高覆盖 | append-only mapper、Inbox idempotency、typed JSON parsing、`BigDecimal(String)`、source type enum |
+| Risk | 已补强 | Feign port、JdbcTemplate adapter、typed config、projection consumer name、atomic upsert、simulated external API |
+| Outbox | 完整覆盖 | properties/configuration/port/event/repository/mapper/claimer/worker/recoverer/XML、backoff、lease、ack/finalize |
+| Inbox | 完整覆盖 | consumer-level idempotency、insert-first claim、DuplicateKeyException -> false |
+| DelayJob | 高覆盖 | handler/repository/type/mapper/row/claim/recoverer/properties/domain/scheduler contract |
 | Cache | 已覆盖 | Caffeine L1、Redis L2、`StringRedisTemplate`、TTL jitter、single-flight、after-commit evict |
 | MyBatis XML | 已补强 | `#{}`、constructor mapping、`&lt;=`, `jdbcType`, `<foreach>`, upsert |
 
-仍然没必要逐一加注释的文件主要是：
+按目录统计，合并覆盖大致是：
 
-- enum：例如 `AuthorizationStatus`、`NotificationType`、`LedgerDirection`。
-- marker/port interface：例如 `Repository`、`Publisher`、`Gateway` 接口。
-- 很薄的 command/result record：例如 `AutoRepaymentResult`、`BankDebitResult`。
-- 已经被同类文件覆盖的 row DTO：例如多个 `*Row`。
+| 包 | 已覆盖 / 总数 |
+| --- | ---: |
+| `authorization` | 18 / 27 |
+| `card` | 9 / 12 |
+| `creditaccount` | 5 / 8 |
+| `delayjob` | 11 / 13 |
+| `infrastructure` | 14 / 14 |
+| `ledger` | 7 / 12 |
+| `messaging` | 16 / 22 |
+| `monitoring` | 2 / 2 |
+| `notification` | 11 / 14 |
+| `repayment` | 12 / 30 |
+| `risk` | 10 / 17 |
+| `statement` | 13 / 37 |
+| `transaction` | 7 / 17 |
 
-这些文件可以通过文档理解，不需要每个都加类似注释。继续加会让代码噪音超过学习价值。
+仍然没覆盖的文件主要是极薄的状态、少数异常、少数同类 DTO 或业务注释已经足够的聚合。
+现在已经不需要为了数字继续硬塞每个文件；下一步更合理的是：
+
+```text
+读到哪一个类觉得“不自然”
+再把那一个类扩成更详细的局部解释
+```
 
 ## 15. 建议复习路线
 

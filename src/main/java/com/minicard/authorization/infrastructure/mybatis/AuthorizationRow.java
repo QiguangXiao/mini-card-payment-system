@@ -10,6 +10,8 @@ import java.time.Instant;
  * persistence row, decision timestamp, オーソリ行(オーソリぎょう),
  * 永続化(えいぞくか)。</p>
  */
+// Row record 只表达数据库列；domain restore 在 repository adapter 中完成。
+// 如果 MyBatis 直接构造 Authorization，SQL 字段会和领域构造规则耦合得太紧。
 public record AuthorizationRow(
         /** authorization id。 */
         String id,

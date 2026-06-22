@@ -13,6 +13,7 @@ import org.apache.ibatis.annotations.Param;
  * row lock, SKIP LOCKED, 遅延ジョブSQL(ちえんジョブSQL),
  * 行ロック(ぎょうロック)。</p>
  */
+// @Mapper 让 MyBatis 代理 XML SQL；接口方法名刻意带 ForUpdate，让 Java 调用点能看见锁语义。
 @Mapper
 public interface DelayJobMapper {
 
@@ -27,6 +28,7 @@ public interface DelayJobMapper {
      * <p>多个 scheduler pod 并发扫描时会跳过彼此已锁住的行，减少重复执行和等待。</p>
      */
     List<DelayJobRow> findRunnableBatchForUpdate(
+            // 多参数 mapper 方法保留 @Param，XML 才能稳定使用 #{now}/#{limit}。
             @Param("now") Instant now,
             @Param("limit") int limit
     );

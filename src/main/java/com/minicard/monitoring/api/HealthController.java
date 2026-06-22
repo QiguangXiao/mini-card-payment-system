@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>这个 endpoint 只证明 HTTP 应用正在运行。依赖健康、metrics 和运维诊断应交给
  * Spring Boot Actuator，而不是在这个 controller 里重复实现。</p>
  */
+// @RestController 保证返回值写成 JSON body；如果用 @Controller，"OK" 这类返回值可能被当成 view name。
 @RestController
 @RequestMapping("/api")
 public class HealthController {

@@ -11,6 +11,8 @@ import java.time.Instant;
  *
  * <p>Row 只表达数据库字段；DelayJob aggregate 负责状态迁移规则。</p>
  */
+// Row record 适合 MyBatis constructor mapping：一次性拿到完整行。
+// 如果用 setter POJO，漏映射字段也可能构造出半初始化对象。
 public record DelayJobRow(
         /** delay job 主键。 */
         String id,

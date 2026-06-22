@@ -9,6 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * dead letter topic, 設定バインド(せっていバインド),
  * デッドレター。</p>
  */
+// topic 名通过 typed properties 绑定，避免 listener/publisher 中硬编码字符串。
+// 如果环境切换只改一处 YAML，但代码里还有硬编码 topic，就会出现只发不收的隐蔽错误。
 @ConfigurationProperties(prefix = "messaging.topics")
 public record KafkaTopicsProperties(
         /** authorization integration events topic。 */

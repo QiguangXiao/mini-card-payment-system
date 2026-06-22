@@ -14,7 +14,10 @@ public interface CreditAccountRepository {
     /**
      * 读取并锁定账户行，直到当前 transaction commit/rollback。
      */
+    // 方法名显式带 ForUpdate，调用点能看见这里会拿 row lock。
+    // 如果只叫 findById，review 时很难判断并发安全是否依赖这个查询。
     Optional<CreditAccount> findByIdForUpdate(UUID accountId);
 
+    // update 接收 aggregate 而不是 row，避免 application 绕过 domain invariant 直接改金额列。
     void update(CreditAccount account);
 }

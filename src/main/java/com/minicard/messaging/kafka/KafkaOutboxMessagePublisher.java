@@ -35,6 +35,8 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
      */
     @Override
     public void publish(OutboxEvent event, Duration timeout) {
+        // ProducerRecord 允许显式设置 topic、key、payload 和 headers。
+        // 如果只 send(topic, payload)，下游就拿不到 eventId/eventType/version 这类 contract metadata。
         // ProducerRecord 包含 topic、partition key 和 payload；partition key 影响同一聚合事件顺序。
         ProducerRecord<String, String> record = new ProducerRecord<>(
                 topicFor(event.eventType()),
@@ -50,6 +52,8 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         addHeader(record, "aggregateId", event.aggregateId());
 
         try {
+            // KafkaTemplate.send 返回 CompletableFuture；这里等待 broker ack 后才让 Outbox 标记 PUBLISHED。
+            // 如果 fire-and-forget，broker 实际失败时 Outbox 仍可能误以为消息已发出。
             // 等待 Kafka acknowledgement 后才把 Outbox row 标记为 PUBLISHED。
             // 这里仍不是分布式事务，所以整体语义仍是 at-least-once。
             kafkaTemplate.send(record).get(timeout.toMillis(), TimeUnit.MILLISECONDS);

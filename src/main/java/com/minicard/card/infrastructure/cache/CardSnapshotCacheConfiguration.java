@@ -20,10 +20,14 @@ public class CardSnapshotCacheConfiguration {
 
     public static final String CACHE_NAME = "card-snapshot-v1";
 
+    // 显式 Bean name 用来区分多个 SnapshotCache<String, ?>。
+    // 如果只靠泛型，Spring 运行期类型擦除后可能难以稳定区分 card/statement 两个 cache bean。
     @Bean(name = "cardSnapshotCache")
     public SnapshotCache<String, CardSnapshot> cardSnapshotCache(
             SnapshotCacheFactory cacheFactory
     ) {
+        // 第三个参数是 key normalizer。这里 cardId 本身就是稳定 key；
+        // 如果未来 key 要大小写归一化或加租户前缀，应集中写在这里，而不是散在 repository 里。
         return cacheFactory.create(CACHE_NAME, CardSnapshot.class, cardId -> cardId);
     }
 }

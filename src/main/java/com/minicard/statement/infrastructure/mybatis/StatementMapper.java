@@ -14,6 +14,8 @@ import org.apache.ibatis.annotations.Param;
  *
  * <p>@Mapper 是 MyBatis 与 Spring 集成的高级注解，运行时会生成代理对象并执行 XML SQL。</p>
  */
+// @Mapper + XML 的组合让 SQL 锁语义可见、可调优。
+// 如果用 ORM 自动生成查询，FOR UPDATE、批量明细插入和索引命中反而更不透明。
 @Mapper
 public interface StatementMapper {
 
@@ -33,6 +35,7 @@ public interface StatementMapper {
      * <p>用于重复请求/并发 batch 时确认已有 statement 状态，避免两个事务同时生成同一期。</p>
      */
     StatementRow findByCycleForUpdate(
+            // 多参数 SQL 保留 @Param，避免 XML 依赖 Java 编译参数名。
             @Param("creditAccountId") String creditAccountId,
             @Param("periodStart") LocalDate periodStart,
             @Param("periodEnd") LocalDate periodEnd

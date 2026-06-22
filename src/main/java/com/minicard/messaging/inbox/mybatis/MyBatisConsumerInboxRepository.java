@@ -23,10 +23,14 @@ public class MyBatisConsumerInboxRepository implements ConsumerInboxRepository {
     @Override
     public boolean claim(String consumerName, UUID eventId, Instant processedAt) {
         try {
+            // INSERT-first + unique key 让数据库裁决“第一次消费”。
+            // 如果先查再插，两个 consumer 线程可能都读到不存在，然后都执行业务副作用。
             // 只捕获预期的 unique-key duplicate。其他 DB 异常继续抛出，
             // 让 Kafka retry/DLT 机制感知真实故障。
             return mapper.insert(consumerName, eventId.toString(), processedAt) == 1;
         } catch (DuplicateKeyException exception) {
+            // DuplicateKeyException 在这里是正常 duplicate delivery，不应该抛到 Kafka error handler。
+            // 如果抛出，已经处理过的消息也可能进入 retry/DLT。
             return false;
         }
     }

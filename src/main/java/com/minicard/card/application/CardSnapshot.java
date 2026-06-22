@@ -22,6 +22,8 @@ public record CardSnapshot(
         CardStatus status
 ) {
 
+    // snapshot record 的 compact constructor 会保护 Redis 反序列化、测试 fixture 和手工构造路径。
+    // 如果只在 repository 写入前校验，缓存里的坏 JSON 仍可能恢复成非法 Card。
     public CardSnapshot {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("card snapshot id must not be blank");
@@ -35,6 +37,8 @@ public record CardSnapshot(
     }
 
     public static CardSnapshot from(Card card) {
+        // from/toCard 把 cache JSON contract 和 domain aggregate 的转换集中在这里。
+        // 如果各 repository 自己拼字段，Card 字段变化时更容易漏同步。
         return new CardSnapshot(card.id(), card.creditAccountId(), card.status());
     }
 

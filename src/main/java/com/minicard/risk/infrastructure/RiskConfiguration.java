@@ -12,6 +12,8 @@ import org.springframework.context.annotation.Configuration;
  * 設定バインド(せっていバインド)。</p>
  */
 @Configuration
+// 启用 RiskProperties 绑定，让阈值和开关在启动期进入 Spring bean。
+// 如果 service 直接读取环境变量，测试很难构造不同风险策略。
 @EnableConfigurationProperties(RiskProperties.class)
 public class RiskConfiguration {
 }

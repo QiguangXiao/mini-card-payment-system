@@ -63,6 +63,8 @@ public class StatementOutboxAdapter implements StatementDomainEventPublisher {
     }
 
     private String eventType(StatementDomainEvent event) {
+        // instanceof pattern matching 把类型判断和变量绑定合在一起。
+        // 如果新增 StatementDomainEvent 但忘记这里，异常会阻止写出未知 contract。
         if (event instanceof StatementClosedDomainEvent) {
             return STATEMENT_CLOSED;
         }
@@ -71,6 +73,8 @@ public class StatementOutboxAdapter implements StatementDomainEventPublisher {
 
     private JsonNode payload(StatementDomainEvent event) {
         if (event instanceof StatementClosedDomainEvent closed) {
+            // 手工构造 ObjectNode 是为了明确 integration contract。
+            // 如果直接序列化 domain event，domain 字段重命名会无意破坏下游消息格式。
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("statementId", closed.statementId().toString());
             payload.put("creditAccountId", closed.creditAccountId().toString());

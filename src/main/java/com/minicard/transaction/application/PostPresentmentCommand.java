@@ -20,6 +20,8 @@ public record PostPresentmentCommand(
         Currency currency
 ) {
 
+    // record compact constructor 覆盖所有创建路径，不只覆盖 controller 的 @Valid。
+    // 如果测试、scheduler 或未来 Kafka 路径直接 new command，仍不能构造出坏对象。
     public PostPresentmentCommand {
         if (networkTransactionId == null || networkTransactionId.isBlank()) {
             throw new IllegalArgumentException("networkTransactionId must not be blank");

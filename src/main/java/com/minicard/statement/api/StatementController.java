@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/statements")
+// Lombok 生成 final fields constructor，保留 constructor injection。
+// 如果用 field injection，测试时依赖不明显，也更容易出现未初始化字段。
 @RequiredArgsConstructor
 public class StatementController {
 
@@ -32,6 +34,7 @@ public class StatementController {
     private final StatementReadModelService statementReadModelService;
 
     @PostMapping("/generate")
+    // @Valid 校验手动入口的 body；真实 batch 路径不会经过 controller，所以 service/domain 仍要防御非法账期。
     public StatementResponse generate(@Valid @RequestBody GenerateStatementRequest request) {
         GenerateStatementCommand command = new GenerateStatementCommand(
                 request.creditAccountId(),
@@ -43,6 +46,8 @@ public class StatementController {
     }
 
     @GetMapping("/{id}")
+    // @PathVariable 由 Spring MVC 把路径文本转换成 UUID；格式错误会在 HTTP boundary 变成 400。
+    // 如果先收 String 再手动 parse，错误处理容易散到 controller 里。
     public StatementResponse get(@PathVariable UUID id) {
         return StatementResponse.from(statementReadModelService.get(id));
     }

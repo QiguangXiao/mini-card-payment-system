@@ -6,6 +6,7 @@ package com.minicard.monitoring.api;
  * <p>关键词：健康检查, 响应契约, liveness, health response,
  * public contract, ヘルスチェック, 生存確認(せいぞんかくにん)。</p>
  */
+// record 固定 health JSON contract；如果返回 Map，字段名变化不会被编译器发现。
 public record HealthResponse(String status) {
 
     /**

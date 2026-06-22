@@ -12,6 +12,8 @@ import org.apache.ibatis.annotations.Param;
  * row lock, SKIP LOCKED, アウトボックスSQL,
  * 行ロック(ぎょうロック)。</p>
  */
+// @Mapper 生成的是 MyBatis proxy，不是手写实现类。
+// 这让 repository adapter 可以只依赖接口，同时把 SQL 留在 XML 中便于学习锁和索引。
 @Mapper
 public interface OutboxEventMapper {
 
@@ -26,6 +28,7 @@ public interface OutboxEventMapper {
      * <p>多个 publisher 实例可以横向扩展，互相跳过已经锁住的事件。</p>
      */
     List<OutboxEventRow> findPublishableBatchForUpdate(
+            // @Param 让 XML 使用 #{now}/#{limit}，避免依赖编译器是否保留参数名。
             @Param("now") Instant now,
             @Param("limit") int limit
     );

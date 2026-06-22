@@ -12,6 +12,8 @@ public interface DelayJobHandler {
     /**
      * 声明当前 handler 负责的 job type，worker 会据此构建 dispatch map。
      */
+    // Worker 启动时可以把 List<DelayJobHandler> 收集成 Map<DelayJobType, Handler>。
+    // 如果用字符串 switch 分发，新增 job type 时容易漏改核心 worker。
     DelayJobType jobType();
 
     /**

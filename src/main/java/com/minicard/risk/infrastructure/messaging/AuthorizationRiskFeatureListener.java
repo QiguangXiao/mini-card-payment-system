@@ -26,6 +26,9 @@ public class AuthorizationRiskFeatureListener {
     private final IntegrationEventReader eventReader;
     private final RiskFeatureProjectionService projectionService;
 
+    // @KafkaListener 声明 topic/group/containerFactory 三件事：
+    // topic 决定读哪里，groupId 决定消费进度归属，containerFactory 决定 retry/DLT/反序列化策略。
+    // 如果多个 listener 复用错误的 groupId，可能互相抢同一组消费进度。
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",
             groupId = "${messaging.consumers.risk-feature.group-id}",

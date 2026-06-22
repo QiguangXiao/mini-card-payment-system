@@ -73,6 +73,8 @@ public record AuthorizationCommand(
     }
 
     private static String normalizeCountry(String country) {
+        // Locale.ROOT 避免土耳其语等本地化大小写规则影响 fingerprint。
+        // 如果用默认 Locale，同一请求在不同 JVM 区域设置下可能算出不同 digest。
         return country.toUpperCase(Locale.ROOT);
     }
 }

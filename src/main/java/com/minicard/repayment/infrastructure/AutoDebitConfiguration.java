@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Configuration;
  * repayment.auto-debit.* 绑定到 AutoDebitProperties，供 simulated gateway 注入。</p>
  */
 @Configuration
+// 没有这个启用入口时，AutoDebitProperties 只是一个带注解的 record，不一定会成为 bean。
+// 结果是 SimulatedBankDebitGateway 的 constructor injection 在启动期失败。
 @EnableConfigurationProperties(AutoDebitProperties.class)
 public class AutoDebitConfiguration {
 }

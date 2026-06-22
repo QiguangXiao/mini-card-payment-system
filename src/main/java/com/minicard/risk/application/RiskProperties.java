@@ -13,6 +13,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * local rules, external risk, リスク設定(リスクせってい),
  * 外部審査(がいぶしんさ)。</p>
  */
+// nested record 让 risk.local.* 和 risk.external.* 在 Java 类型上分组。
+// 如果全部铺平成字符串常量，阈值、延迟、失败率这些不同层次配置会混在一起。
 @ConfigurationProperties(prefix = "risk")
 public record RiskProperties(
         /** 本地同步风控规则配置。 */

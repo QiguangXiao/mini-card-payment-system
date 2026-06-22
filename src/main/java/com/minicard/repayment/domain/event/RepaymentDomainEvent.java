@@ -19,6 +19,8 @@ public interface RepaymentDomainEvent {
     /**
      * 本次还款 id，作为事件主体。
      */
+    // 事件接口只定义消费者需要的业务字段，不定义 Kafka header/Outbox row。
+    // 如果把发布机制放进 domain event，未来换消息系统会改动领域层。
     UUID repaymentId();
 
     /**

@@ -14,8 +14,11 @@ import jakarta.validation.constraints.Size;
  * <p>关键词：入账请求, presentment, Bean Validation, create presentment request,
  * API boundary, 売上データ(うりあげデータ), 入力検証(にゅうりょくけんしょう)。</p>
  */
+// request DTO 用 record 是为了让 HTTP 输入不可变；如果用 setter POJO，
+// 参数可能在 controller/service 之间被误改，也更难看出完整 API contract。
 public record CreatePresentmentRequest(
         /** 外部网络交易 id，作为 presentment 幂等键。 */
+        // Bean Validation 在进入 service 前 fail fast；domain 仍会保留 invariant，保护测试/批处理等非 HTTP 路径。
         @NotBlank @Size(max = 100)
         String networkTransactionId,
 

@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 本地模拟第三方 risk API，让 Feign 调用链在本项目内可学习、可运行。
  */
+// 这里虽然在同一个 Spring Boot 应用里，但仍走 HTTP/JSON/Feign 边界。
+// 如果直接 mock Java 方法，就学不到 timeout、序列化、circuit breaker 这些第三方集成问题。
 @RestController
 @RequiredArgsConstructor
 public class SimulatedExternalRiskController {
@@ -34,6 +36,8 @@ public class SimulatedExternalRiskController {
         try {
             Thread.sleep(properties.external().simulatedLatencyMillis());
         } catch (InterruptedException exception) {
+            // Java 并发习惯：捕获 InterruptedException 后恢复 interrupt flag。
+            // 如果吞掉中断，应用关闭时线程可能继续睡眠/工作，影响优雅停机。
             Thread.currentThread().interrupt();
             throw new IllegalStateException("external risk call was interrupted", exception);
         }

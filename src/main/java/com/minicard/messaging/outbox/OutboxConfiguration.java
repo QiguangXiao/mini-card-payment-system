@@ -11,6 +11,8 @@ import org.springframework.context.annotation.Configuration;
  * 確実発行(かくじつはっこう)。</p>
  */
 @Configuration
+// @EnableConfigurationProperties 把 OutboxProperties 注册成 Spring bean。
+// 如果只在 record 上写 @ConfigurationProperties 而没有启用绑定，constructor injection 会启动失败。
 @EnableConfigurationProperties(OutboxProperties.class)
 public class OutboxConfiguration {
 }

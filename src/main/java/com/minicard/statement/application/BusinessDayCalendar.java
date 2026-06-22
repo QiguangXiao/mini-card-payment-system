@@ -25,6 +25,8 @@ public interface BusinessDayCalendar {
      *
      * <p>这是 Java interface default method，避免每个日历实现重复写“周末/节假日顺延”的循环逻辑。</p>
      */
+    // default method 适合放通用算法，具体实现只回答“某天是否营业”。
+    // 如果每个实现都复制 while 循环，某个国家规则改动时更容易漏同步。
     default LocalDate nextBusinessDayOnOrAfter(LocalDate date) {
         LocalDate candidate = date;
         while (!isBusinessDay(candidate)) {

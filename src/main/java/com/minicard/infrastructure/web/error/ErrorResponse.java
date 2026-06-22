@@ -8,6 +8,7 @@ import java.time.Instant;
  * <p>关键词：错误响应, API 错误码, 时间戳, error response,
  * API error, timestamp, エラーレスポンス, エラーコード。</p>
  */
+// 错误响应用 record 固定 code/message/timestamp；如果各 handler 返回不同 Map，客户端很难稳定解析。
 public record ErrorResponse(
         /** 机器可读错误码。 */
         String code,

@@ -12,6 +12,8 @@ public class IdempotencyConflictException extends RuntimeException {
      * 固定错误信息，API 层会映射成 409 Conflict。
      */
     public IdempotencyConflictException() {
+        // 用专门异常类型比字符串判断可靠；GlobalExceptionHandler 可以稳定映射到 409。
+        // 如果混成 IllegalArgumentException，客户端会分不清请求格式错和幂等键复用冲突。
         super("idempotency key was already used with a different request");
     }
 }

@@ -9,5 +9,7 @@ import java.util.Optional;
  */
 public interface CardRepository {
 
+    // Optional 表达 card 可能不存在；如果返回 null，调用方容易漏判后触发 NPE。
+    // 当前不加 FOR UPDATE，因为授权真正修改的是 CreditAccount reservation。
     Optional<Card> findById(String cardId);
 }

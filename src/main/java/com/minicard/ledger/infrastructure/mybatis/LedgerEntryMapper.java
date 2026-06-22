@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Mapper;
 /**
  * LedgerEntry MyBatis mapper。
  */
+// @Mapper 让接口成为 Spring bean；没有它，MyBatisLedgerEntryRepository 无法 constructor inject mapper。
 @Mapper
 public interface LedgerEntryMapper {
 

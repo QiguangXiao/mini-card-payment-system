@@ -12,6 +12,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>默认 SUCCESS 让主流程可运行；切成 FAILED 可以演示扣款失败路径，
  * 但暂不引入真实银行网络、清算文件或失败通知。</p>
  */
+// @ConfigurationProperties 把 YAML 绑定成 typed record。相比 @Value 字段，
+// 它更适合把 simulatedResult/failureReason 作为一组配置一起校验和默认化。
 @ConfigurationProperties(prefix = "repayment.auto-debit")
 public record AutoDebitProperties(
         /** 本地模拟的银行扣款结果（bank debit result / 口座振替結果）。 */
@@ -20,6 +22,8 @@ public record AutoDebitProperties(
         String failureReason
 ) {
 
+    // compact constructor 会在 Spring 绑定后执行，适合做默认值归一化。
+    // 如果不在这里处理 null，本地未配置 repayment.auto-debit 时第一笔自动扣款才会 NPE。
     public AutoDebitProperties {
         if (simulatedResult == null) {
             // 默认 SUCCESS 让主业务路径可跑通；FAILED 分支保留给失败恢复练习。

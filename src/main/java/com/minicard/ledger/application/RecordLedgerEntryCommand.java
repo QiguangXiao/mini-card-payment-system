@@ -27,6 +27,8 @@ public record RecordLedgerEntryCommand(
         Instant occurredAt
 ) {
 
+    // compact constructor 用 Objects.requireNonNull 统一保护 listener/test/replay 创建路径。
+    // 如果只在 Kafka payload parser 校验，其他入口仍可能构造出缺字段 command。
     public RecordLedgerEntryCommand {
         Objects.requireNonNull(sourceEventId);
         Objects.requireNonNull(entryType);

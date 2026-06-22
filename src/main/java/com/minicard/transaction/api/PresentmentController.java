@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 幂等、row lock、posting state transition 都在 PostingService 和 domain objects 中完成。</p>
  */
 @RestController
+// @RequestMapping 放在 class 上表达资源前缀；如果每个方法写完整路径，重命名资源时容易漏改。
 @RequestMapping("/api/presentments")
 @RequiredArgsConstructor
 public class PresentmentController {
@@ -28,6 +29,8 @@ public class PresentmentController {
 
     @PostMapping
     public CardTransactionResponse postPresentment(
+            // @Valid 只负责 HTTP boundary；非 HTTP 调用仍要靠 PostPresentmentCommand/domain constructor 防御。
+            // 如果省略，空 networkTransactionId 可能一路进入数据库唯一键，错误会变成低层 SQL 异常。
             @Valid @RequestBody CreatePresentmentRequest request
     ) {
         PostPresentmentCommand command = new PostPresentmentCommand(
