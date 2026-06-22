@@ -33,6 +33,8 @@ public class MyBatisStatementRepository implements StatementRepository {
             // 这样 StatementService 可以把“同周期已出账”当成幂等结果处理。
             mapper.insertStatement(toRow(statement));
         } catch (DuplicateKeyException exception) {
+            // 只在 statement header insert 阶段把 duplicate key 当成幂等命中。
+            // 后续 item insert 的 duplicate key 代表数据不一致，必须继续抛出并 rollback。
             return false;
         }
         // 只有 statement 主表唯一键冲突才是 cycle-level idempotency。

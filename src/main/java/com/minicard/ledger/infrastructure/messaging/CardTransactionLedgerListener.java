@@ -30,6 +30,8 @@ public class CardTransactionLedgerListener {
     private final IntegrationEventReader eventReader;
     private final RecordLedgerEntryService service;
 
+    // ledger consumer 用独立 groupId，保证它和 notification/risk 各自消费同一事件。
+    // 如果多个 bounded context 共用一个 groupId，Kafka 会把事件分给其中一个，而不是广播给所有下游。
     @KafkaListener(
             topics = "${messaging.topics.transaction-events}",
             groupId = "${messaging.consumers.ledger.group-id}",

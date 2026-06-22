@@ -27,6 +27,8 @@ public class StatementNotificationListener {
     private final IntegrationEventReader eventReader;
     private final RequestNotificationService service;
 
+    // 同一个 notification group 可以消费多个 topic；每个 listener 仍只处理自己关心的 eventType。
+    // 如果不先过滤 eventType，合法但无关的 statement 事件可能因为缺字段被错误送进 DLT。
     @KafkaListener(
             topics = "${messaging.topics.statement-events}",
             groupId = "${messaging.consumers.notification.group-id}",

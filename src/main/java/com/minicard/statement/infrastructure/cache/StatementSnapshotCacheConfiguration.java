@@ -22,10 +22,13 @@ public class StatementSnapshotCacheConfiguration {
 
     public static final String CACHE_NAME = "statement-read-model-v1";
 
+    // 显式 Bean name 配合 @Qualifier("statementSnapshotCache") 使用。
+    // 如果只靠 SnapshotCache<UUID, StatementReadModel> 泛型，运行期类型擦除会让多个 cache bean 更难区分。
     @Bean(name = "statementSnapshotCache")
     public SnapshotCache<UUID, StatementReadModel> statementSnapshotCache(
             SnapshotCacheFactory cacheFactory
     ) {
+        // UUID::toString 是 key normalizer，确保 Redis key 里的 UUID 格式集中在 cache wiring。
         return cacheFactory.create(CACHE_NAME, StatementReadModel.class, UUID::toString);
     }
 }

@@ -12,6 +12,7 @@ import org.apache.ibatis.annotations.Param;
  *
  * <p>@Mapper 让 MyBatis 生成代理；真正的 SELECT ... FOR UPDATE 写在 XML 中。</p>
  */
+// @Mapper 让 Spring 注入 MyBatis proxy；接口没有手写实现类。
 @Mapper
 public interface RepaymentMapper {
 
@@ -25,6 +26,7 @@ public interface RepaymentMapper {
      *
      * <p>重复请求会等待 winner transaction 完成，然后比较 fingerprint 并返回同一结果。</p>
      */
+    // @Param 名称要和 XML 里的 #{idempotencyKey} 对齐；否则多参数扩展时会退化成 param1。
     RepaymentRow findByIdempotencyKeyForUpdate(@Param("idempotencyKey") String idempotencyKey);
 
     /**

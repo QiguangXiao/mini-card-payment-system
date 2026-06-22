@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 重新放回 retry 状态或转 DEAD，保证 database-backed queue 不会卡死。</p>
  */
 @Component
+// recoverer 也受同一个 enabled 开关控制；测试或本地排障时可以整体关掉后台任务扫描。
 @ConditionalOnProperty(
         prefix = "delay-jobs.scheduler",
         name = "enabled",
@@ -41,6 +42,8 @@ public class DelayJobRecoverer {
     /**
      * 周期性恢复 lease 超时任务。
      */
+    // @Scheduled 只触发恢复扫描；真正的 row lock 和状态推进由下面的 @Transactional 包住。
+    // 如果没有事务，findStuckProcessingBatchForUpdate 拿到的锁会立即释放，多实例可能重复恢复同一 job。
     @Scheduled(
             fixedDelayString = "${delay-jobs.scheduler.recovery-fixed-delay-ms:5000}",
             scheduler = "delayJobTaskScheduler"

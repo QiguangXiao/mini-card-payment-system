@@ -27,6 +27,8 @@ public class RepaymentNotificationListener {
     private final IntegrationEventReader eventReader;
     private final RequestNotificationService service;
 
+    // topics/groupId/containerFactory 都用配置占位符，而不是硬编码字符串。
+    // 如果环境 topic 改名，只改 application.yml；如果写死在注解里，测试环境最容易只发不收。
     @KafkaListener(
             topics = "${messaging.topics.repayment-events}",
             groupId = "${messaging.consumers.notification.group-id}",

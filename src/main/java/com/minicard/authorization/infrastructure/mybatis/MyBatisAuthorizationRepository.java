@@ -41,6 +41,8 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
             authorizationMapper.insert(idempotencyKey, toRow(authorization));
             return true;
         } catch (DuplicateKeyException exception) {
+            // DuplicateKeyException 在这里是幂等键已被占用的正常分支。
+            // 其他数据库异常不能吞，否则真正的写库失败会被误判为 duplicate retry。
             return false;
         }
     }

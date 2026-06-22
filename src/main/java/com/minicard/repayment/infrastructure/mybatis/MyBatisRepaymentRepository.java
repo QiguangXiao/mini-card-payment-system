@@ -27,9 +27,12 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
     @Override
     public boolean claim(Repayment pendingRepayment) {
         try {
+            // INSERT-first claim 依赖 repayments.idempotency_key 唯一索引。
+            // 如果先查再插，两个并发还款请求可能同时认为自己是第一笔。
             mapper.insert(toRow(pendingRepayment));
             return true;
         } catch (DuplicateKeyException exception) {
+            // duplicate key 是幂等重复请求，不是系统错误；调用方会再 FOR UPDATE 读取 winner 结果。
             return false;
         }
     }

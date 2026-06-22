@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 発行リース(はっこうリース)。</p>
  */
 @Component
+// 发布恢复器和 poller 用同一个 outbox.publisher.enabled 开关，便于测试中关闭所有后台发布动作。
 @ConditionalOnProperty(
         prefix = "outbox.publisher",
         name = "enabled",
@@ -38,6 +39,7 @@ public class OutboxRecoverer {
     /**
      * 恢复卡在 PROCESSING 的 Outbox events。
      */
+    // @Scheduled 指定 outboxTaskScheduler，避免 Outbox 恢复和 DelayJob/Statement batch 抢同一个默认调度线程。
     @Scheduled(
             fixedDelayString = "${outbox.publisher.recovery-fixed-delay-ms:5000}",
             scheduler = "outboxTaskScheduler"

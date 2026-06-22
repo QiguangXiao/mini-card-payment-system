@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Mapper;
  * insert, duplicate key, 通知SQL(つうちSQL),
  * 重複キー(じゅうふくキー)。</p>
  */
+// @Mapper 让 MyBatis 生成 insert proxy；唯一键冲突会被 Spring 翻译为 DuplicateKeyException。
 @Mapper
 public interface NotificationMapper {
 

@@ -63,6 +63,8 @@ public class RepaymentOutboxAdapter implements RepaymentDomainEventPublisher {
     }
 
     private String eventType(RepaymentDomainEvent event) {
+        // instanceof pattern matching 保持事件类型分支显式。
+        // 如果新增 repayment event 没有映射成 integration contract，会在这里 fail fast。
         if (event instanceof RepaymentReceivedDomainEvent) {
             return REPAYMENT_RECEIVED;
         }
@@ -71,6 +73,8 @@ public class RepaymentOutboxAdapter implements RepaymentDomainEventPublisher {
 
     private JsonNode payload(RepaymentDomainEvent event) {
         if (event instanceof RepaymentReceivedDomainEvent received) {
+            // 手工 ObjectNode 固定下游消息字段；不要直接序列化 domain event record。
+            // domain 字段重命名不应该无意改变 Kafka contract。
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("repaymentId", received.repaymentId().toString());
             payload.put("statementId", received.statementId().toString());

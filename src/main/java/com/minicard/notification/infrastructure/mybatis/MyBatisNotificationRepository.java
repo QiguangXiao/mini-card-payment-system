@@ -41,6 +41,8 @@ public class MyBatisNotificationRepository implements NotificationRepository {
                     notification.updatedAt()
             )) == 1;
         } catch (DuplicateKeyException exception) {
+            // DuplicateKeyException 是 Inbox 之外的第二层幂等保护：
+            // 即使同一事件被重复投递，也不能创建两条通知。
             // 并发/重复消息下，唯一键冲突表示通知已经存在；返回 false 让调用方跳过。
             return false;
         }

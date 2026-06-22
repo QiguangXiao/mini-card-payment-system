@@ -30,6 +30,8 @@ public class RepaymentLedgerListener {
     private final IntegrationEventReader eventReader;
     private final RecordLedgerEntryService service;
 
+    // containerFactory 绑定 ledger 的 retry/DLT 策略。
+    // 如果直接用默认 Kafka listener factory，反序列化或业务异常可能没有进入预期 dead-letter topic。
     @KafkaListener(
             topics = "${messaging.topics.repayment-events}",
             groupId = "${messaging.consumers.ledger.group-id}",

@@ -27,6 +27,8 @@ public class CardTransactionNotificationListener {
     private final IntegrationEventReader eventReader;
     private final RequestNotificationService service;
 
+    // @KafkaListener 的 groupId 复用 notification 组，表示所有通知 listener 共享“通知上下文”的消费进度。
+    // containerFactory 指向 notification 专用 retry/DLT；如果误用 ledger/risk factory，失败消息会进错 DLT。
     @KafkaListener(
             topics = "${messaging.topics.transaction-events}",
             groupId = "${messaging.consumers.notification.group-id}",

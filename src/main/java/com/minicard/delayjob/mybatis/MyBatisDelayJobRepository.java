@@ -32,6 +32,7 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
             mapper.insert(toRow(job));
             return true;
         } catch (DuplicateKeyException exception) {
+            // 唯一键冲突代表同一个 future action 已经计划过，不应该触发重试/告警。
             return false;
         }
     }
