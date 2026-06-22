@@ -39,6 +39,7 @@ public class RecordLedgerEntryService {
         Instant now = Instant.now(clock);
         // Inbox claim 是第一道 consumer-side idempotency：
         // Kafka/Outbox 是 at-least-once，同一个 eventId 可能被重复投递给 ledger-v1。
+        // 如果没有这道门，consumer 重启后 offset 回放会把同一笔消费/还款记两次 ledger entry。
         if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), now)) {
             log.info("ledger_event_duplicate eventId={}", command.sourceEventId());
             return;
@@ -48,6 +49,7 @@ public class RecordLedgerEntryService {
         if (!ledgerEntryRepository.appendIfAbsent(entry)) {
             // ledger_entries 的唯一键是第二道保护；如果未来有手工 replay 或 Inbox 迁移，
             // 这里仍能避免同一个 source event 造成重复账本分录。
+            // 没有这个 fallback，手工补偿脚本或 replay job 一旦绕过 Inbox 就会污染账本投影。
             log.info("ledger_entry_duplicate eventId={} type={}",
                     command.sourceEventId(),
                     command.entryType());

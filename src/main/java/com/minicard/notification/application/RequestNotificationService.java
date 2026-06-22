@@ -37,6 +37,7 @@ public class RequestNotificationService {
         Instant now = Instant.now(clock);
         // Inbox claim 是 consumer-side idempotency 的第一道门：
         // Kafka at-least-once 可能重复投递，同一个 eventId 对 notification-v1 只处理一次。
+        // 如果没有 Inbox，Outbox 重发或 Kafka offset 重放会创建多条相同客户通知。
         if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), now)) {
             log.info("notification_event_duplicate eventId={}", command.sourceEventId());
             return;
@@ -54,6 +55,7 @@ public class RequestNotificationService {
         );
         if (!notificationRepository.insertIfAbsent(notification)) {
             // notifications.source_event_id 是第二道保护，防止历史数据修复或并发边界变化造成重复通知。
+            // 如果未来 Inbox 数据迁移/清理出错，这个 unique guard 还能挡住 duplicate side effect。
             log.info("notification_request_duplicate eventId={}", command.sourceEventId());
             return;
         }

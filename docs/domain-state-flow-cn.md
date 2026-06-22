@@ -194,6 +194,21 @@ credit account row lock -> 其他业务 row lock
 - posting 和 statement generation 不会一个先锁 transaction、一个先锁 account 后互相等待。
 - repayment 和 statement generation 都围绕同一个 account row 串行化。
 
+### 4.5 如果不加这些锁和唯一约束会怎样
+
+| 省掉的保护 | 可能出的问题 |
+| --- | --- |
+| 不用 `credit_accounts ... FOR UPDATE` | 两笔并发授权都看到同一份额度，分别批准，最后超过 credit limit |
+| 不用 idempotency unique key | 客户端 retry 会被当成新请求，重复 hold 或重复 repayment |
+| 不锁 presentment 的 `network_transaction_id` | 卡组织重放同一请款时，同一笔交易可能被 posted 两次 |
+| 不锁 statement cycle natural key | batch retry 或多实例同时跑时，同一账户同一期出现多张账单 |
+| 不锁未出账 transactions | statement batch 可能和 posting 交错，漏掉刚 posted 的交易或把交易归入两张账单 |
+| 不保持统一锁顺序 | 一个事务拿 account 等 transaction，另一个拿 transaction 等 account，形成 deadlock |
+| 只依赖 Java `synchronized` | 只能保护当前 JVM；多个 pod 下其他实例仍会并发修改同一账户 |
+
+所以这里的锁不是“为了代码看起来严谨”，而是把并发写入压到同一个 MySQL source of truth 上。
+读代码时可以反复问：如果这条 `FOR UPDATE` 拿掉，哪两个请求会同时改哪一行？
+
 ## 5. 请求一：刷卡授权 Authorization
 
 ### 5.1 触发者

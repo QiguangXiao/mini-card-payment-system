@@ -28,6 +28,8 @@ public class RiskFeatureProjectionService {
 
     @Transactional
     public void project(ProjectRiskFeatureCommand command) {
+        // Risk projection 是 eventually consistent，可重放但不能重复累计同一 event。
+        // 如果没有 Inbox，Kafka redelivery 会把同一张卡的风险计数重复推进，导致后续误拒绝。
         if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), Instant.now(clock))) {
             log.info("risk_feature_event_duplicate eventId={}", command.sourceEventId());
             return;

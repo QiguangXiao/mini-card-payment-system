@@ -51,6 +51,7 @@ public class OutboxRecoverer {
         );
         for (OutboxEvent event : events) {
             // 超时发布按一次失败处理；超过 maxAttempts 后转 DEAD，避免无限打 Kafka。
+            // 如果没有 recoverer，pod 在 PROCESSING 后宕机的事件会永久不可见，可靠发布链路会断。
             event.markProcessingTimedOut(now, properties.maxAttempts());
             outboxEventRepository.updateDeliveryState(event);
             log.warn(

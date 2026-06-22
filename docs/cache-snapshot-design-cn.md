@@ -106,6 +106,16 @@ snapshot。Statement 仍然是 read model，Card 仍然是 snapshot。
 - 跨 pod 的 cache stampede 主要靠 Redis TTL、TTL jitter 和短期 L1 缓解。
 - 如果以后出现超热点 key，可以再引入 Redis mutex，但当前项目先保持简单。
 
+如果没有这些额外处理：
+
+| 省掉的处理 | 可能问题 |
+| --- | --- |
+| Redis fallback 回源 DB | Redis 短暂故障会直接让 GET API 失败，cache 反而变成可用性风险 |
+| Redis JSON 损坏后删除坏值 | 一个旧格式或坏 JSON 会让同一个 key 后续一直解析失败 |
+| per-key single-flight | 热点 statement/card 在 L1/L2 同时 miss 时，多个线程一起打 MySQL，形成 cache stampede |
+| TTL jitter | 一批 key 同秒过期，下一波请求同时回源，制造 cache avalanche |
+| after-commit evict | 事务提交前删 cache 时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis |
+
 ## 4. Statement read model cache
 
 请求链路：

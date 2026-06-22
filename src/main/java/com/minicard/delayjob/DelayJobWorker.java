@@ -53,6 +53,7 @@ public class DelayJobWorker {
         DelayJobHandler handler = handlers.get(claimedJob.jobType());
         if (handler == null) {
             // 没有 handler 是配置错误，必须进入失败路径而不是静默跳过。
+            // 如果静默标 DONE，业务动作其实没有执行，后续也不会再重试。
             markFailed(claimedJob, "no handler registered for job type " + claimedJob.jobType(), null);
             return;
         }
@@ -61,6 +62,7 @@ public class DelayJobWorker {
             // handler.handle() 执行业务 transaction，例如 authorization expiry 会释放额度并写 Outbox。
             handler.handle(claimedJob);
             // 业务成功后，worker 自己 finalize，避免 poller 提前标 DONE。
+            // 如果 poller 领取后就标 DONE，handler 失败时 job 会消失，授权 hold 或自动扣款都可能漏执行。
             markDone(claimedJob);
         } catch (RuntimeException exception) {
             markFailed(
@@ -127,6 +129,7 @@ public class DelayJobWorker {
         if (job.status() != DelayJobStatus.PROCESSING
                 || !job.nextAttemptAt().equals(claimedJob.nextAttemptAt())) {
             // 旧 worker 可能在 lease 过期后才返回；此时不能覆盖新 worker/recoverer 的状态。
+            // 如果不校验 lease token，迟到 worker 可能把新 lease 的失败/重试结果错误改成 DONE。
             log.warn(
                     "delay_job_lease_changed jobId={} claimedLease={} currentStatus={} currentLease={}",
                     claimedJob.id(),

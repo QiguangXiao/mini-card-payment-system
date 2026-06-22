@@ -34,6 +34,7 @@ public class AuthorizationRiskFeatureListener {
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
         // Listener 显式处理自己关心的事件类型；authorization.posted 等合法但无关的事件
         // 直接跳过，不会把“不感兴趣”误判成坏消息送进 DLT。
+        // 如果先按 approved/declined payload 解析，再判断 eventType，合法的 posted 事件会被误送 DLT。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {

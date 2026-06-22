@@ -29,6 +29,7 @@ public class TransactionAwareSnapshotCacheEvictor {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 必须等 commit 后再删；否则另一个请求可能在旧 DB 值上 rebuild cache，制造 stale snapshot。
                 cache.evict(key);
             }
         });

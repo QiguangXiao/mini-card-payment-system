@@ -60,6 +60,7 @@ public class RepaymentService {
 
         // INSERT-first idempotency claim：同一 Idempotency-Key 的并发请求只有一个 winner。
         // loser 会在 findByIdempotencyKeyForUpdate 等待 winner commit 后读取最终 RECEIVED 结果。
+        // 如果没有这层 claim，客户端或银行回调重复提交会多次减少 postedBalance，造成 double repayment。
         boolean claimed = repaymentRepository.claim(pending);
         Repayment repayment = repaymentRepository
                 .findByIdempotencyKeyForUpdate(command.idempotencyKey())
@@ -94,6 +95,7 @@ public class RepaymentService {
     ) {
         // 全项目保持同一锁顺序：credit account row lock 先于 statement row lock。
         // 这样 repayment 不会和 StatementService.generate(account -> statement) 形成死锁。
+        // 如果 repayment 反过来先锁 statement，再等 account，就可能和 statement batch 互相等待。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(statementSnapshot.creditAccountId())
                 .orElseThrow(() -> new RepaymentRejectedException(
@@ -131,6 +133,7 @@ public class RepaymentService {
             Money amount
     ) {
         if (!statement.creditAccountId().equals(account.id())) {
+            // 没有这个 guard，脏数据或错误调用可能把还款金额扣到不属于该 statement 的账户上。
             throw new RepaymentRejectedException("statement does not belong to locked credit account");
         }
         if (!statement.totalAmount().currency().equals(amount.currency())) {

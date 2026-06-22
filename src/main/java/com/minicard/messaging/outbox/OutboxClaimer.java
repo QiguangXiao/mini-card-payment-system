@@ -44,6 +44,7 @@ public class OutboxClaimer {
         for (OutboxEvent event : events) {
             // PROCESSING lease 先 commit，worker 才开始等 Kafka ack。
             // 如果 worker 宕机，recoverer 会在 lease deadline 后把 event 放回 retry。
+            // 如果 claim 事务一直包着 Kafka publish，MySQL row lock 会被 broker latency 放大。
             event.markProcessing(now, properties.processingTimeoutSeconds());
             outboxEventRepository.updateDeliveryState(event);
         }

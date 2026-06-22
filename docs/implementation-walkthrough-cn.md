@@ -39,6 +39,34 @@
 如果以后重命名，`infrastructure.execution` / `WorkerPoolConfiguration` 会更直观；当前代码先保留现状，
 文档里用这个心智模型解释即可。
 
+### 1.2 反事实阅读法：如果不做这些额外处理会怎样
+
+读这个项目时，很多代码看起来像“额外麻烦”：claim、row lock、lease、after-commit evict、
+Inbox、unique fallback。它们不是装饰，而是在防具体事故。
+
+| 看到的额外处理 | 如果没有它，会发生什么 |
+| --- | --- |
+| Authorization / Repayment 的 INSERT-first `idempotency` claim | 客户端 retry、网关重放或银行回调重复时，可能重复冻结额度或重复还款入账 |
+| `CreditAccountRepository.findByIdForUpdate(...)` | 两笔并发授权可能同时看到同一份 available credit，并一起批准，造成超额授权 |
+| 风控放在 account `row lock` 之前 | 外部风控慢调用会拖长账户锁持有时间，同一账户高并发请求在锁上排队超时 |
+| Posting 和 Statement batch 统一锁顺序：account -> transactions | 一个流程先锁交易再等账户、另一个先锁账户再等交易时，容易形成死锁 |
+| `network_transaction_id` 作为 presentment 幂等键 | 卡组织或测试脚本重放同一 presentment 时，同一笔消费可能被入账两次 |
+| Statement cycle natural key：`creditAccountId + periodStart + periodEnd` | batch retry 可能给同一账户同一期生成多张账单 |
+| `CardTransaction.assignToStatement(...)` | 同一笔 posted transaction 下轮 batch 还会被当成未出账交易，再次进入账单 |
+| Outbox row 和业务状态同事务提交 | 业务状态成功但消息意图丢失，下游 Notification/Risk/Ledger 永远不知道这件事 |
+| Kafka publish 放在 worker，且等待 broker ack 后再 finalize | 如果主事务里等待 Kafka，会拉长 money-changing lock；如果不等 ack 就标成功，消息可能丢失 |
+| Outbox / DelayJob 的 `PROCESSING lease` 和 recoverer | pod 在领取后宕机时，row 会永久卡在 PROCESSING，消息或未来业务动作不再执行 |
+| Worker finalize 前重新 `FOR UPDATE` 并比较 lease token | 旧 worker 迟到返回时，可能覆盖新 worker/recoverer 已经写好的失败、重试或成功状态 |
+| Consumer Inbox + 业务唯一键 | Kafka/Outbox at-least-once 重投会重复创建通知、重复写 Ledger、重复推进 Risk feature |
+| cache after-commit evict | 事务提交前删缓存时，另一个 GET 可能读旧 DB 值并重新写回 Redis，造成 stale read model |
+| 自动扣款 deterministic key：`auto-debit:{statementId}` | DelayJob retry 每次都像一笔新还款，同一张账单可能被自动扣款多次 |
+
+所以这个项目里的很多“多一步”，都可以按这个问题理解：
+
+```text
+如果没有这一步，重复请求、并发请求、worker 宕机、Kafka 重投、缓存失效竞态会把哪张表写坏？
+```
+
 ## 2. 核心数据表和状态
 
 ### `authorizations`

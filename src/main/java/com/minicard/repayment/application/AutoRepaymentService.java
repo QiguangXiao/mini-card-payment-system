@@ -47,6 +47,7 @@ public class AutoRepaymentService {
                 .orElseThrow(() -> new NoSuchElementException("statement not found: " + statementId));
         if (statement.status() == StatementStatus.PAID || !statement.remainingAmount().isPositive()) {
             // DelayJob 可能晚到或重复执行；已经还清时直接视为幂等成功。
+            // 如果这里继续扣款，用户手动还清后到期 job 仍会再次入账，形成 overpayment。
             return AutoRepaymentResult.alreadyPaid(statementId);
         }
 
@@ -73,6 +74,7 @@ public class AutoRepaymentService {
                 debitAmount.currency()
         );
         // 从这里进入已有 repayment transaction boundary：锁 statement/account 后再扣减余额。
+        // 如果 handler 自己直接改余额，会绕过 RepaymentService 的 idempotency、row lock 和 Outbox event。
         Repayment repayment = repaymentService.receive(command);
         return AutoRepaymentResult.succeeded(statement.id(), repayment.id());
     }
@@ -82,6 +84,7 @@ public class AutoRepaymentService {
      */
     private String idempotencyKey(UUID statementId) {
         // 自动扣款一张 statement 只应该入账一次；确定性 key 让 DelayJob 重试保持 idempotency。
+        // 如果每次 retry 都生成随机 key，RepaymentService 会把同一笔自动扣款当成多笔新还款。
         return IDEMPOTENCY_PREFIX + statementId;
     }
 }

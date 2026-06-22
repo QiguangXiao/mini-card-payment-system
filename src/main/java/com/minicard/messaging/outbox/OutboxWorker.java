@@ -38,6 +38,7 @@ public class OutboxWorker {
     public void publishClaimedEvent(OutboxEvent claimedEvent) {
         try {
             // publish() 会等待 broker acknowledgement。成功后才能 markPublished。
+            // 如果不等 ack 就标 PUBLISHED，broker 实际失败时事件会永久丢失。
             messagePublisher.publish(
                     claimedEvent,
                     Duration.ofMillis(properties.sendTimeoutMs())
@@ -56,6 +57,7 @@ public class OutboxWorker {
 
     public void markRejectedForRetry(OutboxEvent claimedEvent, RuntimeException exception) {
         // worker pool 拒绝时，必须把 PROCESSING 事件放回 retry/DEAD，避免 lease 到期前一直不可见。
+        // 如果直接吞掉 rejection，事件会停在 PROCESSING，直到 recoverer 扫描前下游都收不到消息。
         markFailed(claimedEvent, "outbox worker pool rejected event", exception);
     }
 
@@ -107,6 +109,7 @@ public class OutboxWorker {
         if (event.status() != OutboxEventStatus.PROCESSING
                 || !event.nextAttemptAt().equals(claimedEvent.nextAttemptAt())) {
             // 老 worker 返回太晚时不能覆盖新 lease 的处理结果，这是防并发覆盖的关键保护。
+            // 如果不比较 lease token，旧 worker 可能把新 worker 已失败/重试的结果改成 PUBLISHED。
             log.warn(
                     "outbox_lease_changed eventId={} claimedLease={} currentStatus={} currentLease={}",
                     claimedEvent.id(),

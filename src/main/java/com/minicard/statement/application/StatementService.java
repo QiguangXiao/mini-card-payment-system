@@ -53,6 +53,7 @@ public class StatementService {
         // 账户 row lock 是账单生成的并发门(concurrency gate)。
         // PostingService 也会先锁同一个 credit account，再创建/更新 CardTransaction，
         // 因此 statement 生成期间不会漏掉正在入账的交易，也不会和 posting 产生锁顺序死锁。
+        // 如果不先锁 account，账单扫描和 posting 可能交错，导致一笔已入账交易漏进下一期或重复归账。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(command.creditAccountId())
                 .orElseThrow(() -> new NoSuchElementException(
@@ -61,6 +62,7 @@ public class StatementService {
 
         // 一个 credit account 在同一 billing cycle 只能有一张账单。
         // 这个自然键就是 statement generation 的 idempotency key。
+        // 如果没有 cycle-level idempotency，batch retry 可能给同一账户同一期生成两张账单。
         return statementRepository
                 .findByCycleForUpdate(
                         command.creditAccountId(),
@@ -126,10 +128,12 @@ public class StatementService {
 
         // CardTransaction 仍然是用户交易流水；这里仅写 statementId/billedAt，
         // 表达它已经被某一期 statement snapshot 收录，避免下次账单重复计入。
+        // 如果不把交易标记为已归账，下一轮 batch 还会把同一笔 posted transaction 再收进新账单。
         transactions.forEach(transaction -> transaction.assignToStatement(statement.id(), now));
         transactionRepository.assignStatement(transactions);
         // 自动扣款计划是 future business action，使用 DelayJob 而不是 Outbox。
         // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
+        // 如果这一步不和 statement 同事务提交，就可能出现账单已生成但没有任何到期扣款计划。
         dueJobScheduler.scheduleAutoRepayment(statement);
         publishDomainEvents(statement);
         return statement;

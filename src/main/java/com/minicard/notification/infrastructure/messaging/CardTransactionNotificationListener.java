@@ -34,6 +34,7 @@ public class CardTransactionNotificationListener {
     )
     public void onCardTransactionEvent(ConsumerRecord<String, String> record) {
         // 只处理用户可见交易入账事件；未来 refunded/disputed 可以在这里继续显式增加分支。
+        // 如果把 authorization.posted 也当成交易通知，会把 issuer 内部 hold 生命周期误发给用户。
         IntegrationEvent event = eventReader.read(record);
         if (CARD_TRANSACTION_POSTED.equals(event.eventType())) {
             JsonNode payload = event.payload();

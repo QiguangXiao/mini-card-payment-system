@@ -54,6 +54,7 @@ public class DelayJobRecoverer {
         );
         for (DelayJob job : jobs) {
             // 超时 PROCESSING 按一次失败处理；超过 maxAttempts 后进入 DEAD，避免无限重试坏任务。
+            // 如果没有这条恢复路径，worker 宕机后授权过期释放或自动还款 job 会永久卡住。
             job.markProcessingTimedOut(now, properties.maxAttempts());
             delayJobRepository.updateExecutionState(job);
             log.warn(

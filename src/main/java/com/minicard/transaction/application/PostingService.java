@@ -65,6 +65,7 @@ public class PostingService {
             CardTransaction transaction = existingTransaction.get();
             assertSamePresentment(command, transaction);
             if (transaction.status() == CardTransactionStatus.POSTED) {
+                // 如果 duplicate presentment 不先返回已 posted 结果，就可能再次移动 reserved -> postedBalance。
                 return transaction;
             }
             throw new PresentmentRejectedException(
@@ -92,6 +93,7 @@ public class PostingService {
         // 新 presentment 必须在 credit account row lock 之后再 INSERT claim：
         // StatementService 也先锁 account，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
         // 并保证账单生成期间不会漏掉正在入账的交易。
+        // 如果 posting 先锁/插交易再锁 account，而 statement 先锁 account 再锁交易，高并发时会形成环路等待。
         boolean claimed = transactionRepository.claim(pending);
         CardTransaction transaction = transactionRepository
                 .findByNetworkTransactionIdForUpdate(command.networkTransactionId())
@@ -101,6 +103,7 @@ public class PostingService {
         assertSamePresentment(command, transaction);
         if (!claimed) {
             // duplicate retry 读取已完成的 posted transaction，不能再次释放 hold 或增加 postedBalance。
+            // 没有这层 idempotency，网络重放同一 presentment 会把同一笔消费入账两次。
             if (transaction.status() == CardTransactionStatus.POSTED) {
                 return transaction;
             }
@@ -112,6 +115,7 @@ public class PostingService {
         // 同一个 transaction 内完成三件事：
         // 1. reservedAmount -> postedBalance，2. Authorization APPROVED -> POSTED，
         // 3. CardTransaction PENDING -> POSTED。任一步失败都会 rollback。
+        // 如果拆成多个事务，中途失败会留下“授权已 posted 但账户余额没变”或“余额已变但没有交易流水”的断裂状态。
         account.postAuthorized(command.money());
         authorization.post(now);
         transaction.markPosted(now);

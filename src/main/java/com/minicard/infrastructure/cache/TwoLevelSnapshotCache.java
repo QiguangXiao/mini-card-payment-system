@@ -71,6 +71,7 @@ final class TwoLevelSnapshotCache<K, V> implements SnapshotCache<K, V> {
 
         // 同一个 JVM 内做 per-key single-flight，避免一个热点 key 在 L1/L2 同时 miss 时并发打爆 DB。
         // 跨 pod 的 cache stampede 仍可通过较长 Redis TTL + TTL jitter 缓解；真正超热点可再引入 Redis mutex。
+        // 如果没有这把本地 per-key lock，同一个 statement/card 热点 miss 会让几十个线程同时回源 MySQL。
         Object lock = localLocks.computeIfAbsent(key, ignored -> new Object());
         try {
             synchronized (lock) {
@@ -134,6 +135,7 @@ final class TwoLevelSnapshotCache<K, V> implements SnapshotCache<K, V> {
             );
             return Optional.empty();
         } catch (RuntimeException exception) {
+            // Redis 只是性能层；如果这里把异常抛给业务 GET，就会让 cache 故障扩大成 API 故障。
             log.warn(
                     "Redis read failed for snapshot cache {} key {}; falling back to DB",
                     cacheName,
@@ -159,6 +161,7 @@ final class TwoLevelSnapshotCache<K, V> implements SnapshotCache<K, V> {
                     exception
             );
         } catch (RuntimeException exception) {
+            // 写 L2 失败不能影响本次 response；否则缓存系统会反过来决定业务可用性。
             log.warn(
                     "Redis write failed for snapshot cache {} key {}; local cache still holds value",
                     cacheName,

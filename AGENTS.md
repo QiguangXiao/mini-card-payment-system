@@ -84,6 +84,10 @@ where they do not improve clarity.
 - When adding a defensive check for race conditions, deadlocks, duplicate
   delivery, invalid state transitions, or runtime exceptions, add a Chinese
   explanatory comment that says what bug could happen without the check.
+- When code or documentation explains a non-obvious extra step, guard, lease,
+  retry, cache invalidation, idempotency claim, or lock ordering rule, prefer a
+  counterfactual explanation: briefly say what would go wrong if that step were
+  removed.
 - When a feature changes the main business flow, update
   `docs/implementation-walkthrough-cn.md` with request path, key classes,
   important database changes, and interview talking points.
@@ -109,7 +113,9 @@ where they do not improve clarity.
 - Prefer `BigDecimal` when decimal arithmetic and currency-scale semantics need
   to be explicit.
 - Document and explain the monetary representation chosen for each domain model.
-- Consider caching trade-offs for high-traffic discussion,
+- Consider caching trade-offs for high-traffic discussion, while keeping
+  Redis/cache/distributed-lock choices tied to a concrete consistency or
+  learning reason.
 - Consider failure recovery and partial-failure behavior before adding or
   changing distributed workflows.
 

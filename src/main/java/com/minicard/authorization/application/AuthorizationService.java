@@ -90,6 +90,7 @@ public class AuthorizationService {
 
         // claim() 是本事务第一笔写入：利用 idempotency_key 唯一索引让并发 retry 只有一个 winner。
         // loser 不会继续做额度预占(reserve credit)，而是在下面读取 winner 的结果。
+        // 如果没有这个 INSERT-first claim，同一个支付请求重试可能各自 reserve credit，造成 double hold。
         boolean claimed = authorizationRepository.claim(command.idempotencyKey(), pending);
         Authorization persisted = authorizationRepository
                 .findByIdempotencyKeyForUpdate(command.idempotencyKey())
@@ -111,6 +112,7 @@ public class AuthorizationService {
         if (persisted.status().isApproved()) {
             // DelayJob 和 APPROVED authorization 在同一事务提交：
             // 只要额度 hold 生效，就一定有一个未来释放额度的 durable plan。
+            // 如果省掉这一步，商户不 presentment 时 reservedAmount 会长期占住额度，形成 stale hold。
             expiryJobScheduler.schedule(persisted);
         }
         // Domain event 已在 approve()/decline() 状态转换时产生。
@@ -153,6 +155,7 @@ public class AuthorizationService {
 
         // riskAssessmentService.assess() 放在账户锁之前：风控可能有计算/外部调用成本，
         // 不应该让同账户的其他 authorization 在锁上白等。
+        // 如果先拿 account row lock 再等外部风控，慢调用会放大锁等待，热点账户容易排队超时。
         RiskDecision riskDecision = riskAssessmentService.assess(command.toRiskAssessmentRequest());
         if (!riskDecision.approved()) {
             authorization.decline(mapRiskFailure(riskDecision.declineReason()), now);
@@ -161,6 +164,7 @@ public class AuthorizationService {
 
         // findByIdForUpdate() 对 credit_accounts 做 SELECT ... FOR UPDATE。
         // 这是额度并发控制核心：同一账户的请求在这里串行检查 availableCredit 并更新 reservedAmount。
+        // 如果只普通 SELECT，两笔并发授权可能看到同一个 availableCredit，然后都批准，造成超额授权。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(card.creditAccountId())
                 .orElse(null);
