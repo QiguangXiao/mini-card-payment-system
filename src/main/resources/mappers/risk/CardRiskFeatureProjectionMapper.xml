@@ -9,6 +9,10 @@
       the same event from incrementing these counters twice after redelivery.
     -->
     <insert id="upsertDecision">
+        <!--
+          ON DUPLICATE KEY UPDATE 把 insert-or-increment 合成一条原子 SQL。
+          如果先 SELECT 再 UPDATE，并发 consumer/replay 会更容易丢计数。
+        -->
         INSERT INTO card_risk_features (
             card_id, authorization_count, approved_count, declined_count, last_decision_at
         ) VALUES (
@@ -24,6 +28,7 @@
                 + CASE WHEN #{status} = 'APPROVED' THEN 1 ELSE 0 END,
             declined_count = declined_count
                 + CASE WHEN #{status} = 'DECLINED' THEN 1 ELSE 0 END,
+            <!-- GREATEST 防止迟到事件把 last_decision_at 倒退。 -->
             last_decision_at = GREATEST(last_decision_at, #{decidedAt})
     </insert>
 

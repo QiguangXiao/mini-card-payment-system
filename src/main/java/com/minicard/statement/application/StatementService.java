@@ -151,6 +151,8 @@ public class StatementService {
     }
 
     private Money totalAmount(List<StatementTransaction> transactions) {
+        // getFirst() 是 Java 21 SequencedCollection API；前面已经保证 transactions 非空。
+        // 如果没有非空保护，这里会抛 NoSuchElementException，比金额计算错误更早暴露输入问题。
         Currency currency = transactions.getFirst().amount().currency();
         Money total = new Money(BigDecimal.ZERO, currency);
         for (StatementTransaction transaction : transactions) {
@@ -170,6 +172,8 @@ public class StatementService {
         }
         BigDecimal percentageAmount = totalAmount.amount()
                 .multiply(policyProperties.minimumPaymentRate())
+                // CEILING 对最低还款更保守：分以下的小数向上取整到 0.01，避免少收最低还款。
+                // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
                 .setScale(2, RoundingMode.CEILING);
         BigDecimal minimum = percentageAmount.max(floor);
         if (minimum.compareTo(totalAmount.amount()) > 0) {

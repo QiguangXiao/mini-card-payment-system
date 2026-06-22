@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestBody;
  *
  * <p>@FeignClient 是 Spring Cloud OpenFeign 的高级语法，运行时生成 HTTP client 代理。</p>
  */
+// @FeignClient 把 interface 变成运行时 HTTP client proxy。
+// 如果手写 RestTemplate/WebClient 散在 service 中，URL、DTO、错误处理会侵入 application layer。
 @FeignClient(name = "external-risk", url = "${risk.external.base-url}")
 public interface ExternalRiskClient {
 

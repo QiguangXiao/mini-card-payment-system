@@ -20,6 +20,8 @@ import org.springframework.stereotype.Component;
  * <p>它不直接发送 Kafka，也不提前 finalize。每个 worker 必须自己 publish + markPublished/markFailed。</p>
  */
 @Component
+// Outbox 发布器也用配置开关保护：开发或迁移时可以只写 Outbox row，不实际发 Kafka。
+// 如果没有开关，启动应用就会自动消费 backlog，排查数据时更难控制副作用。
 @ConditionalOnProperty(
         prefix = "outbox.publisher",
         name = "enabled",

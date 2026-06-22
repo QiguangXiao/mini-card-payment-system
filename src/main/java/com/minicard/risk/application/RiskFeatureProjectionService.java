@@ -28,6 +28,7 @@ public class RiskFeatureProjectionService {
 
     @Transactional
     public void project(ProjectRiskFeatureCommand command) {
+        // CONSUMER_NAME 是 projection 的持久消费身份；改名会让历史 event 被当成新消费者重新累计。
         // Risk projection 是 eventually consistent，可重放但不能重复累计同一 event。
         // 如果没有 Inbox，Kafka redelivery 会把同一张卡的风险计数重复推进，导致后续误拒绝。
         if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), Instant.now(clock))) {

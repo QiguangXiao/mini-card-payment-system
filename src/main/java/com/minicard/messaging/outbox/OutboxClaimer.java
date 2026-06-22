@@ -33,6 +33,8 @@ public class OutboxClaimer {
     /**
      * 领取可发布事件并写入 PROCESSING lease。
      */
+    // claim 必须是一个短事务：只锁定、改 PROCESSING lease、提交。
+    // 如果把 Kafka publish 也放进这个事务，broker latency 会放大 MySQL row lock 时间。
     @Transactional
     public List<OutboxEvent> claimPublishableEvents() {
         Instant now = Instant.now(clock);

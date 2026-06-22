@@ -27,6 +27,7 @@ public class TransactionOperationsConfiguration {
             PlatformTransactionManager transactionManager
     ) {
         // TransactionTemplate 适合 scheduler/worker 这种需要在一个方法里显式开多个事务的场景。
+        // 这也绕开了 Spring self-invocation 陷阱：同一个对象内部调用 @Transactional 方法不会经过 proxy。
         return new TransactionTemplate(transactionManager);
     }
 }

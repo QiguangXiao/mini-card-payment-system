@@ -17,6 +17,9 @@ import lombok.experimental.Accessors;
  * <p>它由 integration event 创建，但 Kafka 不属于领域模型。
  * 这样 delivery 规则可以被 Kafka、admin retry endpoint 或 scheduler 复用。</p>
  */
+// Lombok @Getter 只生成 getter，不生成 setter；domain 状态仍只能通过 markSent/recordDeliveryFailure 改变。
+// @Accessors(fluent = true) 让调用方使用 notification.status()，保持和 Java record/domain 风格一致。
+// 如果用 @Data，会额外生成 setter 和 equals/hashCode，容易绕过 delivery lifecycle。
 @Getter
 @Accessors(fluent = true)
 public class Notification {

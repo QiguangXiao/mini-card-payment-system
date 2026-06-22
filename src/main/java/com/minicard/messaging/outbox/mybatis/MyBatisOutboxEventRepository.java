@@ -33,6 +33,7 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
         // mapper 使用 FOR UPDATE SKIP LOCKED，支持多个 publisher 实例并行领取不同事件。
         return mapper.findPublishableBatchForUpdate(now, limit)
                 .stream()
+                // Stream mapping 在 repository adapter 内完成；service/worker 不接触 OutboxEventRow。
                 .map(this::toDomain)
                 .toList();
     }

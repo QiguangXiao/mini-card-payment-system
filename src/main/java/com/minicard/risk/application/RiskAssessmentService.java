@@ -44,6 +44,8 @@ public class RiskAssessmentService {
         this.highRiskAmountThresholds = properties.local().highRiskAmountThresholds()
                 .entrySet()
                 .stream()
+                // toUnmodifiableMap 让配置转换结果不可变，避免运行中被测试或其他代码误改。
+                // 如果保留可变 map，风控阈值会变成隐藏的全局状态，排查结果不稳定。
                 .collect(Collectors.toUnmodifiableMap(
                         entry -> Currency.getInstance(entry.getKey()),
                         entry -> new Money(entry.getValue(), Currency.getInstance(entry.getKey()))

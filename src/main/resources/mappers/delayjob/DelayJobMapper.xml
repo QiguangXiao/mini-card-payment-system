@@ -52,6 +52,7 @@
         SELECT <include refid="delayJobColumns"/>
         FROM delay_jobs
         WHERE status = 'PENDING'
+          <!-- XML 里 <= 必须写成 &lt;=；否则 mapper 文件解析失败，不是 SQL 执行失败。 -->
           AND next_attempt_at &lt;= #{now}
         ORDER BY next_attempt_at, created_at, id
         LIMIT #{limit}
@@ -66,6 +67,7 @@
         SELECT <include refid="delayJobColumns"/>
         FROM delay_jobs
         WHERE status = 'PROCESSING'
+          <!-- PROCESSING 状态下 next_attempt_at 代表 lease deadline，不再代表首次执行时间。 -->
           AND next_attempt_at &lt;= #{now}
         ORDER BY next_attempt_at, created_at, id
         LIMIT #{limit}

@@ -24,7 +24,9 @@ import org.springframework.stereotype.Component;
 public class SnapshotCacheFactory {
 
     private final SnapshotCacheProperties properties;
+    // StringRedisTemplate 表达“Redis value 是 String JSON”，避免默认 Java serialization 生成不可读二进制。
     private final StringRedisTemplate redisTemplate;
+    // 复用 Spring Boot 管理的 ObjectMapper，Java time/record 等模块配置与 MVC/Kafka JSON 保持一致。
     private final ObjectMapper objectMapper;
 
     public <K, V> SnapshotCache<K, V> create(
@@ -38,8 +40,10 @@ public class SnapshotCacheFactory {
 
         SnapshotCacheProperties.CacheSpec spec = properties.cache(cacheName);
         Cache<K, V> localCache = Caffeine.newBuilder()
+                // Caffeine 是 per-JVM L1；maximumSize 防止热点 key 无限增长把应用内存吃满。
                 .maximumSize(spec.maximumSize())
                 .expireAfterWrite(spec.localTtl())
+                // recordStats 方便之后接 Actuator/Micrometer 观察 hit/miss，不需要改业务代码。
                 .recordStats()
                 .build();
         return new TwoLevelSnapshotCache<>(

@@ -12,6 +12,8 @@ import org.springframework.context.annotation.Configuration;
  * オーソリ設定(オーソリせってい)。</p>
  */
 @Configuration
+// @EnableConfigurationProperties 会注册 AuthorizationPolicyProperties bean。
+// 如果只在 record 上写 @ConfigurationProperties 但没有启用绑定，AuthorizationService 启动时会找不到配置 bean。
 @EnableConfigurationProperties(AuthorizationPolicyProperties.class)
 public class AuthorizationPolicyConfiguration {
 }

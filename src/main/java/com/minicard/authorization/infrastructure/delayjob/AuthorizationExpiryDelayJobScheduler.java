@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobScheduler implements AuthorizationExpiryJobScheduler {
 
+    // scheduler 和 handler 共享同一个 aggregateType 字符串 contract。
+    // 如果这里写 Authorization 但 handler 期待 CardTransaction，job 会被正确拒绝而不是误执行。
     private static final String AGGREGATE_TYPE = "Authorization";
 
     private final DelayJobRepository delayJobRepository;

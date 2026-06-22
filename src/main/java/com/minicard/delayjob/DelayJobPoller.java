@@ -21,6 +21,8 @@ import org.springframework.stereotype.Component;
  * 业务处理和 DONE/FAILED finalize 都在 DelayJobWorker 内完成。</p>
  */
 @Component
+// @ConditionalOnProperty 让本地/测试可以关闭后台扫描。
+// 如果没有这个开关，集成测试或临时启动应用时可能意外消费真实 due jobs。
 @ConditionalOnProperty(
         prefix = "delay-jobs.scheduler",
         name = "enabled",
@@ -41,6 +43,7 @@ public class DelayJobPoller {
             DelayJobWorker worker,
             @Qualifier("delayJobWorkerExecutor") TaskExecutor delayJobWorkerExecutor
     ) {
+        // @Qualifier 指定业务 worker pool。省掉后，多个 TaskExecutor bean 会导致启动歧义或注入错误线程池。
         this.claimer = claimer;
         this.worker = worker;
         this.delayJobWorkerExecutor = delayJobWorkerExecutor;
@@ -54,6 +57,8 @@ public class DelayJobPoller {
             scheduler = "delayJobTaskScheduler"
     )
     public void pollDueJobs() {
+        // scheduler 指向专用 ThreadPoolTaskScheduler。
+        // 如果不指定，多个 @Scheduled 任务会共享默认调度线程，慢任务更容易互相拖住。
         List<DelayJob> jobs = claimer.claimDueJobs();
         for (DelayJob job : jobs) {
             try {

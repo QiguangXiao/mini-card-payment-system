@@ -34,6 +34,8 @@ public class AuthorizationNotificationListener {
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
     public void onAuthorizationEvent(ConsumerRecord<String, String> record) {
+        // @KafkaListener 的 groupId 决定“哪一组消费者共享进度”；containerFactory 决定 retry/DLT 策略。
+        // 如果所有 bounded context 共用一个 group，Notification 可能抢走 Risk/Ledger 应该处理的消息。
         // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
         // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
         IntegrationEvent event = eventReader.read(record);

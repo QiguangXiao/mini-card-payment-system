@@ -52,6 +52,8 @@ public class AutoRepaymentService {
         }
 
         Money debitAmount = statement.remainingAmount();
+        // BankDebitRequest 是 application 层 typed command，不把 Statement aggregate 直接传给 gateway。
+        // 如果 gateway 依赖整个 Statement，外部 adapter 会被迫了解账单内部状态。
         BankDebitResult debitResult = bankDebitGateway.debit(new BankDebitRequest(
                 statement.id(),
                 statement.creditAccountId(),

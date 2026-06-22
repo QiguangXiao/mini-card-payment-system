@@ -13,6 +13,8 @@ import lombok.experimental.Accessors;
  * <p>Outbox delivery 是 at-least-once：Kafka ack 后、MySQL commit 前宕机可能导致重复发布。
  * 所以后续 consumer 必须用 eventId 去重(deduplicate)。</p>
  */
+// 这里只用 Lombok getter，不用 setter：Outbox 状态只能通过 markProcessing/markPublished/markFailed 转换。
+// fluent getter 让 event.status() 贴近 record 风格，避免 JavaBean getter 噪音淹没状态机代码。
 @Getter
 @Accessors(fluent = true)
 public final class OutboxEvent {
@@ -150,6 +152,7 @@ public final class OutboxEvent {
 
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         attempts++;
+        // lastError 长度先在 domain object 截断，避免 DB varchar 长度异常覆盖掉真正的发布失败原因。
         lastError = truncate(requireText(error, "error"));
         if (attempts >= maxAttempts) {
             // DEAD event 停止自动 retry，避免 poison message 无限重试并掩盖真实故障。
@@ -159,6 +162,7 @@ public final class OutboxEvent {
         }
 
         // exponential backoff 降低 Kafka outage 时的压力；上限避免恢复后事件等待太久。
+        // 1L << n 是 Java 位移写法，等价于 2^n；这里用 Math.min 限制指数，避免 attempts 很大时溢出。
         long delaySeconds = Math.min(
                 1L << Math.min(attempts - 1, 6),
                 MAX_RETRY_DELAY_SECONDS

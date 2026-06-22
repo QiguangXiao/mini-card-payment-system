@@ -132,9 +132,12 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
     }
 
     private ObjectNode payloadBase(UUID authorizationId, String cardId, Money requestedAmount) {
+        // ObjectNode 手工写 event contract 字段，避免直接序列化 domain event 导致内部字段名变成外部契约。
+        // 如果把 domain object 直接丢给 Jackson，以后 domain 重构字段名会意外破坏 Kafka 消息格式。
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("authorizationId", authorizationId.toString());
         payload.put("cardId", cardId);
+        // 金额写成 plain string，consumer 再用 BigDecimal(String) 解析，避免 JSON number/double 精度歧义。
         payload.put("amount", requestedAmount.amount().toPlainString());
         payload.put("currency", requestedAmount.currency().getCurrencyCode());
         return payload;

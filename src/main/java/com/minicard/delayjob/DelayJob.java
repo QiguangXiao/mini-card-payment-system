@@ -13,6 +13,8 @@ import lombok.experimental.Accessors;
  * <p>它刻意和 OutboxEvent 保持相似：都是 database-backed work queue，都由 scheduler 轮询。
  * 区别是 Outbox 负责 publish message，DelayJob 负责 execute future business action。</p>
  */
+// DelayJob 是状态机对象，只生成 getter，不生成 setter。
+// 如果外部能直接 setStatus(DONE)，就会绕过 lease 校验、retry/backoff 和 lastError 记录。
 @Getter
 @Accessors(fluent = true)
 public final class DelayJob {
@@ -135,6 +137,7 @@ public final class DelayJob {
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         attempts++;
         updatedAt = Objects.requireNonNull(failedAt);
+        // 先截断再写 DB，避免 last_error 太长导致“记录失败原因”本身失败。
         lastError = truncate(requireText(error, "error"));
         if (attempts >= maxAttempts) {
             // DEAD 停止自动 retry，交给人工/运维判断是否需要 repair 或 replay。
@@ -145,6 +148,7 @@ public final class DelayJob {
 
         status = DelayJobStatus.PENDING;
         // retry policy 与 Outbox 对称：短 exponential backoff，并设置上限避免可恢复任务睡太久。
+        // 1L << n 表示 2^n；这里限制 n，避免 attempts 很大时位移溢出。
         long delaySeconds = Math.min(
                 1L << Math.min(attempts - 1, 6),
                 MAX_RETRY_DELAY_SECONDS

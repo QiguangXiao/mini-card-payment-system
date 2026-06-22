@@ -37,6 +37,7 @@ public class CardTransactionNotificationListener {
         // 如果把 authorization.posted 也当成交易通知，会把 issuer 内部 hold 生命周期误发给用户。
         IntegrationEvent event = eventReader.read(record);
         if (CARD_TRANSACTION_POSTED.equals(event.eventType())) {
+            // 先判断 eventType 再解析 payload；合法但无关的事件不应该因为缺字段进入 DLT。
             JsonNode payload = event.payload();
             service.request(new RequestNotificationCommand(
                     event.eventId(),

@@ -1,7 +1,10 @@
 spring:
   application:
+    # application name 会进入 Actuator/Micrometer tags，生产排查时用于区分服务。
     name: mini-card-payment-system
   datasource:
+    # ${ENV:default} 是 Spring Boot relaxed binding 的常见写法：
+    # 本地有默认值，CI/生产可用环境变量覆盖，不需要改代码或提交敏感配置。
     url: ${DB_URL:jdbc:mysql://localhost:3306/mini_card}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:rootpassword}
@@ -77,6 +80,8 @@ info:
     purpose: mini credit-card issuer backend for learning and interview practice
 
 mybatis:
+  # mapper-locations 把 XML SQL 与 mapper interface 连接起来。
+  # 如果路径配错，应用可能启动后第一次调用 repository 才暴露 "invalid bound statement"。
   mapper-locations: classpath:mappers/**/*.xml
 
 messaging:

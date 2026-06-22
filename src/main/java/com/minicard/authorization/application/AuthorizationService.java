@@ -37,6 +37,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>interview重点：这里是 transaction boundary。Controller 不做业务决策，domain aggregate
  * 不直接访问数据库，service 负责把多个 aggregate 和 repository 按正确顺序组合起来。</p>
  */
+// @Service 让 use case 成为 Spring bean，并把它标识为 application service。
+// 如果只是 new AuthorizationService(...)，@Transactional、依赖注入和统一配置都不会自动生效。
 @Service
 public class AuthorizationService {
 
@@ -59,6 +61,9 @@ public class AuthorizationService {
             AuthorizationExpiryJobScheduler expiryJobScheduler,
             Clock clock
     ) {
+        // 这里刻意手写 constructor，而不是 @RequiredArgsConstructor：
+        // 除了注入依赖，还要把 YAML 中的 currency string 预转换成 Currency/Money。
+        // 如果每次授权时再转换，配置错误会在运行中才暴露，也会把技术解析逻辑散进热路径。
         this.authorizationRepository = authorizationRepository;
         this.singleTransactionLimits = policyProperties.singleTransactionLimits()
                 .entrySet()
@@ -75,6 +80,8 @@ public class AuthorizationService {
         this.clock = clock;
     }
 
+    // @Transactional 通过 Spring proxy 生效，适合从 Controller 调用的 public use case。
+    // 如果把核心写路径拆成同类 private/self-invocation 方法再加注解，事务不会按预期打开。
     @Transactional
     public Authorization authorize(AuthorizationCommand command) {
         Instant now = Instant.now(clock);
@@ -121,6 +128,8 @@ public class AuthorizationService {
         return persisted;
     }
 
+    // readOnly=true 是给事务管理器和读者的信号：这里不应 flush 写入，也不应产生领域事件。
+    // 如果查询方法和写方法都混用默认事务，review 时更难看出哪条路径会改变状态。
     @Transactional(readOnly = true)
     public Authorization get(UUID id) {
         // 查询用例使用 readOnly transaction，表达这里不改变业务状态，也减少误写入风险。

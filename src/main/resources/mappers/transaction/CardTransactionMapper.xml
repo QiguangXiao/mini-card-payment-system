@@ -79,6 +79,10 @@
     </select>
 
     <update id="assignStatement">
+        <!--
+          <foreach> 在一条 SQL 中生成多组 CASE WHEN 和 IN 参数。
+          如果逐条 UPDATE，每笔交易都要一次 round trip；如果手写字符串拼接，又会回到 SQL injection 风险。
+        -->
         UPDATE card_transactions
         SET statement_id = CASE id
             <foreach collection="transactions" item="transaction">

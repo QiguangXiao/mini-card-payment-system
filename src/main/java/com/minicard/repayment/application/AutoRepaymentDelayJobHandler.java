@@ -48,6 +48,7 @@ public class AutoRepaymentDelayJobHandler implements DelayJobHandler {
             // 如果把任何 aggregateId 都当 statementId，错误 job 会在运行期变成难排查的数据错配。
             throw new IllegalArgumentException("AUTO_REPAYMENT job must target Statement aggregate");
         }
+        // UUID 解析在 handler 边界完成；格式错误说明 delay job contract 坏了，应进入失败路径。
         autoRepaymentService.debitStatement(UUID.fromString(job.aggregateId()));
     }
 }

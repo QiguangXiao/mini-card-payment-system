@@ -5,6 +5,10 @@
 <mapper namespace="com.minicard.messaging.inbox.mybatis.ConsumerInboxMapper">
 
     <insert id="insert">
+        <!--
+          这里不用 SELECT 再 INSERT，而是直接 INSERT 让 unique key 判定第一次消费。
+          MyBatis 返回 affected rows；DuplicateKeyException 在 repository adapter 中转成 false。
+        -->
         INSERT INTO consumer_inbox (consumer_name, event_id, processed_at)
         VALUES (#{consumerName}, #{eventId}, #{processedAt})
     </insert>

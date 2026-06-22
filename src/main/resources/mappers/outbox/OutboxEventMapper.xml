@@ -57,6 +57,7 @@
         SELECT <include refid="outboxColumns"/>
         FROM outbox_events
         WHERE status = 'PENDING'
+          <!-- XML 中不能直接写 <=，必须转义成 &lt;=；否则 mapper XML 本身解析失败。 -->
           AND next_attempt_at &lt;= #{now}
         ORDER BY created_at, id
         LIMIT #{limit}

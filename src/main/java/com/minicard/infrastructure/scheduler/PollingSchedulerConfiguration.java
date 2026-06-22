@@ -18,7 +18,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * DelayJob 的业务 worker executor 放在 infrastructure.async，避免 poller pool 和 worker pool 混在一起。</p>
  */
 @Configuration
+// @EnableScheduling 打开 @Scheduled 扫描。没有它，poller/recoverer 方法会正常编译但永远不会被定时触发。
 @EnableScheduling
+// DelayJobProperties 在 scheduler 配置里启用，是因为 scheduler 开关/频率属于平台执行参数。
 @EnableConfigurationProperties(DelayJobProperties.class)
 public class PollingSchedulerConfiguration {
 
@@ -56,6 +58,8 @@ public class PollingSchedulerConfiguration {
      */
     private ThreadPoolTaskScheduler taskScheduler(String threadNamePrefix, int poolSize) {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        // threadNamePrefix 是生产排障习惯：日志、thread dump、Actuator metrics 都能直接看出是哪类任务。
+        // 如果全用默认线程名，Outbox 卡住和 DelayJob 卡住会混在一起。
         scheduler.setThreadNamePrefix(threadNamePrefix);
         scheduler.setPoolSize(poolSize);
         scheduler.setWaitForTasksToCompleteOnShutdown(true);

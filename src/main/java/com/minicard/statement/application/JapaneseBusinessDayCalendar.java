@@ -49,6 +49,8 @@ public class JapaneseBusinessDayCalendar implements BusinessDayCalendar {
      * business calendar rule，不应该散落在 StatementBatchService 里。</p>
      */
     private Set<LocalDate> baseNationalHolidays(int year) {
+        // TreeSet 让日期天然排序；后续查阅日志/调试 holiday set 时输出顺序稳定。
+        // 如果用 HashSet，功能能跑，但排查时顺序随机，不利于学习和 snapshot-style 断言。
         Set<LocalDate> holidays = new TreeSet<>();
         holidays.add(LocalDate.of(year, Month.JANUARY, 1));
         holidays.add(nthMonday(year, Month.JANUARY, 2));
@@ -75,6 +77,7 @@ public class JapaneseBusinessDayCalendar implements BusinessDayCalendar {
      * <p>如果国民の祝日落在周日，则之后第一个非祝日也休息；使用 Set.copyOf 避免遍历时修改集合。</p>
      */
     private void addSubstituteHolidays(Set<LocalDate> holidays) {
+        // Set.copyOf 创建遍历快照，避免遍历 holidays 时又 holidays.add(...) 触发 ConcurrentModificationException。
         for (LocalDate holiday : Set.copyOf(holidays)) {
             if (holiday.getDayOfWeek() != DayOfWeek.SUNDAY) {
                 continue;

@@ -35,6 +35,7 @@ public class RepaymentNotificationListener {
     public void onRepaymentEvent(ConsumerRecord<String, String> record) {
         IntegrationEvent event = eventReader.read(record);
         if (!REPAYMENT_RECEIVED.equals(event.eventType())) {
+            // 同 topic 未来可能出现 repayment.failed 等事件；不关心时跳过，不进入 retry/DLT。
             return;
         }
         JsonNode payload = event.payload();

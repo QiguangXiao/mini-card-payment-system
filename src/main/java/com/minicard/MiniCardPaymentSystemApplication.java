@@ -9,7 +9,11 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
  *
  * <p>真正的业务结构从各 bounded context package 开始；这个类只负责启动应用和组件扫描。</p>
  */
+// @SpringBootApplication 会触发 component scan、auto configuration 和 configuration properties 支持。
+// 如果这里只写一个普通 main 方法，Controller/Service/Repository/@Bean 都不会进入 Spring container。
 @SpringBootApplication
+// @EnableFeignClients 告诉 Spring Cloud OpenFeign 扫描 @FeignClient 接口并生成 HTTP client 代理。
+// 如果省掉它，ExternalRiskClient 只是普通 interface，Risk adapter 启动时会因为找不到 bean 失败。
 @EnableFeignClients
 public class MiniCardPaymentSystemApplication {
 

@@ -6,6 +6,10 @@
 
     <resultMap id="authorizationRowMap"
                type="com.minicard.authorization.infrastructure.mybatis.AuthorizationRow">
+        <!--
+          constructor mapping 直接创建 immutable record。若改成 setter-based POJO，
+          row DTO 会变成可变对象，mapping 后还可能被意外修改。
+        -->
         <constructor>
             <arg column="id" javaType="java.lang.String"/>
             <arg column="request_fingerprint" javaType="java.lang.String"/>
@@ -30,6 +34,10 @@
     <select id="findById" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
         FROM authorizations
+        <!--
+          #{id} 是 bind parameter，会走 PreparedStatement。
+          如果为了拼 SQL 改用 ${id}，用户输入会直接进入 SQL 字符串，产生 SQL injection 风险。
+        -->
         WHERE id = #{id}
     </select>
 

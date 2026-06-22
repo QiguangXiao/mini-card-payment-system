@@ -72,12 +72,15 @@ public class CardTransactionOutboxAdapter implements CardTransactionDomainEventP
 
     private JsonNode payload(CardTransactionDomainEvent event) {
         if (event instanceof CardTransactionPostedDomainEvent posted) {
+            // 手写 ObjectNode 是为了固定 Kafka contract；不要直接序列化 domain event class。
+            // 否则 Java 字段重命名会变成外部消息格式变更。
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("cardTransactionId", posted.cardTransactionId().toString());
             payload.put("networkTransactionId", posted.networkTransactionId());
             payload.put("authorizationId", posted.authorizationId().toString());
             payload.put("cardId", posted.cardId());
             payload.put("creditAccountId", posted.creditAccountId().toString());
+            // 金额用 plain string，consumer 用 BigDecimal(String) 解析，避免 JSON number/double 精度问题。
             payload.put("amount", posted.amount().amount().toPlainString());
             payload.put("currency", posted.amount().currency().getCurrencyCode());
             payload.put("postedAt", posted.occurredAt().toString());

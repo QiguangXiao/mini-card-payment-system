@@ -47,8 +47,10 @@ public class CardTransactionLedgerListener {
                 event.eventId(),
                 UUID.fromString(eventReader.requiredText(payload, "cardTransactionId")),
                 UUID.fromString(eventReader.requiredText(payload, "creditAccountId")),
+                // 金额从 JSON text 构造 BigDecimal，避免 asDouble() 这类二进制浮点转换丢精度。
                 new BigDecimal(eventReader.requiredText(payload, "amount")),
                 Currency.getInstance(eventReader.requiredText(payload, "currency")),
+                // 时间和 UUID 在 adapter 边界解析；解析失败会让 listener 失败并交给 Kafka retry/DLT。
                 Instant.parse(eventReader.requiredText(payload, "postedAt"))
         ));
     }

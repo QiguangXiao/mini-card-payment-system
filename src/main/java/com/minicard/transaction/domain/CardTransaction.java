@@ -24,6 +24,8 @@ import lombok.experimental.Accessors;
  * 一笔消费入账后，后续 refund/reversal/dispute 会继续围绕这条交易生命周期展开。
  * 它也不是 ledger entry；double-entry ledger 可以在后续阶段基于这个业务事实再补。</p>
  */
+// CardTransaction 有生命周期行为，所以只用 Lombok getter，不生成 setter。
+// 如果用 @Data，外部代码可以直接改 statementId/status，绕过 markPosted/assignToStatement 的保护。
 @Getter
 @Accessors(fluent = true)
 public final class CardTransaction {
@@ -172,6 +174,7 @@ public final class CardTransaction {
     }
 
     public Optional<UUID> statementId() {
+        // Domain 返回 Optional 表达“未出账时没有 statementId”；API DTO 再把它转成 nullable JSON 字段。
         return Optional.ofNullable(statementId);
     }
 

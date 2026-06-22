@@ -290,6 +290,8 @@ public final class Authorization {
     }
 
     public Optional<AuthorizationDeclineReason> declineReason() {
+        // Optional 用在返回值上表达“可能没有”，强迫调用方显式处理。
+        // 如果直接返回 nullable enum，调用方很容易漏判，在 approved/pending 状态上触发 NPE。
         return Optional.ofNullable(declineReason);
     }
 

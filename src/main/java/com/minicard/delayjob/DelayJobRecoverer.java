@@ -45,6 +45,7 @@ public class DelayJobRecoverer {
             fixedDelayString = "${delay-jobs.scheduler.recovery-fixed-delay-ms:5000}",
             scheduler = "delayJobTaskScheduler"
     )
+    // recover 扫描和状态更新在一个事务里完成，确保 FOR UPDATE SKIP LOCKED 的结果不会被别的实例同时改写。
     @Transactional
     public void recoverStuckJobs() {
         Instant now = Instant.now(clock);

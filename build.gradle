@@ -1,6 +1,10 @@
 plugins {
+    // Spring Boot plugin 负责可执行 jar、bootRun、test classpath 等 Boot 约定。
+    // 如果只用 java plugin，依赖版本和打包行为都要手工维护。
     id 'java'
     id 'org.springframework.boot' version '3.5.14'
+    // dependency-management 让 Spring Cloud/Resilience4j BOM 可以统一管理传递依赖版本。
+    // 没有 BOM 时，Kafka/Feign/Boot 组合容易出现二进制不兼容。
     id 'io.spring.dependency-management' version '1.1.7'
 }
 
@@ -9,6 +13,7 @@ version = '0.0.1-SNAPSHOT'
 
 java {
     toolchain {
+        // toolchain 固定编译 JDK 版本，避免本机装了多个 JDK 时生成和运行环境不一致。
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
@@ -23,18 +28,27 @@ ext {
 }
 
 dependencies {
+    // web starter 提供 Spring MVC、Tomcat 和 Jackson HTTP JSON 支持。
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // JDBC starter 提供 DataSource、transaction manager 和 JdbcTemplate 基础设施。
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    // validation starter 提供 Jakarta Bean Validation，让 @Valid/@NotBlank 等注解在 API 边界生效。
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // AOP starter 是 @CircuitBreaker 等 proxy-based annotation 的运行基础。
     implementation 'org.springframework.boot:spring-boot-starter-aop'
+    // Redis starter 提供 StringRedisTemplate，用于 L2 snapshot cache。
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // Liquibase 管理 schema 版本；如果只靠 schema.sql，持久化 volume 上的旧表不会自动迁移。
     implementation 'org.liquibase:liquibase-core'
     implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.4'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
     implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    // Actuator 提供 health/metrics/info，业务 controller 不需要承担 JVM/依赖诊断职责。
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // Caffeine 是 in-process L1 cache；Redis 是跨实例 L2 cache，二者职责不同。
     implementation 'com.github.ben-manes.caffeine:caffeine'
+    // Lombok 只参与编译期生成代码，运行时不需要打进 artifact。
     compileOnly 'org.projectlombok:lombok'
     runtimeOnly 'com.mysql:mysql-connector-j'
 

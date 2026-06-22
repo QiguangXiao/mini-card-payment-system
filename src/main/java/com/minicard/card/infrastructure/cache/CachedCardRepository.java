@@ -24,6 +24,8 @@ import org.springframework.stereotype.Repository;
  * 以及它指向哪个 credit account。缓存它可以减少高频 authorization/posting 对 cards 表的重复读取；
  * 但它仍然会影响授权决策，所以 TTL 比 statement read model 更短，并且不做 negative cache。</p>
  */
+// @Primary 让业务注入 CardRepository 时默认拿到 cache decorator，而不是绕过缓存直连 MyBatis。
+// 如果省掉它，Spring 会看到两个 CardRepository bean，启动时出现 ambiguous dependency。
 @Primary
 @Repository
 public class CachedCardRepository implements CardRepository, CardSnapshotCacheInvalidator {
@@ -37,6 +39,7 @@ public class CachedCardRepository implements CardRepository, CardSnapshotCacheIn
             @Qualifier("cardSnapshotCache") SnapshotCache<String, CardSnapshot> cardSnapshotCache,
             TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor
     ) {
+        // @Qualifier 明确选择 card-snapshot-v1；否则 statementSnapshotCache 也是 SnapshotCache，会造成注入歧义。
         this.delegate = delegate;
         this.cardSnapshotCache = cardSnapshotCache;
         this.snapshotCacheEvictor = snapshotCacheEvictor;

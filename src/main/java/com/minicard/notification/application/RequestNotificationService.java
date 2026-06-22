@@ -35,6 +35,8 @@ public class RequestNotificationService {
     @Transactional
     public void request(RequestNotificationCommand command) {
         Instant now = Instant.now(clock);
+        // CONSUMER_NAME 是逻辑消费者身份，不是 Java class name。
+        // 如果重构类名就顺手改它，Inbox 会认为是新消费者，历史 event 会被重新处理。
         // Inbox claim 是 consumer-side idempotency 的第一道门：
         // Kafka at-least-once 可能重复投递，同一个 eventId 对 notification-v1 只处理一次。
         // 如果没有 Inbox，Outbox 重发或 Kafka offset 重放会创建多条相同客户通知。

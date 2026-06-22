@@ -37,6 +37,8 @@ public class RecordLedgerEntryService {
     @Transactional
     public void record(RecordLedgerEntryCommand command) {
         Instant now = Instant.now(clock);
+        // CONSUMER_NAME 必须稳定：它是 consumer_inbox 唯一键的一部分。
+        // 如果每次重命名 class/package 都改变 consumer name，同一 Kafka event 会被当成新消费者重新执行。
         // Inbox claim 是第一道 consumer-side idempotency：
         // Kafka/Outbox 是 at-least-once，同一个 eventId 可能被重复投递给 ledger-v1。
         // 如果没有这道门，consumer 重启后 offset 回放会把同一笔消费/还款记两次 ledger entry。

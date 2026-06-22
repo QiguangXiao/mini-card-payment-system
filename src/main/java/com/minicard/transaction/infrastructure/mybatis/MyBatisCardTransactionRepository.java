@@ -67,6 +67,7 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
     @Override
     public void assignStatement(List<CardTransaction> transactions) {
         if (transactions.isEmpty()) {
+            // 空列表直接返回，避免 MyBatis <foreach> 生成非法的 IN () SQL。
             return;
         }
         // 批量只写 statement assignment columns；交易金额、授权引用和 postedAt 都是历史事实。

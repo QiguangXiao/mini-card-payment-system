@@ -35,6 +35,7 @@ public class StatementNotificationListener {
     public void onStatementEvent(ConsumerRecord<String, String> record) {
         IntegrationEvent event = eventReader.read(record);
         if (!STATEMENT_CLOSED.equals(event.eventType())) {
+            // 不关心的合法事件直接跳过；不要先读 statementId，否则会把 schema 正常不同的事件误判为坏消息。
             return;
         }
         JsonNode payload = event.payload();

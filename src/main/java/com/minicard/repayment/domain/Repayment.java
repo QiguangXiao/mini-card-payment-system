@@ -23,6 +23,8 @@ import lombok.experimental.Accessors;
  * <p>它不负责直接修改 statement/account；这些跨 aggregate 协作由 RepaymentService 在一个
  * transaction boundary 内完成。Repayment 自己负责记录“这笔还款已收到”这个业务事实。</p>
  */
+// Repayment 只开放 getter；状态必须通过 markReceived 推进，避免外部直接 setStatus(RECEIVED)。
+// fluent getter 保持 repayment.status() 这种 record-like 风格，读起来比 getStatus() 更贴近现有 domain。
 @Getter
 @Accessors(fluent = true)
 public final class Repayment {
@@ -143,6 +145,7 @@ public final class Repayment {
     }
 
     public Optional<UUID> creditAccountId() {
+        // PENDING 阶段还没有 account id；用 Optional 让调用方显式处理这个生命周期差异。
         return Optional.ofNullable(creditAccountId);
     }
 

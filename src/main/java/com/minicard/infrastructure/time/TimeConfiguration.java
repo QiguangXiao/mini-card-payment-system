@@ -24,6 +24,7 @@ public class TimeConfiguration {
     @Bean
     public Clock clock() {
         // Domain timestamp 使用 UTC，避免 persistence 和分布式处理依赖本地 timezone。
+        // 如果业务代码直接 Instant.now()，单元测试无法固定时间，跨时区日志/数据也更难对齐。
         return Clock.systemUTC();
     }
 }

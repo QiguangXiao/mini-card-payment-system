@@ -28,6 +28,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>interview重点：金融 API 不应该把 Java stack trace 或数据库错误直接暴露给客户端；
  * 客户端需要稳定 code，服务端日志保留细节用于排查。</p>
  */
+// @RestControllerAdvice 会拦截所有 controller 的异常并自动写 JSON body。
+// 如果每个 controller 自己 try/catch，错误码会分散，也容易漏掉 validation/绑定异常。
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
@@ -89,6 +91,8 @@ public class GlobalExceptionHandler {
             ServletRequestBindingException.class
     })
     public ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
+        // MethodArgumentNotValidException 来自 @Valid request body，
+        // ConstraintViolationException 来自 @Validated header/path variable，二者都属于 400。
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", exception.getMessage());
     }
 

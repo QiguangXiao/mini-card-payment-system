@@ -44,6 +44,8 @@ public class DelayJobWorker {
     ) {
         this.delayJobRepository = delayJobRepository;
         this.properties = properties;
+        // Spring 会把所有 DelayJobHandler bean 注入成 List。这里启动时转成 EnumMap，
+        // 如果运行中每次用 stream 查找 handler，热路径会更啰嗦，也更难发现重复/缺失类型。
         this.handlers = handlersByType(handlers);
         this.clock = clock;
         this.transactionOperations = transactionOperations;

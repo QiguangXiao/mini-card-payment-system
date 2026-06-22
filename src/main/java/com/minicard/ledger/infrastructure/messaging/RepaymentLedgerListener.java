@@ -45,6 +45,7 @@ public class RepaymentLedgerListener {
                 event.eventId(),
                 UUID.fromString(eventReader.requiredText(payload, "repaymentId")),
                 UUID.fromString(eventReader.requiredText(payload, "creditAccountId")),
+                // repayment.amount 也从 text 转 BigDecimal；不要把 JSON number 转 double 后再转金额。
                 new BigDecimal(eventReader.requiredText(payload, "amount")),
                 Currency.getInstance(eventReader.requiredText(payload, "currency")),
                 Instant.parse(eventReader.requiredText(payload, "receivedAt"))

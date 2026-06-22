@@ -16,6 +16,8 @@ public record Card(
 ) {
 
     public Card {
+        // record compact constructor 会覆盖所有创建路径，包括 MyBatis adapter restore 和测试 fixture。
+        // 如果只在 API DTO 校验 cardId，缓存/DB 还原路径仍可能创建出空 id 的 Card。
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("card id must not be blank");
         }
@@ -26,6 +28,7 @@ public record Card(
     public CardAuthorizationResult checkAuthorizationEligibility() {
         // 先检查 Card lifecycle，再碰 credit account。
         // blocked/expired card 不应该占用账户 row lock 时间。
+        // switch expression 覆盖全部 enum；未来新增 CardStatus 时，编译器会提醒这里补规则。
         return switch (status) {
             case ACTIVE -> CardAuthorizationResult.allowed();
             case BLOCKED -> CardAuthorizationResult.rejected(

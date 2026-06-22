@@ -41,10 +41,12 @@ public record RepaymentResponse(
         return new RepaymentResponse(
                 repayment.id(),
                 repayment.statementId(),
+                // API response 用 null 表示“阶段上尚未产生”，而不是把 Java Optional 泄漏到 JSON contract。
                 repayment.creditAccountId().orElse(null),
                 repayment.amount().amount(),
                 repayment.amount().currency().getCurrencyCode(),
                 repayment.status().name(),
+                // Jackson 能序列化 Optional，但客户端契约会变奇怪；DTO 层显式拆成 nullable 字段更直观。
                 repayment.receivedAt().orElse(null),
                 repayment.createdAt()
         );

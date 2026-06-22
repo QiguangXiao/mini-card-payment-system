@@ -29,6 +29,8 @@ public class MyBatisStatementRepository implements StatementRepository {
     @Override
     public boolean insert(Statement statement) {
         try {
+            // 只把 statement 主表的 cycle unique conflict 转成 false。
+            // 这样 StatementService 可以把“同周期已出账”当成幂等结果处理。
             mapper.insertStatement(toRow(statement));
         } catch (DuplicateKeyException exception) {
             return false;
@@ -36,6 +38,7 @@ public class MyBatisStatementRepository implements StatementRepository {
         // 只有 statement 主表唯一键冲突才是 cycle-level idempotency。
         // statement_items 的唯一键冲突代表数据不一致，必须继续抛出并 rollback。
         for (StatementItem item : statement.items()) {
+            // item 插入失败不吞掉：主表已插入但 item 冲突说明数据损坏，应 rollback 整个 transaction。
             mapper.insertItem(toRow(item));
         }
         return true;

@@ -23,9 +23,12 @@ public class TransactionAwareSnapshotCacheEvictor {
         Objects.requireNonNull(cache, "snapshot cache must not be null");
         Objects.requireNonNull(key, "snapshot cache key must not be null");
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // 没有事务时只能立即 evict；例如某些手工维护或测试路径不需要 afterCommit hook。
             cache.evict(key);
             return;
         }
+        // TransactionSynchronization 是 Spring 事务的 callback API。
+        // 如果不用它而在写库前/事务中删除缓存，rollback 或旧 DB 回填都会制造 stale cache。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {

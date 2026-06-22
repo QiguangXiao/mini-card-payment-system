@@ -32,6 +32,7 @@ public class AuthorizationExpiryService {
     private final AuthorizationDomainEventPublisher eventPublisher;
     private final Clock clock;
 
+    // 每个 expiry job 独立开事务。这样一条坏 job 失败不会回滚同一轮 worker 里的其他 job。
     @Transactional
     public void expire(UUID authorizationId) {
         Instant now = Instant.now(clock);

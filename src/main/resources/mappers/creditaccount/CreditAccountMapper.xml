@@ -17,8 +17,8 @@
     </resultMap>
 
     <!--
-      The lock is held until AuthorizationService's transaction completes.
-      It serializes concurrent credit reservations for the same account.
+      FOR UPDATE 的锁会一直持有到 service transaction commit。
+      授权、入账、还款都通过这条 locking read 串行修改同一个账户余额。
     -->
     <select id="findByIdForUpdate" resultMap="creditAccountRowMap">
         SELECT id, credit_limit, reserved_amount, posted_balance, currency, status
@@ -28,6 +28,7 @@
     </select>
 
     <update id="update">
+        <!-- available_credit 不落库；这里只持久化 source fields，派生值由 domain 计算。 -->
         UPDATE credit_accounts
         SET reserved_amount = #{reservedAmount},
             posted_balance = #{postedBalance},

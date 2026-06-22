@@ -10,6 +10,8 @@ import org.apache.ibatis.annotations.Param;
  * row lock, balance update, 利用枠管理SQL(りようわくかんりSQL),
  * 行ロック(ぎょうロック)。</p>
  */
+// @Mapper 生成 MyBatis proxy；这个接口本身没有实现类。
+// @Param 名称要和 XML 的 #{accountId} 对齐，避免多参数扩展时依赖 param1/param2。
 @Mapper
 public interface CreditAccountMapper {
 

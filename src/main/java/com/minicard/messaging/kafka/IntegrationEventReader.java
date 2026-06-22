@@ -24,6 +24,8 @@ import org.springframework.stereotype.Component;
  * 具体 consumer 自己根据 eventType 读取 JsonNode payload，避免为每种消息创建 payload class。</p>
  */
 @Component
+// @RequiredArgsConstructor 只为 final fields 生成 constructor，适合无状态 infrastructure component。
+// 如果加 @Data，会额外生成 setter，让 ObjectMapper dependency 看起来可变，反而降低可读性。
 @RequiredArgsConstructor
 public class IntegrationEventReader {
 
@@ -36,6 +38,8 @@ public class IntegrationEventReader {
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {
             IntegrationEvent event = objectMapper.readValue(record.value(), IntegrationEvent.class);
+            // 集中 validate transport contract，consumer 就能专注业务字段。
+            // 如果每个 listener 自己解析/校验，contract failure 会变成不一致的异常和重试行为。
             validate(record, event);
             return event;
         } catch (JsonProcessingException exception) {

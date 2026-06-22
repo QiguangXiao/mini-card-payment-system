@@ -26,7 +26,9 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Controller 只把 HTTP header/body 转成 application command。
  * idempotency、row lock、statement/account state transition 和 Outbox 都在 Service/Domain。</p>
  */
+// @Validated 让 Idempotency-Key header 上的 @NotBlank/@Size 生效；这是 API boundary 的第一道保护。
 @Validated
+// @RestController 保证 RepaymentResponse record 被 Jackson 写成 JSON，而不是被当作 MVC view。
 @RestController
 @RequestMapping("/api/repayments")
 @RequiredArgsConstructor
@@ -39,6 +41,8 @@ public class RepaymentController {
             @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String idempotencyKey,
             @Valid @RequestBody ReceiveRepaymentRequest request
     ) {
+        // Currency.getInstance 放在 controller adapter：把 HTTP string contract 转成 application command 的 typed value。
+        // 如果 service 直接接收 currency string，业务层会重复处理格式错误和 JDK currency 校验。
         ReceiveRepaymentCommand command = new ReceiveRepaymentCommand(
                 idempotencyKey,
                 request.statementId(),

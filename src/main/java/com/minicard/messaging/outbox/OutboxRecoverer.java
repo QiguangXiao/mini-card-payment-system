@@ -42,6 +42,7 @@ public class OutboxRecoverer {
             fixedDelayString = "${outbox.publisher.recovery-fixed-delay-ms:5000}",
             scheduler = "outboxTaskScheduler"
     )
+    // recoverer 自己开事务批量锁住 stuck rows；不要复用 worker 的 finalize 事务，否则扫描和单条处理会混在一起。
     @Transactional
     public void recoverStuckEvents() {
         Instant now = Instant.now(clock);

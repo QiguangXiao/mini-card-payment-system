@@ -16,12 +16,15 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
  * <p>Scheduler 线程只负责 poll/claim；真正可能持有业务 row lock 的 delay job
  * 在这个 executor 中执行，避免定时触发线程被长业务动作占满。</p>
  */
+// @Configuration 让下面的 @Bean 方法被 Spring 管理，确保 executor 是 singleton 并参与生命周期关闭。
+// 如果业务代码自己 new ThreadPoolTaskExecutor，shutdown、命名和注入都会分散，排查线程问题更难。
 @Configuration
 public class WorkerExecutorConfiguration {
 
     /**
      * Outbox publish worker pool。
      */
+    // 显式 bean name 配合 @Qualifier 使用。没有名字时，多个 TaskExecutor 会让注入点变成 ambiguous bean。
     @Bean(name = "outboxWorkerExecutor")
     public ThreadPoolTaskExecutor outboxWorkerExecutor(
             OutboxProperties properties
@@ -42,6 +45,7 @@ public class WorkerExecutorConfiguration {
     /**
      * DelayJob business worker pool。
      */
+    // DelayJob 与 Outbox 使用不同 executor，避免一种机制的 backlog 占满另一种机制的线程。
     @Bean(name = "delayJobWorkerExecutor")
     public ThreadPoolTaskExecutor delayJobWorkerExecutor(
             DelayJobProperties properties

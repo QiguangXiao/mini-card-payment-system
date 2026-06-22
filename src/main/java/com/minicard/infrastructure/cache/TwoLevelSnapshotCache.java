@@ -177,6 +177,8 @@ final class TwoLevelSnapshotCache<K, V> implements SnapshotCache<K, V> {
             return spec.remoteTtl();
         }
         long jitterMillis = jitter.toMillis();
+        // ThreadLocalRandom 适合多线程热点路径，避免 shared Random 上的竞争。
+        // 如果所有 key 用完全相同 TTL，大批缓存会同秒过期，形成 cache avalanche。
         long extraMillis = ThreadLocalRandom.current().nextLong(jitterMillis + 1);
         return spec.remoteTtl().plusMillis(extraMillis);
     }

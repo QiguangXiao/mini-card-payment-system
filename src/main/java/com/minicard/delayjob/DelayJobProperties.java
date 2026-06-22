@@ -28,4 +28,16 @@ public record DelayJobProperties(
         /** worker queue 容量，满了会触发 TaskRejectedException 并回到 retry。 */
         int workerQueueCapacity
 ) {
+    public DelayJobProperties {
+        // 配置类也应该 fail fast。否则 fixedDelay=0 或 maxAttempts=0 会让 scheduler/worker 行为非常怪。
+        if (fixedDelayMs <= 0
+                || recoveryFixedDelayMs <= 0
+                || maxPerRun <= 0
+                || maxAttempts <= 0
+                || processingTimeoutSeconds <= 0
+                || workerPoolSize <= 0
+                || workerQueueCapacity < 0) {
+            throw new IllegalArgumentException("delay job scheduler properties must be positive");
+        }
+    }
 }

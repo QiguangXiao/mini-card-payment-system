@@ -19,6 +19,8 @@ import lombok.experimental.Accessors;
  * <p>interview重点：高并发授权不是靠 JVM synchronized，而是 service 先拿 DB row lock，
  * 再调用这个 aggregate 的 reserve/release 来保护额度 invariant。</p>
  */
+// 只生成 getter，不生成 setter；额度只能通过 reserve/release/postAuthorized/applyRepayment 变化。
+// 这类 aggregate 不适合 @Data，否则外部可以 setReservedAmount 绕过 invariant 和 row-lock 语义。
 @Getter
 @Accessors(fluent = true)
 public final class CreditAccount {
@@ -152,6 +154,7 @@ public final class CreditAccount {
     }
 
     private static Money zero(Currency currency) {
+        // zero() 保留 currency 语义；不要用裸 BigDecimal.ZERO 在 service 里到处拼 Money。
         return new Money(BigDecimal.ZERO, currency);
     }
 }

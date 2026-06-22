@@ -62,6 +62,8 @@ public class OutboxWorker {
     }
 
     private void markPublished(OutboxEvent claimedEvent) {
+        // finalize 使用 TransactionOperations，而不是在 publishClaimedEvent 外层包 @Transactional。
+        // 这样等待 Kafka ack 的时间不会占用 DB transaction，只在更新 delivery state 时短暂开事务。
         transactionOperations.executeWithoutResult(status -> {
             OutboxEvent event = lockCurrentLease(claimedEvent);
             if (event == null) {
@@ -83,6 +85,7 @@ public class OutboxWorker {
             String error,
             RuntimeException exception
     ) {
+        // 失败 finalize 也要独立事务提交；否则 publish exception 被抛出后，失败次数和 nextAttemptAt 不会落库。
         transactionOperations.executeWithoutResult(status -> {
             OutboxEvent event = lockCurrentLease(claimedEvent);
             if (event == null) {

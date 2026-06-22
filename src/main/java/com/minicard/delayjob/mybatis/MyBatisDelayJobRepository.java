@@ -41,6 +41,7 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
         // FOR UPDATE SKIP LOCKED 让多个 scheduler pod 可以横向扩展；这里只 claim PENDING。
         return mapper.findRunnableBatchForUpdate(now, limit)
                 .stream()
+                // mapper 返回 row DTO，repository adapter 负责转回 domain state object。
                 .map(this::toDomain)
                 .toList();
     }
@@ -84,6 +85,7 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     private DelayJob toDomain(DelayJobRow row) {
         return DelayJob.restore(
                 UUID.fromString(row.id()),
+                // String -> enum 的转换集中在 adapter；service/worker 不应该处理数据库字符串状态。
                 DelayJobType.valueOf(row.jobType()),
                 row.aggregateType(),
                 row.aggregateId(),

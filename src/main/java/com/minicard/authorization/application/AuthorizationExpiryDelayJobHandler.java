@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
  * 这样 scheduler 是通用机制，业务动作仍留在 authorization application layer。</p>
  */
 @Component
+// @RequiredArgsConstructor 适合这种纯 dispatch adapter；没有额外初始化逻辑，只需要注入业务 service。
 @RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
@@ -36,6 +37,7 @@ public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
             throw new IllegalArgumentException("AUTHORIZATION_EXPIRY job must target Authorization aggregate");
         }
         // DelayJob 只保存通用 aggregateId；handler 把它转换成业务用的 authorizationId。
+        // UUID.fromString 也属于 contract validation，格式坏的 job 会失败并进入 retry/DEAD。
         expiryService.expire(UUID.fromString(job.aggregateId()));
     }
 }

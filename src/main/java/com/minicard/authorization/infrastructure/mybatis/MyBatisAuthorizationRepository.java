@@ -19,6 +19,8 @@ import org.springframework.stereotype.Repository;
  * <p>interview重点：idempotency claim 和 SELECT ... FOR UPDATE 由数据库保证，
  * application service 只依赖 repository port，不依赖 MyBatis/JDBC 细节。</p>
  */
+// @Repository 语义上标识 persistence adapter，并让 Spring 做数据访问异常转换。
+// 如果把 mapper 直接暴露给 service，domain layer 会被 SQL row/字符串状态污染。
 @Repository
 @RequiredArgsConstructor
 public class MyBatisAuthorizationRepository implements AuthorizationRepository {

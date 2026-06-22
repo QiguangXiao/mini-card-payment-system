@@ -15,6 +15,8 @@ import java.util.Objects;
 public record Money(BigDecimal amount, Currency currency) {
 
     public Money {
+        // record compact constructor 是所有创建路径的入口，包含 Jackson/MyBatis 手工 mapping 和测试。
+        // 如果只在 controller 校验金额，scheduler 或 repository restore 仍可能构造出非法 Money。
         Objects.requireNonNull(amount, "amount must not be null");
         Objects.requireNonNull(currency, "currency must not be null");
         if (amount.signum() < 0) {
@@ -27,6 +29,7 @@ public record Money(BigDecimal amount, Currency currency) {
         }
 
         // 当前数据库模型支持两位小数；生产多币种系统应按 currency 定义 scale rule。
+        // setScale(2) 统一 BigDecimal equality/display；如果不归一化，1.0 和 1.00 在 equals 上并不相等。
         amount = amount.setScale(2);
     }
 

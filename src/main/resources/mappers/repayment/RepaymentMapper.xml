@@ -34,6 +34,7 @@
             #{idempotencyKey},
             #{requestFingerprint},
             #{statementId},
+            <!-- PENDING repayment 还没有 credit_account_id，nullable 参数要显式 jdbcType。 -->
             #{creditAccountId,jdbcType=CHAR},
             #{amount},
             #{currency},
@@ -45,6 +46,7 @@
     </insert>
 
     <select id="findByIdempotencyKeyForUpdate" resultMap="repaymentRowMap">
+        <!-- duplicate retry 会在这里等待 idempotency winner 完成，再读最终状态。 -->
         SELECT <include refid="repaymentColumns"/>
         FROM repayments
         WHERE idempotency_key = #{idempotencyKey}

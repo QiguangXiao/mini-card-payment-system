@@ -21,6 +21,8 @@ import org.springframework.util.backoff.FixedBackOff;
  * partition key 负责单个 aggregate 内有序，consumer concurrency 负责横向处理能力。</p>
  */
 @Configuration
+// Kafka topic 名、DLT 名都从配置绑定进来，避免 listener/publisher 写死环境差异。
+// 如果 topic string 散落在代码里，改版本或加命名空间时很容易漏改。
 @EnableConfigurationProperties(KafkaTopicsProperties.class)
 public class KafkaMessagingConfiguration {
 
@@ -144,6 +146,8 @@ public class KafkaMessagingConfiguration {
     ) {
         ConcurrentKafkaListenerContainerFactory<Object, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
+        // 先让 Spring Boot configurer 套用 application.yml 中的通用 consumer 配置，
+        // 再覆盖本项目需要的 DLT/error handler/concurrency。否则容易丢掉 ack-mode、serializer 等默认设置。
         configurer.configure(factory, consumerFactory);
 
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
@@ -160,6 +164,8 @@ public class KafkaMessagingConfiguration {
         errorHandler.addNotRetryableExceptions(EventContractException.class);
 
         factory.setCommonErrorHandler(errorHandler);
+        // concurrency 只提高同一 consumer group 内的并行度，不改变单 partition 内顺序。
+        // 如果盲目开很大但 partition 数不足，线程会空闲；如果不开，慢 consumer 会拖住整个 group。
         factory.setConcurrency(concurrency);
         return factory;
     }

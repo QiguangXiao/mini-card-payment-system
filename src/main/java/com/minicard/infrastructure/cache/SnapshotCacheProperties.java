@@ -25,6 +25,8 @@ public record SnapshotCacheProperties(
     private static final String DEFAULT_KEY_PREFIX = "mini-card";
 
     public SnapshotCacheProperties {
+        // record compact constructor 适合做配置默认值归一化。
+        // 如果让 null/blank 配置直接流入 cache factory，启动能过，但第一次读缓存时才会抛低层异常。
         if (keyPrefix == null || keyPrefix.isBlank()) {
             keyPrefix = DEFAULT_KEY_PREFIX;
         }
@@ -47,6 +49,8 @@ public record SnapshotCacheProperties(
         private static final long DEFAULT_MAXIMUM_SIZE = 1_000;
 
         public CacheSpec {
+            // Duration 由 Spring Boot 从 "30s"/"5m" 这类可读配置自动转换。
+            // 这里兜底无效值，避免运维误配 0s TTL 后缓存立刻失效或出现无限膨胀。
             if (localTtl == null || localTtl.isZero() || localTtl.isNegative()) {
                 localTtl = DEFAULT_LOCAL_TTL;
             }

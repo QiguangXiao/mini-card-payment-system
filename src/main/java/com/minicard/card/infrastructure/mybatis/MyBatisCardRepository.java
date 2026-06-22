@@ -27,6 +27,8 @@ public class MyBatisCardRepository implements CardRepository {
         return Optional.ofNullable(cardMapper.findById(cardId))
                 .map(row -> new Card(
                         row.id(),
+                        // String -> UUID、String -> enum 的转换留在 adapter，domain 不暴露数据库列表示。
+                        // 如果把 row 直接传到 service，业务层会开始依赖 persistence schema。
                         UUID.fromString(row.creditAccountId()),
                         CardStatus.valueOf(row.status())
                 ));

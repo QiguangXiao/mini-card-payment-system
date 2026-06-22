@@ -24,6 +24,8 @@ public class ExternalRiskGatewayAdapter implements ExternalRiskGateway {
     private final ExternalRiskClient externalRiskClient;
 
     @Override
+    // @CircuitBreaker 依赖 Spring AOP proxy。fallback signature 必须包含原参数和 Throwable。
+    // 如果没有断路器，外部风控慢/挂时会拖住授权请求，并把 DB lock 等待一起放大。
     @CircuitBreaker(name = "externalRisk", fallbackMethod = "fallback")
     public RiskDecision assess(RiskAssessmentRequest request) {
         // Feign client 调用模拟第三方 risk API；CircuitBreaker fallback 采用 fail-closed。

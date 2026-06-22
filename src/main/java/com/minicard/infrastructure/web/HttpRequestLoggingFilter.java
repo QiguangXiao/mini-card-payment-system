@@ -37,6 +37,8 @@ public class HttpRequestLoggingFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             FilterChain filterChain
     ) throws ServletException, IOException {
+        // OncePerRequestFilter 已处理 async/error dispatch 的重复执行问题。
+        // 如果直接实现 Filter，同一次请求的错误转发可能重复打 started/completed 日志。
         // 每个请求生成 correlation id；生产系统通常会优先复用入口网关传入的 id。
         String requestId = UUID.randomUUID().toString();
         // System.nanoTime 适合测 duration，不适合当业务时间戳。

@@ -30,6 +30,10 @@ caching for statement and card snapshots.
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
 ID-generation points, and Outbox/DelayJob reliability flow.
+See [Spring, Java, and Library Usage Notes](docs/spring-java-technical-learning-cn.md)
+for a technical walkthrough of annotations, constructor injection, validation,
+configuration binding, transactions, schedulers, MyBatis, Kafka, cache,
+Feign/Resilience4j, and Java language habits used in this project.
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
 See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,

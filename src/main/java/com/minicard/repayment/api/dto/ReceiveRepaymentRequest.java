@@ -16,7 +16,9 @@ import jakarta.validation.constraints.Pattern;
  */
 public record ReceiveRepaymentRequest(
         @NotNull UUID statementId,
+        // @Digits 对齐 DECIMAL(19,2)，比到 DB 层才发现 scale 错误更早、更清楚。
         @NotNull @DecimalMin(value = "0.01") @Digits(integer = 17, fraction = 2) BigDecimal amount,
+        // 这里只校验 ISO 4217 形状；真实币种是否被 JDK 支持由 Currency.getInstance 再判断。
         @NotBlank @Pattern(regexp = "[A-Z]{3}") String currency
 ) {
 }

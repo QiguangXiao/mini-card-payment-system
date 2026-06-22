@@ -10,6 +10,8 @@ import org.apache.ibatis.annotations.Param;
  * idempotency key, row lock, オーソリSQL,
  * 行ロック(ぎょうロック)。</p>
  */
+// @Mapper 让 MyBatis/Spring 生成 mapper proxy。没有这个代理，Repository 无法注入接口实现。
+// @Param 名称要和 XML 中的 #{...} 对齐；否则多个参数时 MyBatis 只能看到 param1/param2。
 @Mapper
 public interface AuthorizationMapper {
 

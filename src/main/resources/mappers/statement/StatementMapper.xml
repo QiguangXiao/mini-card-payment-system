@@ -16,6 +16,7 @@
             <arg column="minimum_payment_amount" javaType="java.math.BigDecimal"/>
             <arg column="paid_amount" javaType="java.math.BigDecimal"/>
             <arg column="currency" javaType="java.lang.String"/>
+            <!-- MyBatis 的 _int 表示 primitive int；这里 transaction_count 不允许为 null。 -->
             <arg column="transaction_count" javaType="_int"/>
             <arg column="status" javaType="java.lang.String"/>
             <arg column="generated_at" javaType="java.time.Instant"/>

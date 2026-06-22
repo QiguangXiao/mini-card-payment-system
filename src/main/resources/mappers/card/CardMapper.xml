@@ -15,6 +15,7 @@
     <select id="findById" resultMap="cardRowMap">
         SELECT id, credit_account_id, status
         FROM cards
+        <!-- cardId 来自外部请求，必须用 #{cardId} bind parameter，不能用 ${cardId} 字符串拼接。 -->
         WHERE id = #{cardId}
     </select>
 

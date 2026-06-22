@@ -33,6 +33,8 @@ public class DelayJobClaimer {
     /**
      * 领取到期任务并写入 PROCESSING lease。
      */
+    // 这里的 @Transactional 必须包住 findRunnableBatchForUpdate + markProcessing update。
+    // 如果查询和更新分成两个事务，其他 poller 可能在中间抢走同一批 job。
     @Transactional
     public List<DelayJob> claimDueJobs() {
         Instant now = Instant.now(clock);

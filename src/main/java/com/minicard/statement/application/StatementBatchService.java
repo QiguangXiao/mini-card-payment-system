@@ -125,6 +125,8 @@ public class StatementBatchService {
      * 而是 periodEnd 之后的 27 日，若遇到非営業日则顺延。</p>
      */
     private BillingCycle billingCycle(LocalDate periodEnd) {
+        // YearMonth 表达“月份”而不是某一天，适合处理 2 月/30 天/31 天这种账单月边界。
+        // 如果直接用 minusDays(30)，短月和长月会把 billing cycle 算偏。
         YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
         LocalDate previousCloseDate = dayInMonth(previousMonth, properties.closeDayOfMonth());
         return new BillingCycle(
@@ -175,5 +177,7 @@ public class StatementBatchService {
             LocalDate periodEnd,
             LocalDate dueDate
     ) {
+        // private record 适合方法内部强相关值的轻量载体。
+        // 如果三个 LocalDate 分散传参，调用点很容易把 periodEnd/dueDate 顺序传错。
     }
 }

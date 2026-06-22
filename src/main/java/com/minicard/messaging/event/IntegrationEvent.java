@@ -16,6 +16,8 @@ public record IntegrationEvent(
         String eventType,
         int eventVersion,
         Instant occurredAt,
+        // JsonNode 让 envelope 稳定、payload 灵活。代价是 consumer 必须显式做字段校验。
+        // 如果直接把所有 event payload 做成一个大 DTO，版本演进会更僵硬，也会耦合不关心的字段。
         JsonNode payload
 ) {
 }

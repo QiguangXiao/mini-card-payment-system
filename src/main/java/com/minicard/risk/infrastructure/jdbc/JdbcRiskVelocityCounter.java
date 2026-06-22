@@ -40,6 +40,8 @@ public class JdbcRiskVelocityCounter implements RiskVelocityCounter {
                 """,
                 Integer.class,
                 cardId,
+                // JDBC driver 接收 java.sql.Timestamp 更明确；adapter 层承担 Instant -> SQL temporal type 转换。
+                // 如果把这种转换散进 service，application layer 会开始依赖 JDBC 细节。
                 Timestamp.from(since)
         );
         return count == null ? 0 : count;
