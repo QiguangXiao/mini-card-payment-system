@@ -6,8 +6,9 @@ The Authorization module demonstrates a small but explicit DDD vertical slice.
 It models an issuer-side decision about whether a requested card transaction is
 approved or declined. Approved requests reserve available credit on a
 `CreditAccount`. It now includes a small Risk bounded-context collaboration,
-authorization expiry, and presentment posting. Refund, reversal, dispute, ledger,
-and reconciliation flows remain deliberately deferred learning topics.
+authorization expiry, presentment posting, and a minimal Ledger projection.
+Refund, reversal, dispute, production-grade double-entry ledger, and
+reconciliation flows remain deliberately deferred learning topics.
 
 ## Aggregate Boundary
 
@@ -45,6 +46,13 @@ without duplicating or fragmenting the account's available-credit balance.
 
 The authorization flow rejects missing, blocked, and expired cards before
 locking or changing their CreditAccount.
+
+The current primary `CardRepository` bean is a cache decorator:
+`CachedCardRepository` reads a low-risk `CardSnapshot` through Caffeine L1 and
+Redis L2, then rebuilds a `Card` domain object. This cache is only reference
+data acceleration. It never caches `CreditAccount`, available credit, or
+idempotency ownership, so the financial consistency boundary remains the MySQL
+transaction and `CreditAccount` row lock.
 
 Authorization records intentionally keep the presented `card_id` without a
 foreign key to `cards`. This allows the system to retain a declined attempt for

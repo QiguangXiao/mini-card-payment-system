@@ -27,14 +27,17 @@ checks, minimal Ledger projection, Kafka-based event delivery, Transactional
 Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 snapshot
 caching for statement and card snapshots.
 
+See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
+the request-to-table learning path, current package map, state transitions,
+ID-generation points, and Outbox/DelayJob reliability flow.
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
 See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
 consumer idempotency, partition ordering, and failure-recovery decisions.
 See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
 side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
-producer/consumer contexts, and why their names are similar or intentionally
-different.
+producer/consumer contexts, platform execution resources, and why their names
+are similar or intentionally different.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.

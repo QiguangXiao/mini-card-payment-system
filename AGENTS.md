@@ -26,8 +26,6 @@ out in code comments, documentation, or the walkthrough.
 - Use Java 21, Spring Boot 3.x, Gradle Wrapper, MySQL 8, and MyBatis.
 - Kafka, Outbox, Inbox, and DelayJob already exist in this project. Treat them
   as current reliability mechanisms, not as future TODOs.
-- Do not introduce Redis, gRPC, NoSQL, new external integrations, or extra
-  infrastructure unless the current feature clearly needs them.
 - Do not add user login/authentication, split into microservices, or add
   unrelated payment capabilities such as capture, refund, or settlement unless
   explicitly requested or already justified by the current feature.
@@ -111,8 +109,7 @@ where they do not improve clarity.
 - Prefer `BigDecimal` when decimal arithmetic and currency-scale semantics need
   to be explicit.
 - Document and explain the monetary representation chosen for each domain model.
-- Consider caching trade-offs for high-traffic discussion, but do not add Redis
-  or a cache layer before there is a concrete requirement.
+- Consider caching trade-offs for high-traffic discussion,
 - Consider failure recovery and partial-failure behavior before adding or
   changing distributed workflows.
 

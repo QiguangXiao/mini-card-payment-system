@@ -58,6 +58,21 @@ snapshot-cache.caches.*
 
 这样命名的好处是：通用层不被 statement 绑死，业务层又不会变成模糊的 `ObjectCache`。
 
+### 2.1 这次命名复盘结论
+
+这里不要理解成“把 ReadModel 又改回 Snapshot”。更准确的边界是：
+
+| 层级 | 推荐理解 | 当前名字 | 为什么 |
+| --- | --- | --- | --- |
+| 通用缓存能力 | 只能缓存可重建快照 | `SnapshotCache<K, V>` | 强调 cache 不是 source of truth，也不是任意写模型缓存 |
+| Statement 查询对象 | API response read model | `StatementReadModel` | 它没有业务行为，只服务 `GET /api/statements/{id}` |
+| Card 参考数据 | reference data snapshot | `CardSnapshot` | 它不是公开查询模型，而是授权/posting/expiry 决策前的卡状态快照 |
+| 具体 L1/L2 实现 | Caffeine + Redis read-through | `TwoLevelSnapshotCache` | 当前名字能表达两级结构；如果以后重命名，`CaffeineRedisSnapshotCache` 会更直说技术栈 |
+| 事务后失效 helper | after-commit evict | `TransactionAwareSnapshotCacheEvictor` | 当前名字准确但偏泛；如果以后重命名，`AfterCommitSnapshotCacheEvictor` 更直观 |
+
+所以现阶段文档口径是：通用接口继续叫 `SnapshotCache`，但具体业务对象不要强行统一成
+snapshot。Statement 仍然是 read model，Card 仍然是 snapshot。
+
 ## 3. 通用读取和失效策略
 
 读取顺序：
@@ -239,6 +254,12 @@ cache name 建议格式：
 - reference data：`CardSnapshot`、`CachedCardRepository`。
 - 写路径失效：`StatementSnapshotCacheInvalidator`、`CardSnapshotCacheInvalidator`，
   底层都交给 `TransactionAwareSnapshotCacheEvictor`。
+
+命名取舍：
+
+- `TwoLevelSnapshotCache` 是 package-private 实现类，当前不影响业务读代码；如果未来真的要做代码级命名整理，优先考虑改成 `CaffeineRedisSnapshotCache`。
+- `StatementSnapshotCacheInvalidator` 当前表达“statement 相关缓存失效”，但它实际失效的是 `StatementReadModel`。如果以后做命名整理，`StatementReadModelCacheInvalidator` 会更精确。
+- `CachedCardRepository` 当前表达 repository decorator；如果想让动词更自然，`CachingCardRepository` 也可以，但不是必须改。
 
 ## 8. interview 解释口径
 

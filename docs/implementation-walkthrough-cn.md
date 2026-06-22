@@ -5,13 +5,13 @@
 
 ## 1. 怎么读这个工程
 
-当前工程可以按 5 层理解：
+当前工程可以按业务模块的 5 层理解：
 
 - `api`：HTTP adapter。负责接收 request、校验参数、返回 response。
 - `application`：use case orchestration。负责事务边界、调用顺序、幂等、锁、调度、事件写入。
 - `domain`：核心业务规则。负责状态转换、金额和额度不变量。
 - `repository`：领域接口。application 只依赖接口，不关心 MyBatis 细节。
-- `infrastructure`：MyBatis、Outbox、Kafka、scheduler adapter 等技术实现。
+- `infrastructure`：某个业务模块自己的技术 adapter，例如 MyBatis repository、Outbox adapter、DelayJob adapter、Kafka listener。
 
 关键词：
 
@@ -20,6 +20,24 @@
 - `Row lock`：用数据库行锁控制并发，而不是 JVM `synchronized`。
 - `Outbox`：主业务事务里只写消息意图，后台 scheduler 再发布 Kafka。
 - `DelayJob`：主业务事务里写未来任务计划，后台 scheduler 到时间后执行业务动作。
+
+### 1.1 包结构和名字怎么理解
+
+当前项目里有三类容易混淆的包名：
+
+| 位置 | 例子 | 含义 | 为什么不合并 |
+| --- | --- | --- | --- |
+| 业务模块内的 `infrastructure` | `authorization.infrastructure.messaging`, `repayment.infrastructure.delayjob` | 某个 bounded context 的 adapter，把业务意图接到 MyBatis、Outbox、DelayJob、Kafka 等机制上 | 它依赖本模块业务语义，例如 authorization expiry、auto repayment |
+| 根 `com.minicard.infrastructure` | `cache`, `async`, `scheduler`, `transaction`, `time`, `web` | shared platform helper，提供线程池、scheduler bean、transaction helper、web error handling、cache 基础设施 | 它不拥有业务状态机，也不决定发布什么事件或执行什么 job |
+| 根机制包 | `messaging`, `delayjob` | 一等 reliability mechanism，有自己的表、状态、lease、retry、recoverer | 它们比普通 helper 更重；放在根包可以让 Outbox/Inbox/DelayJob 的可靠性语义更清楚 |
+
+所以 `com.minicard.infrastructure.scheduler` 不是“所有 scheduler 业务逻辑”的地方。
+它只创建 Spring `ThreadPoolTaskScheduler`。真正的 poll/claim/worker/recover 流程在
+`messaging/outbox` 和 `delayjob`，而 `StatementBatchPoller` 是 statement 模块自己的日历触发器。
+
+`com.minicard.infrastructure.async` 也不是业务异步流程本身，只是 worker pool 配置。
+如果以后重命名，`infrastructure.execution` / `WorkerPoolConfiguration` 会更直观；当前代码先保留现状，
+文档里用这个心智模型解释即可。
 
 ## 2. 核心数据表和状态
 
@@ -1062,7 +1080,7 @@ statementId | amount | currency
    MyBatis 插入 `repayments/PENDING`。
    `repayments.idempotency_key` 唯一索引决定并发 winner。
 
-   interview重点：
+   interview 重点：
 
    - 这是 INSERT-first idempotency。
    - 不靠 read-then-insert，因为并发下两个线程可能同时读到不存在。
@@ -1335,9 +1353,9 @@ repayment.received
 - `com.minicard.authorization.infrastructure.delayjob` 是 Authorization 使用 DelayJob 的 adapter，只负责写入到期任务。
 - `com.minicard.repayment.infrastructure.delayjob` 是 Statement due-date 自动扣款使用 DelayJob 的 adapter。
 - `com.minicard.repayment.application.AutoRepaymentDelayJobHandler` 是 `AUTO_REPAYMENT` 的业务 handler。
-- `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置。
-- `com.minicard.infrastructure.async` 只放后台 worker executor 配置。
-- `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper。
+- `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置；它不包含业务 poller 逻辑。
+- `com.minicard.infrastructure.async` 只放后台 worker executor 配置；它不代表业务异步流程本身。
+- `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper，让 worker 可以显式拆分 handler transaction 和 finalize transaction。
 
 为什么 DelayJob 不再拆 `domain/application/infrastructure`：
 

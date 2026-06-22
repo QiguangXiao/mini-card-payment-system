@@ -149,9 +149,9 @@ messaging
 └── outbox/mybatis
 ```
 
-Notification and Risk Kafka listeners remain inside their own bounded contexts.
-This makes Kafka an adapter for business capabilities instead of making
-`messaging` a catch-all pseudo-domain.
+Notification, Risk, and Ledger Kafka listeners remain inside their own bounded
+contexts. This makes Kafka an adapter for business capabilities instead of
+making `messaging` a catch-all pseudo-domain.
 
 `event`, `kafka`, `inbox`, and `outbox` could become separate Gradle modules if
 the code base or team ownership grows. Keeping them as packages is currently
@@ -164,10 +164,18 @@ and `repayment.infrastructure.messaging`. The shared Outbox mechanism therefore
 does not depend on business aggregates or absorb bounded-context knowledge.
 
 Consumers use the shared `IntegrationEventReader` only for transport concerns:
-JSON parsing and header validation. Notification and Risk still choose their own
-handlers and commands inside their bounded contexts. This is the intended
-microservice-compatible boundary: a consumer depends on the JSON event contract,
-not on the producer service's internal infrastructure package.
+JSON parsing and header validation. Notification, Risk, and Ledger still choose
+their own handlers and commands inside their bounded contexts. This is the
+intended microservice-compatible boundary: a consumer depends on the JSON event
+contract, not on the producer service's internal infrastructure package.
+
+The root `com.minicard.infrastructure` package has a different meaning from
+`messaging`. It provides platform wiring such as scheduler thread pools, worker
+executors, transaction helpers, cache infrastructure, and web error handling.
+Outbox remains under `messaging/outbox` because it owns a reliability state
+machine: `PENDING -> PROCESSING lease -> PUBLISHED/PENDING retry/DEAD`. DelayJob
+stays as its own root mechanism because it represents future business actions,
+not message publication.
 
 ## Implemented Consumers
 
