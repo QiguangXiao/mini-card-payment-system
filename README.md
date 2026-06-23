@@ -52,6 +52,10 @@ See [High Traffic System Design Notes](docs/high-traffic-system-design-cn.md)
 for authorization hot-path capacity analysis, bottleneck diagnosis, load-test
 scenarios, rate limiting, backpressure, cache/Kafka degradation, and production
 interview answers.
+See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
+beginner-friendly but production-oriented map from this project's Docker Compose
+shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
+and CodePipeline.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.
