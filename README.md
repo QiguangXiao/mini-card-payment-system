@@ -48,6 +48,10 @@ questions grounded in this project.
 See [PayPay Card JD Fit Guide](docs/paypay-card-jd-fit-cn.md) for a JD-to-project
 evidence map, prioritized gap analysis, and answer templates tied to this
 project.
+See [High Traffic System Design Notes](docs/high-traffic-system-design-cn.md)
+for authorization hot-path capacity analysis, bottleneck diagnosis, load-test
+scenarios, rate limiting, backpressure, cache/Kafka degradation, and production
+interview answers.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.
