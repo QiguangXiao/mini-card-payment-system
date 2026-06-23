@@ -218,6 +218,83 @@ POST /api/authorizations
 
 ALB 不理解你的业务事务，只理解 HTTP、健康检查、超时和负载分发。
 
+### 3.7 AWS 里“各种机器名字”到底是什么
+
+刚开始学 AWS 时，最容易困惑的是：`t4g.medium`、`db.m7g.large`、`cache.r7g.large`、`kafka.m7g.large` 看起来都像机器，但它们其实属于不同服务。
+
+先记这个表：
+
+| 名字例子 | 属于哪个服务 | 它代表什么 | 本项目里对应什么 |
+| --- | --- | --- | --- |
+| `1 vCPU / 2 GB Fargate task` | ECS/Fargate | 一个运行 Spring Boot 容器的计算单元 | 应用实例 |
+| `m7g.large` | EC2 | 一台通用型虚拟机 | 如果不用 Fargate，而用 ECS on EC2，才会直接选它 |
+| `db.m7g.large` | RDS | 一个 MySQL 数据库实例规格 | `mini_card` 数据库 |
+| `cache.t4g.small` | ElastiCache | 一个 Redis/Valkey cache node | Redis L2 cache |
+| `kafka.m7g.large` | MSK | 一个 Kafka broker | Kafka topic 所在 broker |
+| ALB node | Elastic Load Balancing | AWS 托管的负载均衡节点 | 接收 HTTP 请求，不需要你选机型 |
+| NAT Gateway | VPC | private subnet 出公网的托管网关 | ECS task 拉依赖或访问外部 API 时可能用到 |
+
+也就是说：
+
+```text
+Fargate task 不是 EC2 instance type
+RDS 的 db.m7g.large 不是 EC2 m7g.large
+ElastiCache 的 cache.r7g.large 不是 RDS db.r7g.large
+MSK 的 kafka.m7g.large 是 Kafka broker，不是应用服务器
+```
+
+它们底层可能都借用了类似的硬件族命名，但容量、限制、网络、计费和管理方式都属于各自服务。
+
+### 3.8 机型名字怎么读：`db.m7g.large`
+
+以 `db.m7g.large` 为例：
+
+```text
+db . m 7 g . large
+│    │ │ │   └─ size：大小，large、xlarge、2xlarge、4xlarge...
+│    │ │ └──── option：g 常见表示 Graviton ARM 处理器家族
+│    │ └────── generation：第 7 代
+│    └──────── family：m = general purpose，通用均衡型
+└───────────── service prefix：db = RDS
+```
+
+常见 family 先记这些：
+
+| family | 常见含义 | 适合什么 |
+| --- | --- | --- |
+| `t` | burstable，靠 CPU credits 短时突发 | dev、低流量、小生产、非持续高 CPU |
+| `m` | general purpose，CPU/内存/网络均衡 | 大多数 Web/API 服务、普通数据库起点 |
+| `c` | compute optimized，CPU 更强 | CPU 密集计算、压缩、加密、批处理 |
+| `r` | memory optimized，内存更大 | Redis、大 working set 数据库、内存型服务 |
+| `i` | storage optimized，偏本地 NVMe/IO | 特殊高 IO 场景，普通 RDS/ECS 初期少用 |
+
+本项目的直觉选型：
+
+- Spring Boot API：优先从 Fargate `1 vCPU / 2 GB` 或 `2 vCPU / 4 GB` 开始。
+- RDS MySQL：小规模从 `db.t4g.medium` 或 `db.m7g.large` 开始；持续生产流量更偏 `m` 而不是 `t`。
+- Redis/ElastiCache：小缓存从 `cache.t4g.small` 开始；缓存数据量大或延迟敏感用 `cache.r7g.large` 往上。
+- Kafka/MSK：学习/小规模可从 `kafka.t3.small` 理解概念；生产更常见是 3 个 `kafka.m7g.large` 或更高规格 broker。
+
+`g` 系列通常是 AWS Graviton ARM。如果你的 Java image、依赖和 base image 都支持 `linux/arm64`，Graviton 往往有更好的性价比；如果依赖里有只支持 x86 的 native library，就要谨慎。
+
+### 3.9 托管服务也有“几台”的概念
+
+不要以为 AWS 托管服务就没有台数，只是台数的含义变了：
+
+| 服务 | “几台”怎么理解 | 小生产常见起点 |
+| --- | --- | --- |
+| ECS/Fargate | 几个 task 副本 | 至少 2 个，跨 2 AZ |
+| ALB | AWS 托管节点 | 启用至少 2 个 AZ，不自己选台数 |
+| RDS Single-AZ | 1 个 DB instance | 不建议金融生产默认使用 |
+| RDS Multi-AZ DB instance | 1 个 primary + 1 个 standby | 小生产高可用起点 |
+| RDS Multi-AZ DB cluster | 1 个 writer + 2 个 readable standby | 中大型、读多或更高可用起点 |
+| ElastiCache | primary node + replica node | 至少 1 primary + 1 replica |
+| MSK | Kafka broker 数量 | 生产通常至少 3 brokers，跨 3 AZ |
+
+一个很实用的判断：
+
+> stateless 应用靠增加 ECS task 横向扩容；stateful 组件先保证 Multi-AZ 和副本，再根据 CPU、内存、IO、连接数、lag 纵向或横向扩容。
+
 ## 4. 本地 Docker Compose 到 AWS 的映射
 
 | 本地组件 | AWS 推荐映射 | 关键理解 |
@@ -355,6 +432,48 @@ healthCheckGracePeriodSeconds = 120
 - 发布时先启动新 task。
 - 新 task 健康后，再逐步下线旧 task。
 - 任何时刻尽量不要少于当前健康容量。
+
+### 5.4 Fargate task 该给多少 CPU 和内存
+
+Fargate 不是让你选择 `m7g.large` 这种 EC2 名字，而是让你选择 task 级别的 CPU 和 memory 组合。
+
+常见起点：
+
+| Fargate task | 适合阶段 | 对本项目的理解 |
+| --- | --- | --- |
+| `0.5 vCPU / 1 GB` | demo、非常轻的服务 | Spring Boot + Actuator + Kafka/Redis client 可能偏紧 |
+| `1 vCPU / 2 GB` | 小生产起点 | 本项目较合理的起步规格 |
+| `2 vCPU / 4 GB` | 中等流量、GC 更稳 | 更适合持续授权流量和多个 scheduler/consumer |
+| `4 vCPU / 8 GB+` | 单 task 承载更高并发 | 先确认瓶颈不是 RDS row lock 或外部 risk |
+
+对 Java 服务，内存不能只看 heap：
+
+```text
+task memory
+  = JVM heap
+  + metaspace
+  + thread stacks
+  + direct buffer
+  + native memory
+  + log/agent overhead
+```
+
+如果 task 是 `2 GB`，不要把 `-Xmx` 也设成 `2 GB`。更实际的起点：
+
+```text
+Fargate task: 1 vCPU / 2 GB
+JVM Xmx: 1024m 或 1200m
+Hikari maximumPoolSize: 5-10
+Tomcat max threads: 50-100 起步，压测后调
+```
+
+如果有 4 个 task，每个 Hikari pool 是 10：
+
+```text
+max DB connections from app = 4 * 10 = 40
+```
+
+这比单纯说“我加 task 扩容”更像生产回答，因为你同时考虑了 RDS 连接压力。
 
 ## 6. 一次真实请求在 AWS 上怎么走
 
@@ -1027,50 +1146,335 @@ request B returns 500
 
 这就是为什么高并发金融系统的发布设计必须考虑“新旧版本同时存在”的窗口。
 
-## 15. 成本和复杂度：为什么不一上来就全套
+## 15. 小中大工程：推荐配置和容量估算
+
+这一节回答一个非常现实的问题：
+
+> 如果我真的要上 AWS，小项目、中等项目、大项目分别要多少台、什么规格、大概能扛多少请求？
+
+先给结论，再解释为什么。
+
+> [!IMPORTANT]
+> 容量数字只能当 sizing 起点，不是承诺值。真实 RPS 取决于 SQL、索引、RDS 规格、外部 risk 延迟、Kafka/Redis 状态、payload 大小、GC、连接池、热点账户比例和业务读写比例。生产前必须用本项目的真实接口压测。
+
+### 15.1 先定义请求类型
+
+本项目不是所有请求成本都一样。
+
+| 请求类型 | 示例 | 主要瓶颈 | 是否容易水平扩容 |
+| --- | --- | --- | --- |
+| 轻读请求 | `GET /api/health`, `GET /actuator/health/liveness` | ALB + app CPU | 很容易 |
+| 普通读请求 | `GET /api/statements/{id}` 命中 Redis/Caffeine | app + Redis | 比较容易 |
+| 回源读请求 | statement cache miss 后查 RDS | RDS read IO/CPU | 中等 |
+| 金融写请求 | `POST /api/authorizations` | RDS transaction + row lock + risk | 最难 |
+| 异步发布 | Outbox -> MSK | Kafka + Outbox backlog | 可通过 worker 和 broker 调整 |
+| 异步消费 | MSK -> Notification/Risk/Ledger | consumer lag + DB writes | 可通过 partitions/group 扩展 |
+
+所以不要问一个笼统的“能扛多少 QPS”。要拆成：
+
+```text
+read RPS
+write RPS
+hot account write RPS
+Kafka publish throughput
+consumer catch-up throughput
+```
+
+### 15.2 容量估算公式
+
+一个粗略公式：
+
+```text
+可承载 RPS ≈ 并发处理数 / 平均响应时间秒数
+```
+
+例如一个 task 实际能稳定处理 40 个并发请求，授权平均响应时间是 `80ms`：
+
+```text
+单 task RPS ≈ 40 / 0.08 = 500 RPS
+```
+
+但这个数字通常过于乐观，因为金融写请求会被 RDS 和 row lock 限制。更保守的做法是分层估算：
+
+```text
+app theoretical RPS
+  -> RDS connection limit
+  -> SQL latency
+  -> row lock contention
+  -> external risk timeout
+  -> Kafka/Outbox backlog
+  -> final safe RPS
+```
+
+对本项目，授权写路径的核心限制是：
+
+```text
+同一个 card/account 的资金更新必须串行化
+  -> SELECT credit account FOR UPDATE
+  -> update reserved_amount
+  -> insert authorization
+  -> insert outbox event
+  -> commit
+```
+
+所以：
+
+- 不同卡、不同账户的授权可以并行。
+- 同一账户的高频授权会在 RDS row lock 上排队。
+- 增加 ECS task 不能突破同一行 row lock 的串行限制。
+
+### 15.3 小工程生产配置
+
+适合：
+
+- 内部系统、小型支付学习项目、低峰值业务。
+- 峰值不高，但希望有基本高可用。
+- 目标是“能像生产一样部署”，不是追求大流量。
+
+推荐起点：
+
+| 组件 | 建议配置 | 台数/副本 |
+| --- | --- | --- |
+| ECS/Fargate app | `1 vCPU / 2 GB` | 2 tasks，跨 2 AZ |
+| ALB | internet-facing ALB | 至少启用 2 AZ |
+| RDS MySQL | `db.t4g.medium` Multi-AZ 或 `db.m7g.large` Multi-AZ | 1 primary + 1 standby |
+| ElastiCache | `cache.t4g.small` | 1 primary + 1 replica |
+| MSK | 学习版可 MSK Serverless；Provisioned 用 3 个小 broker 理解生产形态 | 3 brokers 更接近生产 |
+| CloudWatch | logs + basic alarms | 必须有 |
+| Secrets | Secrets Manager | 必须有 |
+
+保守容量起点：
+
+| 流量类型 | 粗略起点 |
+| --- | --- |
+| 混合 API | `50-200 RPS` |
+| 授权写请求 | `20-80 RPS` |
+| cache 命中读请求 | `100-500 RPS` |
+| 同一账户热点授权 | 远低于总写 RPS，可能只有 `5-30 RPS` 级别 |
+
+为什么这么保守？
+
+- `t` 系列是 burstable，持续高 CPU 会受到 CPU credits 影响。
+- RDS 写事务比普通 read API 贵很多。
+- 外部 risk 如果同步调用，响应时间会直接拉低吞吐。
+- 两个 task 主要是为了高可用，不是为了大吞吐。
+
+具体例子：
+
+```text
+请求 A:
+  cardId=card-123
+  amount=100 JPY
+  idempotencyKey=checkout-A
+
+请求 B:
+  cardId=card-123
+  amount=200 JPY
+  idempotencyKey=checkout-B
+```
+
+即使 A 落到 `task-1`，B 落到 `task-2`，它们仍然会竞争同一个 `credit_accounts` row lock。小工程配置下，这种热点账户会比整体 CPU 更早成为瓶颈。
+
+### 15.4 中等工程生产配置
+
+适合：
+
+- 有稳定线上用户。
+- 授权、查询、异步通知都有持续流量。
+- 需要可观测、可回滚、可扩容。
+
+推荐起点：
+
+| 组件 | 建议配置 | 台数/副本 |
+| --- | --- | --- |
+| ECS/Fargate app | `1 vCPU / 2 GB` 或 `2 vCPU / 4 GB` | 4-8 tasks，跨 2-3 AZ |
+| ALB | internet-facing ALB | 2-3 AZ |
+| RDS MySQL | `db.m7g.large` / `db.m7g.xlarge` Multi-AZ，或 Multi-AZ DB cluster | 1 writer + standby/reader |
+| ElastiCache | `cache.m7g.large` 或 `cache.r7g.large` | 1 primary + 1-2 replicas |
+| MSK | `kafka.m7g.large` 或同级 Standard broker | 3 brokers，跨 3 AZ |
+| ECS autoscaling | CPU、memory、ALB request count、业务 backlog | min 4，max 12 起步 |
+| RDS Proxy | 可选但推荐评估 | 降低连接风暴 |
+| CloudWatch | infra + business alarms | 必须有 |
+
+保守容量起点：
+
+| 流量类型 | 粗略起点 |
+| --- | --- |
+| 混合 API | `300-1000 RPS` |
+| 授权写请求 | `80-300 RPS` |
+| cache 命中读请求 | `1000-3000 RPS` |
+| Kafka event publish | 每秒数百到数千条，取决于 broker、payload、acks、partitions |
+| 同一账户热点授权 | 仍受单 row lock 限制，不会随 task 数量线性增长 |
+
+这个阶段开始要非常关注连接数：
+
+```text
+8 tasks * Hikari 10 connections = 80 app DB connections
+Outbox workers + schedulers + migration + admin connections
+  -> RDS connections 可能接近 100+
+```
+
+如果 RDS 是 `db.m7g.large`，你要通过 CloudWatch 和 MySQL 指标确认：
+
+- `DatabaseConnections` 是否接近上限。
+- CPU 是否持续高。
+- lock wait 是否增加。
+- slow query 是否出现。
+- Outbox backlog 是否持续增长。
+
+### 15.5 大工程生产配置
+
+适合：
+
+- 高峰值、大量用户、多个下游消费者。
+- 需要明确容量规划、压测、降级、分库分表或服务拆分讨论。
+- interview 中通常会继续追问 hot key、partition、failover、backpressure。
+
+推荐起点：
+
+| 组件 | 建议配置 | 台数/副本 |
+| --- | --- | --- |
+| ECS/Fargate app | `2 vCPU / 4 GB` 或 `4 vCPU / 8 GB` | 12-30 tasks，跨 3 AZ |
+| ALB | internet-facing ALB + WAF | 3 AZ |
+| RDS MySQL | `db.m7g.2xlarge` / `db.m7g.4xlarge` 起，或评估 Aurora MySQL | Multi-AZ，读多时加 reader |
+| ElastiCache | `cache.r7g.large` / `cache.r7g.xlarge`，必要时 cluster mode | 多 replicas / shards |
+| MSK | `kafka.m7g.xlarge` / `kafka.m7g.2xlarge` 或 Express broker | 3-6 brokers |
+| ECS autoscaling | 多指标扩缩容 | min 12，max 按压测设置 |
+| RDS Proxy | 推荐 | 平滑连接和 failover |
+| Observability | CloudWatch + tracing + dashboards | 必须有 |
+| Deployment | blue/green 或 canary | 推荐 |
+
+保守容量起点：
+
+| 流量类型 | 粗略起点 |
+| --- | --- |
+| 混合 API | `1000-5000+ RPS` |
+| 授权写请求 | `300-1500 RPS` |
+| cache 命中读请求 | `5000-20000+ RPS` |
+| Kafka event publish | 每秒数千到上万条，必须结合 partitions、payload 和 broker 压测 |
+| 同一账户热点授权 | 仍然被单账户串行化限制，不能靠加机器无限提升 |
+
+到了这个规模，真正的问题通常不是“再加几台机器”，而是：
+
+- 授权写表是否需要按 account/card 分片？
+- `credit_accounts` row lock 是否成为热点？
+- Kafka topic partitions 是否足够？
+- Consumer group 是否能横向扩展？
+- Outbox 表是否需要归档或分表？
+- Redis key 是否存在 hot key？
+- RDS writer 是否已经到单点写入上限？
+- 是否需要把查询读模型独立出去？
+
+### 15.6 三种规模的速查表
+
+| 规模 | App | RDS | Redis | Kafka/MSK | 粗略混合 RPS | 粗略授权写 RPS |
+| --- | --- | --- | --- | --- | --- | --- |
+| 小生产 | 2 x `1 vCPU/2GB` Fargate | `db.t4g.medium` Multi-AZ 或 `db.m7g.large` | `cache.t4g.small` primary+replica | Serverless 或 3 小 broker | `50-200` | `20-80` |
+| 中生产 | 4-8 x `1-2 vCPU/2-4GB` | `db.m7g.large/xlarge` Multi-AZ | `cache.m7g.large` 或 `cache.r7g.large` | 3 x `kafka.m7g.large` | `300-1000` | `80-300` |
+| 大生产 | 12-30 x `2-4 vCPU/4-8GB` | `db.m7g.2xlarge+` 或 Aurora 评估 | `cache.r7g.xlarge+` / cluster mode | 3-6 x `kafka.m7g.xlarge+` | `1000-5000+` | `300-1500` |
+
+这些估算默认：
+
+- SQL 已有合理索引。
+- RDS 和 app 在同一 Region/private network。
+- 外部 risk 有 timeout、fallback、circuit breaker。
+- 授权请求分散在大量账户上，而不是集中打一张卡。
+- Kafka payload 不大，topic partitions 足够。
+- CloudWatch 没有显示持续 CPU、DB connection、lock wait、consumer lag 告警。
+
+如果这些假设不成立，容量会大幅下降。
+
+### 15.7 为什么同一张卡不能靠扩容解决
+
+假设有 10 个 ECS tasks：
+
+```text
+task-1 ... task-10
+```
+
+同时来了 3 个请求：
+
+```text
+请求 A:
+  cardId=card-123
+  amount=100 JPY
+  idempotencyKey=checkout-A
+
+请求 B:
+  cardId=card-123
+  amount=200 JPY
+  idempotencyKey=checkout-B
+
+请求 C:
+  cardId=card-999
+  amount=300 JPY
+  idempotencyKey=checkout-C
+```
+
+ALB 分发：
+
+```text
+A -> task-2
+B -> task-7
+C -> task-9
+```
+
+数据库执行：
+
+```text
+A locks credit_accounts(account-123)
+B waits for credit_accounts(account-123)
+C locks credit_accounts(account-999), runs in parallel
+```
+
+结果：
+
+- A 和 B 因为同一账户资金状态必须串行。
+- C 可以和 A 并行，因为账户不同。
+- 加 task 可以提升不同账户之间的并发。
+- 加 task 不能让同一账户的资金扣减并行。
+
+这就是金融后端和普通 CRUD API 的核心差异。
+
+### 15.8 什么时候该纵向扩容，什么时候该横向扩容
+
+| 现象 | 优先动作 |
+| --- | --- |
+| ECS CPU 高，RDS 正常 | 加 tasks 或加大 task CPU |
+| ECS memory 高 / GC 频繁 | 加大 task memory，调 JVM heap |
+| ALB latency 高但 DB 正常 | 查 app thread pool、external risk、GC |
+| RDS CPU 高 | 优化 SQL/索引，升 RDS 规格，减少无效查询 |
+| RDS connections 高 | 降 Hikari pool、加 RDS Proxy、控制 task 数 |
+| RDS lock wait 高 | 查热点账户、锁顺序、事务长度 |
+| Redis latency 高 | 查 hot key、升 cache node、加 replica/shard |
+| Kafka consumer lag 高 | 增加 partitions、consumer instances、优化消费 DB 写入 |
+| Outbox pending 高 | 查 MSK、publisher worker、DB 查询、DLT |
+
+一句话：
+
+> app 层通常先横向扩容，数据库和 Kafka/Redis 要先看具体瓶颈；金融写路径的锁竞争不能用“加机器”粗暴解决。
+
+### 15.9 成本和复杂度：为什么不一上来就全套
 
 学习项目可以分阶段：
 
-### 15.1 最小学习版
-
 ```text
-ECS/Fargate + ALB + RDS + CloudWatch Logs
-```
+阶段 1:
+  ECS/Fargate + ALB + RDS + CloudWatch Logs
 
-Kafka 和 Redis 仍然用本地或简化替代，先把容器部署、网络、安全组、健康检查跑通。
+阶段 2:
+  ElastiCache + Secrets Manager + CloudWatch alarms + CodePipeline
 
-### 15.2 接近生产版
+阶段 3:
+  MSK + Outbox backlog alarms + consumer lag dashboards
 
-```text
-ECS/Fargate
-ALB
-RDS Multi-AZ
-ElastiCache
-MSK
-CloudWatch metrics/alarms
-Secrets Manager
-CodePipeline
-CloudFormation/CDK/Terraform
-```
-
-### 15.3 生产强化版
-
-```text
-multi-AZ everywhere
-blue/green deployment
-custom business metrics
-centralized tracing
-WAF
-private endpoints
-least-privilege IAM
-backup and restore drills
-load testing
-chaos/failure drills
+阶段 4:
+  Multi-AZ everywhere + blue/green + tracing + WAF + failure drills
 ```
 
 interview 中不要虚报：
 
-> 如果我还没亲手用过 AWS，我会说我理解部署拓扑、资源职责和故障模式，并能从最小版逐步演进到生产版，而不是一开始堆满所有服务。
+> 如果我还没亲手用过 AWS，我会说我理解部署拓扑、资源职责、规格选择和容量估算方法，并能从最小版逐步演进到生产版，而不是一开始堆满所有服务。
 
 ## 16. interview 常见追问与高分回答
 
@@ -1134,6 +1538,18 @@ interview 中不要虚报：
 
 > 我会分基础设施和业务可靠性两层。基础设施看 ECS CPU/memory/restart、ALB 5xx/latency/unhealthy target、RDS connections/CPU/slow query、MSK lag、ElastiCache evictions/latency。业务层看 authorization decline/approve rate、idempotency conflict、outbox pending count、publish failure、delayjob overdue、DLT count。金融系统不能只看机器活着，还要看可靠性队列有没有堆积。
 
+### Q11: `m7g.large`、`db.m7g.large`、`cache.m7g.large` 是同一种机器吗？
+
+高分回答：
+
+> 不是。`m7g.large` 通常指 EC2 instance type，`db.m7g.large` 是 RDS DB instance class，`cache.m7g.large` 是 ElastiCache node type，`kafka.m7g.large` 是 MSK broker。它们命名相似，是因为底层硬件族和规格命名类似，但服务语义、限制、计费、网络和运维方式完全不同。对本项目，应用如果用 Fargate，甚至不会直接选择 EC2 instance type，而是选择 task CPU/memory。
+
+### Q12: 如果问你这个项目上 AWS 能扛多少请求，你怎么回答？
+
+高分回答：
+
+> 我不会直接报一个绝对 QPS。我会先拆读写流量：cache 命中读、RDS 回源读、授权写、Outbox 发布、Kafka 消费。小生产 2 个 `1 vCPU/2GB` task 加 Multi-AZ RDS 可以先按几十到两百混合 RPS、几十授权写 RPS 设计；中等规模 4-8 个 task 加 `db.m7g.large/xlarge` 可以按几百到一千混合 RPS、百级授权写 RPS 起步；大规模要靠压测、RDS writer 能力、Kafka partitions 和热点账户比例验证。尤其是同一账户授权写会被 row lock 串行化，加 ECS task 只能提升不同账户之间的并发。
+
 ## 17. 最小落地清单
 
 如果真的要把本项目部署到 AWS，建议按这个顺序学和做：
@@ -1165,6 +1581,10 @@ interview 中不要虚报：
 ```text
 ECS/Fargate = 跑 Spring Boot 容器
 ALB = 接 HTTP 流量并转发到健康 task
+Fargate CPU/memory = 应用 task 规格，不是 EC2 机型
+db.m7g.large = RDS 数据库规格
+cache.r7g.large = ElastiCache 缓存节点规格
+kafka.m7g.large = MSK broker 规格
 RDS = MySQL source of truth
 MSK = Kafka broker，不替代 Outbox/Inbox
 ElastiCache = Redis cache，不承担资金真相
@@ -1183,9 +1603,16 @@ CodePipeline = 发布流程自动化
 - [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)
 - [Amazon ECS on AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html)
 - [Amazon ECS service definition parameters](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service_definition_parameters.html)
+- [Fargate task CPU and memory combinations](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-cpu-memory-error.html)
+- [Amazon EC2 instance type naming conventions](https://docs.aws.amazon.com/ec2/latest/instancetypes/instance-type-names.html)
+- [Application Load Balancers](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html)
 - [Amazon RDS User Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
+- [RDS DB instance class hardware specifications](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Summary.html)
+- [RDS Multi-AZ DB clusters](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts.html)
 - [Amazon ElastiCache User Guide](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html)
+- [ElastiCache supported node types](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/CacheNodes.SupportedTypes.html)
 - [Amazon MSK Developer Guide](https://docs.aws.amazon.com/msk/latest/developerguide/what-is-msk.html)
+- [Amazon MSK broker types](https://docs.aws.amazon.com/msk/latest/developerguide/broker-instance-types.html)
 - [Amazon CloudWatch User Guide](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html)
 - [CloudWatch alarms](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html)
 - [AWS CloudFormation stacks](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html)

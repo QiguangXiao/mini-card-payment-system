@@ -55,7 +55,7 @@ interview answers.
 See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
 beginner-friendly but production-oriented map from this project's Docker Compose
 shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
-and CodePipeline.
+CodePipeline, AWS resource naming, and small/medium/large production sizing.
 See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
 backend interview talking points.
