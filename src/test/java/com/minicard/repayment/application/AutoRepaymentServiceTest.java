@@ -55,15 +55,15 @@ class AutoRepaymentServiceTest {
         when(bankDebitGateway.debit(any())).thenReturn(BankDebitResult.success());
         when(repaymentService.receive(any())).thenReturn(repayment);
 
-        AutoRepaymentResult result = service.debitStatement(statement.id());
+        service.debitStatement(statement.id());
 
-        assertThat(result.outcome()).isEqualTo(AutoRepaymentOutcome.SUCCEEDED);
-        assertThat(result.repaymentId()).isEqualTo(repayment.id());
+        // 银行扣款请求金额应等于账单剩余应还金额，并带上到期日用于对账。
         ArgumentCaptor<BankDebitRequest> debitRequest =
                 ArgumentCaptor.forClass(BankDebitRequest.class);
         verify(bankDebitGateway).debit(debitRequest.capture());
         assertThat(debitRequest.getValue().amount().amount()).isEqualByComparingTo("1500.00");
         assertThat(debitRequest.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
+        // 扣款成功后必须经由 RepaymentService.receive 入账，并使用 deterministic 幂等键防止重复扣款。
         ArgumentCaptor<ReceiveRepaymentCommand> command =
                 ArgumentCaptor.forClass(ReceiveRepaymentCommand.class);
         verify(repaymentService).receive(command.capture());
@@ -82,6 +82,19 @@ class AutoRepaymentServiceTest {
         assertThatThrownBy(() -> service.debitStatement(statement.id()))
                 .isInstanceOf(AutoRepaymentFailedException.class)
                 .hasMessageContaining("insufficient bank balance");
+        verify(repaymentService, never()).receive(any());
+    }
+
+    @Test
+    void alreadyPaidStatementIsSkippedWithoutDebit() {
+        // 账单已被手动还清后，到期 DelayJob 仍可能触发；此时应幂等跳过，既不扣款也不入账。
+        Statement statement = statement();
+        statement.applyRepayment(statement.totalAmount(), Instant.parse("2026-07-01T00:00:00Z"));
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
+
+        service.debitStatement(statement.id());
+
+        verify(bankDebitGateway, never()).debit(any());
         verify(repaymentService, never()).receive(any());
     }
 

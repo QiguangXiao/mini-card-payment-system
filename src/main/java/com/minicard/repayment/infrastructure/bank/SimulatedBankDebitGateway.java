@@ -4,7 +4,6 @@ import com.minicard.repayment.application.AutoDebitProperties;
 import com.minicard.repayment.application.BankDebitGateway;
 import com.minicard.repayment.application.BankDebitRequest;
 import com.minicard.repayment.application.BankDebitResult;
-import com.minicard.repayment.application.BankDebitStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -34,8 +33,9 @@ public class SimulatedBankDebitGateway implements BankDebitGateway {
      */
     @Override
     public BankDebitResult debit(BankDebitRequest request) {
-        if (properties.simulatedResult() == BankDebitStatus.FAILED) {
-            // FAILED 必须显式返回原因，让 DelayJob 和日志有排查线索。
+        // 默认返回成功；把 repayment.auto-debit.simulated-success 设成 false 可演示失败路径。
+        if (!properties.simulatedSuccess()) {
+            // 失败必须显式返回原因，让 DelayJob 和日志有排查线索。
             return BankDebitResult.failed(properties.failureReason());
         }
         return BankDebitResult.success();

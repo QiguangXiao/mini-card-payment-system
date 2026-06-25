@@ -184,8 +184,8 @@ statement:
 
 repayment:
   auto-debit:
-    # 默认模拟银行扣款成功；改成 FAILED 可演示 DelayJob retry/DEAD 的失败路径。
-    simulated-result: SUCCESS
+    # 默认模拟银行扣款成功；改成 false 可演示 DelayJob retry/DEAD 的失败路径。
+    simulated-success: true
     failure-reason: simulated insufficient bank balance
 
 risk:
