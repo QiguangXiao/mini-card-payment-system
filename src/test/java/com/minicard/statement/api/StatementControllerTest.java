@@ -12,8 +12,6 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
 import com.minicard.statement.application.StatementGenerationException;
 import com.minicard.statement.application.StatementGenerationService;
-import com.minicard.statement.application.StatementReadModel;
-import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.Test;
@@ -40,9 +38,6 @@ class StatementControllerTest {
 
     @MockitoBean
     private StatementGenerationService statementGenerationService;
-
-    @MockitoBean
-    private StatementReadService statementReadService;
 
     @Test
     void generatesStatement() throws Exception {
@@ -91,7 +86,7 @@ class StatementControllerTest {
     @Test
     void getsStatement() throws Exception {
         Statement statement = statement();
-        when(statementReadService.get(statement.id())).thenReturn(StatementReadModel.from(statement));
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
 
         mockMvc.perform(get("/api/statements/{id}", statement.id()))
                 .andExpect(status().isOk())
@@ -102,7 +97,7 @@ class StatementControllerTest {
     @Test
     void returnsNotFoundForUnknownStatement() throws Exception {
         UUID id = UUID.randomUUID();
-        when(statementReadService.get(id))
+        when(statementGenerationService.get(id))
                 .thenThrow(new NoSuchElementException("statement not found: " + id));
 
         mockMvc.perform(get("/api/statements/{id}", id))

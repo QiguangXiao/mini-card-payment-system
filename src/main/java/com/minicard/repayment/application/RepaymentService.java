@@ -12,7 +12,6 @@ import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
-import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
@@ -38,7 +37,6 @@ public class RepaymentService {
     private final StatementRepository statementRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RepaymentDomainEventPublisher eventPublisher;
-    private final StatementReadService statementReadService;
     private final Clock clock;
 
     @Transactional
@@ -121,10 +119,7 @@ public class RepaymentService {
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
-        // statement.paidAmount/status 改变后必须 evict GET read model。
-        // 注意注册到 after commit：如果在 transaction boundary 内提前删缓存，另一个 GET
-        // 可能读到旧 DB 快照并重新写入 Redis，造成还款后短时间 stale response。
-        statementReadService.evictAfterCommit(statement.id());
+        // statement GET 直接读 DB，不再有读缓存，因此还款后无需 evict 任何快照。
     }
 
     private void validateCanApply(

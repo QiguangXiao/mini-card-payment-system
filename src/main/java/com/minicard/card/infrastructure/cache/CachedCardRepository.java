@@ -39,7 +39,8 @@ public class CachedCardRepository implements CardRepository, CardSnapshotCacheIn
             @Qualifier("cardSnapshotCache") SnapshotCache<String, CardSnapshot> cardSnapshotCache,
             TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor
     ) {
-        // @Qualifier 明确选择 card-snapshot-v1；否则 statementSnapshotCache 也是 SnapshotCache，会造成注入歧义。
+        // @Qualifier 明确选择 card-snapshot-v1；将来再加别的 SnapshotCache<...> bean 时，
+        // 按类型注入会产生歧义，显式 qualifier 能避免注错 cache。
         this.delegate = delegate;
         this.cardSnapshotCache = cardSnapshotCache;
         this.snapshotCacheEvictor = snapshotCacheEvictor;

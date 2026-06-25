@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
-import com.minicard.statement.application.StatementLineReadModel;
 import com.minicard.statement.domain.StatementLine;
 
 /**
@@ -44,20 +43,6 @@ public record StatementLineResponse(
                 line.cardId(),
                 line.amount().amount(),
                 line.amount().currency().getCurrencyCode(),
-                line.postedAt()
-        );
-    }
-
-    public static StatementLineResponse from(StatementLineReadModel line) {
-        return new StatementLineResponse(
-                line.id(),
-                line.cardTransactionId(),
-                line.ledgerEntryId(),
-                line.networkTransactionId(),
-                line.authorizationId(),
-                line.cardId(),
-                line.amount(),
-                line.currency(),
                 line.postedAt()
         );
     }

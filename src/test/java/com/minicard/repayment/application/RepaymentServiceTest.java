@@ -20,7 +20,6 @@ import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
-import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
@@ -49,7 +48,6 @@ class RepaymentServiceTest {
     private StatementRepository statementRepository;
     private CreditAccountRepository creditAccountRepository;
     private RepaymentDomainEventPublisher eventPublisher;
-    private StatementReadService statementReadService;
     private RepaymentService service;
 
     @BeforeEach
@@ -58,13 +56,11 @@ class RepaymentServiceTest {
         statementRepository = mock(StatementRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         eventPublisher = mock(RepaymentDomainEventPublisher.class);
-        statementReadService = mock(StatementReadService.class);
         service = new RepaymentService(
                 repaymentRepository,
                 statementRepository,
                 creditAccountRepository,
                 eventPublisher,
-                statementReadService,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -92,7 +88,6 @@ class RepaymentServiceTest {
         lockOrder.verify(statementRepository).findByIdForUpdate(command.statementId());
         verify(creditAccountRepository).update(account);
         verify(statementRepository).updatePayment(statement);
-        verify(statementReadService).evictAfterCommit(statement.id());
         verify(repaymentRepository).update(repayment);
         ArgumentCaptor<RepaymentDomainEvent> event =
                 ArgumentCaptor.forClass(RepaymentDomainEvent.class);
@@ -116,7 +111,6 @@ class RepaymentServiceTest {
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(repaymentRepository, never()).update(any());
         verify(eventPublisher, never()).append(any());
-        verify(statementReadService, never()).evictAfterCommit(any());
     }
 
     @Test
@@ -135,7 +129,6 @@ class RepaymentServiceTest {
         verify(creditAccountRepository, never()).update(any());
         verify(statementRepository, never()).updatePayment(any());
         verify(eventPublisher, never()).append(any());
-        verify(statementReadService, never()).evictAfterCommit(any());
     }
 
     private void arrangeNewRepayment() {
