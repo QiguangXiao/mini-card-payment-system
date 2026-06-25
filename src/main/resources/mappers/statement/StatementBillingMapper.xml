@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.statement.infrastructure.mybatis.StatementBillingMapper">
+
+    <resultMap id="statementLineSourceRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementLineSourceRow">
+        <constructor>
+            <arg column="card_transaction_id" javaType="java.lang.String"/>
+            <arg column="ledger_entry_id" javaType="java.lang.String"/>
+            <arg column="network_transaction_id" javaType="java.lang.String"/>
+            <arg column="authorization_id" javaType="java.lang.String"/>
+            <arg column="card_id" javaType="java.lang.String"/>
+            <arg column="amount" javaType="java.math.BigDecimal"/>
+            <arg column="currency" javaType="java.lang.String"/>
+            <arg column="posted_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <select id="countBillableAccounts" resultType="long">
+        SELECT COUNT(DISTINCT credit_account_id)
+        FROM card_transactions
+        WHERE status = 'POSTED'
+          AND billing_status = 'UNBILLED'
+          AND posted_at &gt;= #{periodStartInclusive}
+          AND posted_at &lt; #{periodEndExclusive}
+    </select>
+
+    <!--
+      StatementJob 用 CRC32(account_id) % shardCount 做稳定分片。
+      这里不加 FOR UPDATE：真正并发控制在单账户生成时锁 credit account + candidate rows。
+    -->
+    <select id="findAccountIdsForJob" resultType="java.lang.String">
+        SELECT DISTINCT credit_account_id
+        FROM card_transactions
+        WHERE status = 'POSTED'
+          AND billing_status = 'UNBILLED'
+          AND posted_at &gt;= #{periodStartInclusive}
+          AND posted_at &lt; #{periodEndExclusive}
+          AND MOD(CRC32(credit_account_id), #{shardCount}) = #{shardNo}
+        ORDER BY credit_account_id
+    </select>
+
+    <select id="countUnbilledPostedTransactionsMissingLedger" resultType="int">
+        SELECT COUNT(*)
+        FROM card_transactions c
+        LEFT JOIN ledger_entries l
+          ON l.source_type = 'CARD_TRANSACTION'
+         AND l.source_id = c.id
+         AND l.entry_type = 'CARD_TRANSACTION_POSTED'
+        WHERE c.credit_account_id = #{creditAccountId}
+          AND c.status = 'POSTED'
+          AND c.billing_status = 'UNBILLED'
+          AND c.posted_at &gt;= #{periodStartInclusive}
+          AND c.posted_at &lt; #{periodEndExclusive}
+          AND l.id IS NULL
+    </select>
+
+    <!--
+      生成 statement line 前同时锁住 card_transactions row。
+      LedgerEntry 是 append-only，不在这里更新；statement_lines.ledger_entry_id unique key 防重复出账。
+    -->
+    <select id="findBillableLineSourcesForUpdate" resultMap="statementLineSourceRowMap">
+        SELECT
+            c.id AS card_transaction_id,
+            l.id AS ledger_entry_id,
+            c.network_transaction_id,
+            c.authorization_id,
+            c.card_id,
+            c.amount,
+            c.currency,
+            c.posted_at
+        FROM card_transactions c
+        JOIN ledger_entries l
+          ON l.source_type = 'CARD_TRANSACTION'
+         AND l.source_id = c.id
+         AND l.entry_type = 'CARD_TRANSACTION_POSTED'
+        WHERE c.credit_account_id = #{creditAccountId}
+          AND c.status = 'POSTED'
+          AND c.billing_status = 'UNBILLED'
+          AND c.statement_id IS NULL
+          AND c.posted_at &gt;= #{periodStartInclusive}
+          AND c.posted_at &lt; #{periodEndExclusive}
+        ORDER BY c.posted_at, c.id
+        FOR UPDATE
+    </select>
+
+    <update id="markCardTransactionsBilled">
+        UPDATE card_transactions
+        SET billing_status = 'BILLED',
+            statement_id = #{statementId},
+            statement_assigned_at = #{billedAt},
+            updated_at = #{billedAt}
+        WHERE status = 'POSTED'
+          AND billing_status = 'UNBILLED'
+          AND statement_id IS NULL
+          AND id IN
+          <foreach collection="cardTransactionIds" item="cardTransactionId" open="(" separator="," close=")">
+              #{cardTransactionId}
+          </foreach>
+    </update>
+
+</mapper>

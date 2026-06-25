@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
-import com.minicard.statement.domain.event.StatementClosedDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,7 +18,7 @@ class StatementTest {
     private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
 
     @Test
-    void closesStatementWithSnapshotItemsAndDomainEvent() {
+    void closesStatementWithSnapshotItems() {
         UUID accountId = UUID.randomUUID();
 
         Statement statement = Statement.close(
@@ -40,10 +39,6 @@ class StatementTest {
         assertThat(statement.items())
                 .hasSize(2)
                 .allSatisfy(item -> assertThat(item.statementId()).isEqualTo(statement.id()));
-        assertThat(statement.pullDomainEvents())
-                .hasSize(1)
-                .first()
-                .isInstanceOf(StatementClosedDomainEvent.class);
     }
 
     @Test
@@ -63,7 +58,8 @@ class StatementTest {
 
     @Test
     void rejectsTransactionOutsideBillingPeriod() {
-        StatementTransaction transaction = new StatementTransaction(
+        StatementLineSource transaction = new StatementLineSource(
+                UUID.randomUUID(),
                 UUID.randomUUID(),
                 "ntx-late",
                 UUID.randomUUID(),
@@ -111,8 +107,9 @@ class StatementTest {
                 .hasMessageContaining("exceeds statement remaining amount");
     }
 
-    private StatementTransaction transaction(String networkTransactionId, String amount) {
-        return new StatementTransaction(
+    private StatementLineSource transaction(String networkTransactionId, String amount) {
+        return new StatementLineSource(
+                UUID.randomUUID(),
                 UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),
@@ -123,7 +120,7 @@ class StatementTest {
     }
 
     private Statement statement(String amount) {
-        Statement statement = Statement.close(
+        return Statement.close(
                 UUID.randomUUID(),
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30"),
@@ -132,8 +129,6 @@ class StatementTest {
                 money(amount),
                 NOW
         );
-        statement.pullDomainEvents();
-        return statement;
     }
 
     private Money money(String amount) {

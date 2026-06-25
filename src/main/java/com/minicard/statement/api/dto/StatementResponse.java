@@ -44,7 +44,7 @@ public record StatementResponse(
         /** 账单生成时间。 */
         Instant generatedAt,
         /** 账单明细列表。 */
-        List<StatementItemResponse> items
+        List<StatementLineResponse> items
 ) {
 
     /**
@@ -68,7 +68,7 @@ public record StatementResponse(
                 statement.generatedAt(),
                 statement.items().stream()
                         // Java Stream mapping；这里只做 presentation 转换，不改变业务状态。
-                        .map(StatementItemResponse::from)
+                        .map(StatementLineResponse::from)
                         .toList()
         );
     }
@@ -96,7 +96,7 @@ public record StatementResponse(
                 statement.status(),
                 statement.generatedAt(),
                 statement.items().stream()
-                        .map(StatementItemResponse::from)
+                        .map(StatementLineResponse::from)
                         .toList()
         );
     }

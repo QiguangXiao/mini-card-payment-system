@@ -4,20 +4,65 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.minicard.statement.infrastructure.mybatis.StatementBatchMapper">
 
-    <!--
-      Billing batch 只挑候选 account id，不在这里加 FOR UPDATE。
-      每个账户后续进入 StatementService.generate(...) 后才持有 account row lock，
-      避免一个大批次长时间锁住大量账户。
-    -->
-    <select id="findCreditAccountIdsWithUnbilledPostedTransactions" resultType="java.lang.String">
-        SELECT DISTINCT credit_account_id
-        FROM card_transactions
-        WHERE status = 'POSTED'
-          AND statement_id IS NULL
-          AND posted_at &gt;= #{periodStartInclusive}
-          AND posted_at &lt; #{periodEndExclusive}
-        ORDER BY credit_account_id
-        LIMIT #{limit}
+    <resultMap id="statementBatchRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementBatchRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="period_start" javaType="java.time.LocalDate"/>
+            <arg column="period_end" javaType="java.time.LocalDate"/>
+            <arg column="due_date" javaType="java.time.LocalDate"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="total_account_count" javaType="long"/>
+            <arg column="target_accounts_per_job" javaType="int"/>
+            <arg column="job_count" javaType="int"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="completed_at" javaType="java.time.Instant"/>
+            <arg column="last_error" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="statementBatchColumns">
+        id, period_start, period_end, due_date, status, total_account_count,
+        target_accounts_per_job, job_count, created_at, completed_at, last_error
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO statement_batches (
+            <include refid="statementBatchColumns"/>
+        ) VALUES (
+            #{id},
+            #{periodStart},
+            #{periodEnd},
+            #{dueDate},
+            #{status},
+            #{totalAccountCount},
+            #{targetAccountsPerJob},
+            #{jobCount},
+            #{createdAt},
+            #{completedAt,jdbcType=TIMESTAMP},
+            #{lastError,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <select id="findById" resultMap="statementBatchRowMap">
+        SELECT <include refid="statementBatchColumns"/>
+        FROM statement_batches
+        WHERE id = #{id}
     </select>
+
+    <select id="findByIdForUpdate" resultMap="statementBatchRowMap">
+        SELECT <include refid="statementBatchColumns"/>
+        FROM statement_batches
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="updateState">
+        UPDATE statement_batches
+        SET status = #{status},
+            completed_at = #{completedAt,jdbcType=TIMESTAMP},
+            last_error = #{lastError,jdbcType=VARCHAR}
+        WHERE id = #{id}
+    </update>
 
 </mapper>

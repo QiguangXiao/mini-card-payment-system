@@ -12,7 +12,7 @@ public enum NotificationType {
     AUTHORIZATION_DECLINED,
     CARD_TRANSACTION_POSTED,
     /**
-     * 来自 statement.closed 事件，但用户看到的是“账单已生成/可查看”。
+     * 预留给账单已生成/可查看通知；当前简化版 statement flow 不再发布 statement.closed 事件。
      */
     STATEMENT_READY,
     /**

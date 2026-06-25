@@ -88,7 +88,6 @@ messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
-    statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
@@ -156,14 +155,25 @@ authorization:
 statement:
   batch:
     enabled: true
-    # Scheduler 每分钟醒一次做轻量检查；只有“关账日次日”才真正跑 billing batch。
-    fixed-delay-ms: 60000
+    # BillingCycleScheduler 每天按 JST 醒来一次，只负责创建 statement_batch 和 statement_jobs。
+    cron: "0 0 1 * * *"
+    zone: Asia/Tokyo
     # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
     # 默认 31 表示月末关账；次日批处理上一周期，避免关账日白天迟到交易漏入账单。
     close-day-of-month: 31
     # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
     payment-base-day-of-month: 27
-    max-accounts-per-run: 100
+    # 每个 durable statement_job 目标账户数；百万账户会被拆成约 1000 个分片任务。
+    target-accounts-per-job: 1000
+  jobs:
+    enabled: true
+    fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 10000
+    max-per-run: 20
+    max-attempts: 10
+    processing-timeout-seconds: 300
+    worker-pool-size: 4
+    worker-queue-capacity: 100
   policy:
     # minimum payment = min(total, max(total * rate, currency floor)).
     # 当前只是教学用简化规则，真实发卡系统会按产品条款、余额分层和监管要求配置。

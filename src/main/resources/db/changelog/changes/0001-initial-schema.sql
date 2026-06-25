@@ -59,6 +59,73 @@ CREATE TABLE IF NOT EXISTS authorizations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS statement_batches (
+    id CHAR(36) PRIMARY KEY,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    due_date DATE NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    total_account_count BIGINT NOT NULL,
+    target_accounts_per_job INT NOT NULL,
+    job_count INT NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    completed_at TIMESTAMP(6) NULL,
+    last_error VARCHAR(500) NULL,
+    CONSTRAINT uk_statement_batches_cycle UNIQUE (period_start, period_end),
+    INDEX idx_statement_batches_status (status, created_at),
+    CONSTRAINT chk_statement_batches_period CHECK (period_end >= period_start AND due_date > period_end),
+    CONSTRAINT chk_statement_batches_counts CHECK (
+        total_account_count >= 0 AND target_accounts_per_job > 0 AND job_count > 0
+    ),
+    CONSTRAINT chk_statement_batches_status CHECK (
+        status IN ('RUNNING', 'COMPLETED', 'PARTIALLY_FAILED')
+    ),
+    CONSTRAINT chk_statement_batches_completion CHECK (
+        (status = 'RUNNING' AND completed_at IS NULL)
+        OR (status IN ('COMPLETED', 'PARTIALLY_FAILED') AND completed_at IS NOT NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS statement_jobs (
+    id CHAR(36) PRIMARY KEY,
+    batch_id CHAR(36) NOT NULL,
+    shard_no INT NOT NULL,
+    shard_count INT NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    claimed_by VARCHAR(100) NULL,
+    claimed_at TIMESTAMP(6) NULL,
+    claim_until TIMESTAMP(6) NULL,
+    attempt_count INT NOT NULL DEFAULT 0,
+    processed_account_count INT NOT NULL DEFAULT 0,
+    generated_statement_count INT NOT NULL DEFAULT 0,
+    skipped_account_count INT NOT NULL DEFAULT 0,
+    failed_account_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    last_error VARCHAR(500) NULL,
+    CONSTRAINT uk_statement_jobs_batch_shard UNIQUE (batch_id, shard_no),
+    INDEX idx_statement_jobs_claimable (status, claim_until, created_at),
+    CONSTRAINT fk_statement_jobs_batch FOREIGN KEY (batch_id)
+        REFERENCES statement_batches (id),
+    CONSTRAINT chk_statement_jobs_status CHECK (
+        status IN ('PENDING', 'PROCESSING', 'DONE', 'DEAD')
+    ),
+    CONSTRAINT chk_statement_jobs_shard CHECK (
+        shard_count > 0 AND shard_no >= 0 AND shard_no < shard_count
+    ),
+    CONSTRAINT chk_statement_jobs_counters CHECK (
+        attempt_count >= 0
+        AND processed_account_count >= 0
+        AND generated_statement_count >= 0
+        AND skipped_account_count >= 0
+        AND failed_account_count >= 0
+    ),
+    CONSTRAINT chk_statement_jobs_claim_state CHECK (
+        (status = 'PROCESSING' AND claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND claim_until IS NOT NULL)
+        OR (status <> 'PROCESSING' AND claimed_by IS NULL AND claimed_at IS NULL AND claim_until IS NULL)
+    )
+);
+
 CREATE TABLE IF NOT EXISTS statements (
     id CHAR(36) PRIMARY KEY,
     credit_account_id CHAR(36) NOT NULL,
@@ -107,6 +174,7 @@ CREATE TABLE IF NOT EXISTS card_transactions (
     amount DECIMAL(19, 2) NOT NULL,
     currency CHAR(3) NOT NULL,
     status VARCHAR(20) NOT NULL,
+    billing_status VARCHAR(20) NOT NULL,
     presentment_received_at TIMESTAMP(6) NOT NULL,
     posted_at TIMESTAMP(6) NULL,
     statement_id CHAR(36) NULL,
@@ -117,10 +185,10 @@ CREATE TABLE IF NOT EXISTS card_transactions (
     INDEX idx_card_transactions_authorization (authorization_id),
     INDEX idx_card_transactions_card_posted_at (card_id, posted_at),
     INDEX idx_card_transactions_statement_candidates (
-        credit_account_id, status, statement_id, posted_at, id
+        credit_account_id, status, billing_status, statement_id, posted_at, id
     ),
     INDEX idx_card_transactions_billing_batch (
-        status, statement_id, posted_at, credit_account_id
+        status, billing_status, posted_at, credit_account_id
     ),
     CONSTRAINT fk_card_transactions_authorization FOREIGN KEY (authorization_id)
         REFERENCES authorizations (id),
@@ -130,6 +198,7 @@ CREATE TABLE IF NOT EXISTS card_transactions (
         REFERENCES statements (id),
     CONSTRAINT chk_card_transactions_amount_positive CHECK (amount > 0),
     CONSTRAINT chk_card_transactions_status CHECK (status IN ('PENDING', 'POSTED')),
+    CONSTRAINT chk_card_transactions_billing_status CHECK (billing_status IN ('UNBILLED', 'BILLED')),
     CONSTRAINT chk_card_transactions_posting_state CHECK (
         (status = 'PENDING' AND posted_at IS NULL)
         OR (status = 'POSTED' AND posted_at IS NOT NULL)
@@ -137,27 +206,11 @@ CREATE TABLE IF NOT EXISTS card_transactions (
     CONSTRAINT chk_card_transactions_statement_assignment CHECK (
         (statement_id IS NULL AND statement_assigned_at IS NULL)
         OR (status = 'POSTED' AND statement_id IS NOT NULL AND statement_assigned_at IS NOT NULL)
+    ),
+    CONSTRAINT chk_card_transactions_billing_assignment CHECK (
+        (billing_status = 'UNBILLED' AND statement_id IS NULL AND statement_assigned_at IS NULL)
+        OR (billing_status = 'BILLED' AND status = 'POSTED' AND statement_id IS NOT NULL AND statement_assigned_at IS NOT NULL)
     )
-);
-
-CREATE TABLE IF NOT EXISTS statement_items (
-    id CHAR(36) PRIMARY KEY,
-    statement_id CHAR(36) NOT NULL,
-    card_transaction_id CHAR(36) NOT NULL,
-    network_transaction_id VARCHAR(100) NOT NULL,
-    authorization_id CHAR(36) NOT NULL,
-    card_id VARCHAR(100) NOT NULL,
-    amount DECIMAL(19, 2) NOT NULL,
-    currency CHAR(3) NOT NULL,
-    posted_at TIMESTAMP(6) NOT NULL,
-    created_at TIMESTAMP(6) NOT NULL,
-    CONSTRAINT uk_statement_items_card_transaction UNIQUE (card_transaction_id),
-    INDEX idx_statement_items_statement (statement_id, posted_at, card_transaction_id),
-    CONSTRAINT fk_statement_items_statement FOREIGN KEY (statement_id)
-        REFERENCES statements (id),
-    CONSTRAINT fk_statement_items_card_transaction FOREIGN KEY (card_transaction_id)
-        REFERENCES card_transactions (id),
-    CONSTRAINT chk_statement_items_amount_positive CHECK (amount > 0)
 );
 
 CREATE TABLE IF NOT EXISTS repayments (
@@ -217,6 +270,30 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
             AND direction = 'CREDIT'
             AND source_type = 'REPAYMENT')
     )
+);
+
+CREATE TABLE IF NOT EXISTS statement_lines (
+    id CHAR(36) PRIMARY KEY,
+    statement_id CHAR(36) NOT NULL,
+    card_transaction_id CHAR(36) NOT NULL,
+    ledger_entry_id CHAR(36) NULL,
+    network_transaction_id VARCHAR(100) NOT NULL,
+    authorization_id CHAR(36) NOT NULL,
+    card_id VARCHAR(100) NOT NULL,
+    amount DECIMAL(19, 2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    posted_at TIMESTAMP(6) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    CONSTRAINT uk_statement_lines_card_transaction UNIQUE (card_transaction_id),
+    CONSTRAINT uk_statement_lines_ledger_entry UNIQUE (ledger_entry_id),
+    INDEX idx_statement_lines_statement (statement_id, posted_at, card_transaction_id),
+    CONSTRAINT fk_statement_lines_statement FOREIGN KEY (statement_id)
+        REFERENCES statements (id),
+    CONSTRAINT fk_statement_lines_card_transaction FOREIGN KEY (card_transaction_id)
+        REFERENCES card_transactions (id),
+    CONSTRAINT fk_statement_lines_ledger_entry FOREIGN KEY (ledger_entry_id)
+        REFERENCES ledger_entries (id),
+    CONSTRAINT chk_statement_lines_amount_positive CHECK (amount > 0)
 );
 
 CREATE TABLE IF NOT EXISTS outbox_events (

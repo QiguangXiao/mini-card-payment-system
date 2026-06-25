@@ -6,7 +6,7 @@ import java.util.NoSuchElementException;
 import com.minicard.authorization.application.IdempotencyConflictException;
 import com.minicard.repayment.application.RepaymentConflictException;
 import com.minicard.repayment.application.RepaymentRejectedException;
-import com.minicard.statement.application.StatementGenerationRejectedException;
+import com.minicard.statement.application.StatementGenerationException;
 import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
@@ -63,9 +63,9 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.CONFLICT, "PRESENTMENT_REJECTED", exception.getMessage());
     }
 
-    @ExceptionHandler(StatementGenerationRejectedException.class)
+    @ExceptionHandler(StatementGenerationException.class)
     public ResponseEntity<ErrorResponse> handleStatementGenerationRejected(
-            StatementGenerationRejectedException exception
+            StatementGenerationException exception
     ) {
         return error(HttpStatus.CONFLICT, "STATEMENT_GENERATION_REJECTED", exception.getMessage());
     }

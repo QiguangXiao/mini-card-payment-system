@@ -12,7 +12,7 @@ import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
-import com.minicard.statement.application.StatementSnapshotCacheInvalidator;
+import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
@@ -38,7 +38,7 @@ public class RepaymentService {
     private final StatementRepository statementRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RepaymentDomainEventPublisher eventPublisher;
-    private final StatementSnapshotCacheInvalidator statementSnapshotCacheInvalidator;
+    private final StatementReadService statementReadService;
     private final Clock clock;
 
     @Transactional
@@ -94,7 +94,7 @@ public class RepaymentService {
             Instant now
     ) {
         // 全项目保持同一锁顺序：credit account row lock 先于 statement row lock。
-        // 这样 repayment 不会和 StatementService.generate(account -> statement) 形成死锁。
+        // 这样 repayment 不会和 StatementGenerationService.generate(account -> statement) 形成死锁。
         // 如果 repayment 反过来先锁 statement，再等 account，就可能和 statement batch 互相等待。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(statementSnapshot.creditAccountId())
@@ -124,7 +124,7 @@ public class RepaymentService {
         // statement.paidAmount/status 改变后必须 evict GET read model。
         // 注意注册到 after commit：如果在 transaction boundary 内提前删缓存，另一个 GET
         // 可能读到旧 DB 快照并重新写入 Redis，造成还款后短时间 stale response。
-        statementSnapshotCacheInvalidator.evictAfterCommit(statement.id());
+        statementReadService.evictAfterCommit(statement.id());
     }
 
     private void validateCanApply(

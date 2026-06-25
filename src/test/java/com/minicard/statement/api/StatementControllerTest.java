@@ -10,12 +10,12 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
-import com.minicard.statement.application.StatementGenerationRejectedException;
+import com.minicard.statement.application.StatementGenerationException;
+import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.statement.application.StatementReadModel;
-import com.minicard.statement.application.StatementReadModelService;
-import com.minicard.statement.application.StatementService;
+import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
-import com.minicard.statement.domain.StatementTransaction;
+import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -39,15 +39,15 @@ class StatementControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private StatementService statementService;
+    private StatementGenerationService statementGenerationService;
 
     @MockitoBean
-    private StatementReadModelService statementReadModelService;
+    private StatementReadService statementReadService;
 
     @Test
     void generatesStatement() throws Exception {
         Statement statement = statement();
-        when(statementService.generate(any())).thenReturn(statement);
+        when(statementGenerationService.generate(any())).thenReturn(statement);
 
         mockMvc.perform(post("/api/statements/generate")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -65,13 +65,14 @@ class StatementControllerTest {
                 .andExpect(jsonPath("$.status").value("CLOSED"))
                 .andExpect(jsonPath("$.totalAmount").value(1500.00))
                 .andExpect(jsonPath("$.minimumPaymentAmount").value(1000.00))
+                .andExpect(jsonPath("$.items[0].ledgerEntryId").exists())
                 .andExpect(jsonPath("$.items[0].networkTransactionId").value("ntx-001"));
     }
 
     @Test
     void returnsConflictWhenNoTransactionsCanBeBilled() throws Exception {
-        when(statementService.generate(any()))
-                .thenThrow(new StatementGenerationRejectedException("no unbilled posted transactions"));
+        when(statementGenerationService.generate(any()))
+                .thenThrow(StatementGenerationException.rejected("no unbilled posted transactions"));
 
         mockMvc.perform(post("/api/statements/generate")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -90,7 +91,7 @@ class StatementControllerTest {
     @Test
     void getsStatement() throws Exception {
         Statement statement = statement();
-        when(statementReadModelService.get(statement.id())).thenReturn(StatementReadModel.from(statement));
+        when(statementReadService.get(statement.id())).thenReturn(StatementReadModel.from(statement));
 
         mockMvc.perform(get("/api/statements/{id}", statement.id()))
                 .andExpect(status().isOk())
@@ -101,7 +102,7 @@ class StatementControllerTest {
     @Test
     void returnsNotFoundForUnknownStatement() throws Exception {
         UUID id = UUID.randomUUID();
-        when(statementReadModelService.get(id))
+        when(statementReadService.get(id))
                 .thenThrow(new NoSuchElementException("statement not found: " + id));
 
         mockMvc.perform(get("/api/statements/{id}", id))
@@ -122,12 +123,12 @@ class StatementControllerTest {
                 money("1000.00"),
                 Instant.parse("2026-07-01T00:00:00Z")
         );
-        statement.pullDomainEvents();
         return statement;
     }
 
-    private StatementTransaction transaction(String networkTransactionId, String amount) {
-        return new StatementTransaction(
+    private StatementLineSource transaction(String networkTransactionId, String amount) {
+        return new StatementLineSource(
+                UUID.randomUUID(),
                 UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),

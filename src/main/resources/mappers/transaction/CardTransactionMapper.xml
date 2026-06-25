@@ -15,6 +15,7 @@
             <arg column="amount" javaType="java.math.BigDecimal"/>
             <arg column="currency" javaType="java.lang.String"/>
             <arg column="status" javaType="java.lang.String"/>
+            <arg column="billing_status" javaType="java.lang.String"/>
             <arg column="presentment_received_at" javaType="java.time.Instant"/>
             <arg column="posted_at" javaType="java.time.Instant"/>
             <arg column="statement_id" javaType="java.lang.String"/>
@@ -26,7 +27,7 @@
 
     <sql id="cardTransactionColumns">
         id, network_transaction_id, authorization_id, card_id, credit_account_id,
-        amount, currency, status, presentment_received_at, posted_at,
+        amount, currency, status, billing_status, presentment_received_at, posted_at,
         statement_id, statement_assigned_at, created_at, updated_at
     </sql>
 
@@ -42,6 +43,7 @@
             #{amount},
             #{currency},
             #{status},
+            #{billingStatus},
             #{presentmentReceivedAt},
             #{postedAt,jdbcType=TIMESTAMP},
             #{statementId,jdbcType=CHAR},
@@ -71,6 +73,7 @@
         FROM card_transactions
         WHERE credit_account_id = #{creditAccountId}
           AND status = 'POSTED'
+          AND billing_status = 'UNBILLED'
           AND statement_id IS NULL
           AND posted_at >= #{postedAtFromInclusive}
           AND posted_at &lt; #{postedAtToExclusive}
@@ -94,12 +97,14 @@
                 WHEN #{transaction.id} THEN #{transaction.statementAssignedAt}
             </foreach>
             END,
+            billing_status = 'BILLED',
             updated_at = CASE id
             <foreach collection="transactions" item="transaction">
                 WHEN #{transaction.id} THEN #{transaction.updatedAt}
             </foreach>
             END
         WHERE status = 'POSTED'
+          AND billing_status = 'UNBILLED'
           AND statement_id IS NULL
           AND id IN
           <foreach collection="transactions" item="transaction" open="(" separator="," close=")">
@@ -110,6 +115,7 @@
     <update id="update">
         UPDATE card_transactions
         SET status = #{status},
+            billing_status = #{billingStatus},
             posted_at = #{postedAt,jdbcType=TIMESTAMP},
             statement_id = #{statementId,jdbcType=CHAR},
             statement_assigned_at = #{statementAssignedAt,jdbcType=TIMESTAMP},

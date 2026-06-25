@@ -7,14 +7,18 @@ import java.util.UUID;
 import com.minicard.authorization.domain.Money;
 
 /**
- * 生成账单时从 CardTransaction 复制出来的候选交易事实。
+ * 生成 statement line 时需要的消费事实。
  *
- * <p>Statement domain 不直接依赖 transaction package 的 aggregate class，只接收
- * 账单真正需要的字段。这样保持 bounded context 边界清楚，也让账单快照(snapshot)
- * 的含义更明显。</p>
+ * <p>关键词：账单明细来源, 卡交易, 账本分录, statement line source,
+ * card transaction, ledger entry, 請求明細元(せいきゅうめいさいもと),
+ * 取引と仕訳(とりひきとしわけ)。</p>
+ *
+ * <p>CardTransaction 是用户可见消费明细；LedgerEntry 是内部入账依据。
+ * StatementLine 同时引用两者，避免只靠交易流水出账、却无法和账务分录对齐。</p>
  */
-public record StatementTransaction(
+public record StatementLineSource(
         UUID cardTransactionId,
+        UUID ledgerEntryId,
         String networkTransactionId,
         UUID authorizationId,
         String cardId,
@@ -22,15 +26,16 @@ public record StatementTransaction(
         Instant postedAt
 ) {
 
-    public StatementTransaction {
+    public StatementLineSource {
         Objects.requireNonNull(cardTransactionId, "cardTransactionId must not be null");
+        Objects.requireNonNull(ledgerEntryId, "ledgerEntryId must not be null");
         requireText(networkTransactionId, "networkTransactionId");
         Objects.requireNonNull(authorizationId, "authorizationId must not be null");
         requireText(cardId, "cardId");
         Objects.requireNonNull(amount, "amount must not be null");
         Objects.requireNonNull(postedAt, "postedAt must not be null");
         if (!amount.isPositive()) {
-            throw new IllegalArgumentException("statement transaction amount must be positive");
+            throw new IllegalArgumentException("statement line source amount must be positive");
         }
     }
 

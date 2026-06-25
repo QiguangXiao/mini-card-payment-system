@@ -8,30 +8,30 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * Statement 查询 read model service。
+ * Statement 查询 service。
  *
  * <p>关键词：账单查询服务, 缓存边界, Statement read model service,
  * cache boundary, after-commit eviction, 請求照会(せいきゅうしょうかい),
  * キャッシュ境界(キャッシュきょうかい)。</p>
  *
  * <p>这里是 GET /api/statements/{id} 的 cache boundary：Controller 不知道 L1/L2，
- * StatementService 仍然负责从 repository 读取 aggregate，cache 只保存 presentation-friendly
- * read model。</p>
+ * StatementGenerationService 仍然负责从 repository 读取 aggregate，cache 只保存
+ * presentation-friendly read model。</p>
  */
 @Service
-public class StatementReadModelService implements StatementSnapshotCacheInvalidator {
+public class StatementReadService {
 
-    private final StatementService statementService;
+    private final StatementGenerationService statementGenerationService;
     private final SnapshotCache<UUID, StatementReadModel> statementSnapshotCache;
     private final TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor;
 
-    public StatementReadModelService(
-            StatementService statementService,
+    public StatementReadService(
+            StatementGenerationService statementGenerationService,
             @Qualifier("statementSnapshotCache")
             SnapshotCache<UUID, StatementReadModel> statementSnapshotCache,
             TransactionAwareSnapshotCacheEvictor snapshotCacheEvictor
     ) {
-        this.statementService = statementService;
+        this.statementGenerationService = statementGenerationService;
         this.statementSnapshotCache = statementSnapshotCache;
         this.snapshotCacheEvictor = snapshotCacheEvictor;
     }
@@ -41,11 +41,10 @@ public class StatementReadModelService implements StatementSnapshotCacheInvalida
         // 防止先查 404 后很快生成同 id 测试数据时被短期错误缓存挡住。
         return statementSnapshotCache.get(
                 id,
-                () -> StatementReadModel.from(statementService.get(id))
+                () -> StatementReadModel.from(statementGenerationService.get(id))
         );
     }
 
-    @Override
     public void evictAfterCommit(UUID statementId) {
         snapshotCacheEvictor.evictAfterCommit(statementSnapshotCache, statementId);
     }

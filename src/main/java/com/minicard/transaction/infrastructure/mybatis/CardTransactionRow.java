@@ -27,6 +27,8 @@ public record CardTransactionRow(
         String currency,
         /** CardTransactionStatus 字符串。 */
         String status,
+        /** CardTransactionBillingStatus 字符串，表达是否已经进入 statement line。 */
+        String billingStatus,
         /** 收到 presentment 的时间。 */
         Instant presentmentReceivedAt,
         /** 入账完成时间。 */

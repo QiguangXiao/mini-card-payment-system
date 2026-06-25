@@ -5,7 +5,7 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.Currency;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -16,10 +16,7 @@ import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
-import com.minicard.statement.domain.StatementTransaction;
-import com.minicard.statement.domain.event.StatementDomainEvent;
-import com.minicard.transaction.domain.CardTransaction;
-import com.minicard.transaction.domain.CardTransactionRepository;
+import com.minicard.statement.domain.StatementLineSource;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,23 +24,22 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 账单生成 use case。
  *
- * <p>关键词：账单生成, 交易快照, Outbox 事件, statement generation,
+ * <p>关键词：账单生成, 交易快照, BILLED 标记, statement generation,
  * transaction snapshot, billing cycle, 請求明細作成(せいきゅうめいさいさくせい),
  * 明細(めいさい)。</p>
  *
  * <p>interview重点：Statement generation 是批处理业务，但仍然需要清楚的 transaction boundary。
- * 同一事务里锁账户、锁待出账交易、创建 statement/item 快照、标记交易已归账、写 Outbox event。</p>
+ * 同一事务里锁账户、锁待出账交易、创建 statement line 快照、标记交易已归账。</p>
  */
 @Service
 @RequiredArgsConstructor
-public class StatementService {
+public class StatementGenerationService {
 
     private final StatementRepository statementRepository;
-    private final CardTransactionRepository transactionRepository;
+    private final StatementBillingRepository billingRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final StatementDomainEventPublisher eventPublisher;
     private final StatementDueJobScheduler dueJobScheduler;
-    private final StatementPolicyProperties policyProperties;
+    private final StatementProperties properties;
     private final Clock clock;
 
     @Transactional
@@ -83,30 +79,39 @@ public class StatementService {
             CreditAccount account,
             Instant now
     ) {
-        List<CardTransaction> transactions = transactionRepository
-                .findUnbilledPostedByCreditAccountForUpdate(
+        if (billingRepository.existsUnbilledPostedTransactionMissingLedger(
+                account.id(),
+                periodStartInstant(command.periodStart()),
+                periodEndExclusiveInstant(command.periodEnd())
+        )) {
+            // Ledger 是 append-only projection，但 statement line 必须能追到 ledger_entry_id。
+            // 如果这里静默跳过缺 ledger 的交易，本期账单会漏消费，生产上会变成对账缺口。
+            throw StatementGenerationException.retryable(
+                    "posted card transactions are waiting for ledger entries"
+            );
+        }
+
+        List<StatementLineSource> lineSources = billingRepository
+                .findBillableLineSourcesForUpdate(
                         account.id(),
                         periodStartInstant(command.periodStart()),
                         periodEndExclusiveInstant(command.periodEnd())
                 );
-        if (transactions.isEmpty()) {
+        if (lineSources.isEmpty()) {
             // 当前阶段不生成 zero-activity statement，避免空账单把同一周期锁死。
             // 真实系统可按产品策略选择是否给无交易账户生成 0 元账单。
-            throw new StatementGenerationRejectedException(
+            throw StatementGenerationException.rejected(
                     "no unbilled posted transactions in statement period"
             );
         }
 
-        List<StatementTransaction> statementTransactions = transactions.stream()
-                .map(this::toStatementTransaction)
-                .toList();
-        Money totalAmount = totalAmount(statementTransactions);
+        Money totalAmount = totalAmount(lineSources);
         Statement statement = Statement.close(
                 account.id(),
                 command.periodStart(),
                 command.periodEnd(),
                 command.dueDate(),
-                statementTransactions,
+                lineSources,
                 minimumPayment(totalAmount),
                 now
         );
@@ -126,52 +131,38 @@ public class StatementService {
                     ));
         }
 
-        // CardTransaction 仍然是用户交易流水；这里仅写 statementId/billedAt，
-        // 表达它已经被某一期 statement snapshot 收录，避免下次账单重复计入。
-        // 如果不把交易标记为已归账，下一轮 batch 还会把同一笔 posted transaction 再收进新账单。
-        transactions.forEach(transaction -> transaction.assignToStatement(statement.id(), now));
-        transactionRepository.assignStatement(transactions);
+        // CardTransaction 是用户可见消费明细；StatementLine 是账单快照。
+        // 同一 transaction boundary 内把交易标记为 BILLED，防止下一轮 job 重复生成 line。
+        billingRepository.markCardTransactionsBilled(statement.id(), lineSources, now);
         // 自动扣款计划是 future business action，使用 DelayJob 而不是 Outbox。
         // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
         // 如果这一步不和 statement 同事务提交，就可能出现账单已生成但没有任何到期扣款计划。
         dueJobScheduler.scheduleAutoRepayment(statement);
-        publishDomainEvents(statement);
         return statement;
     }
 
-    private StatementTransaction toStatementTransaction(CardTransaction transaction) {
-        return new StatementTransaction(
-                transaction.id(),
-                transaction.networkTransactionId(),
-                transaction.authorizationId(),
-                transaction.cardId(),
-                transaction.amount(),
-                transaction.postedAt()
-        );
-    }
-
-    private Money totalAmount(List<StatementTransaction> transactions) {
+    private Money totalAmount(List<StatementLineSource> transactions) {
         // getFirst() 是 Java 21 SequencedCollection API；前面已经保证 transactions 非空。
         // 如果没有非空保护，这里会抛 NoSuchElementException，比金额计算错误更早暴露输入问题。
         Currency currency = transactions.getFirst().amount().currency();
         Money total = new Money(BigDecimal.ZERO, currency);
-        for (StatementTransaction transaction : transactions) {
+        for (StatementLineSource transaction : transactions) {
             total = total.add(transaction.amount());
         }
         return total;
     }
 
     private Money minimumPayment(Money totalAmount) {
-        BigDecimal floor = policyProperties.minimumPaymentFloors()
+        BigDecimal floor = properties.policy().minimumPaymentFloors()
                 .get(totalAmount.currency().getCurrencyCode());
         if (floor == null) {
-            throw new StatementGenerationRejectedException(
+            throw StatementGenerationException.rejected(
                     "minimum payment floor is not configured for currency "
                             + totalAmount.currency().getCurrencyCode()
             );
         }
         BigDecimal percentageAmount = totalAmount.amount()
-                .multiply(policyProperties.minimumPaymentRate())
+                .multiply(properties.policy().minimumPaymentRate())
                 // CEILING 对最低还款更保守：分以下的小数向上取整到 0.01，避免少收最低还款。
                 // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
                 .setScale(2, RoundingMode.CEILING);
@@ -183,19 +174,12 @@ public class StatementService {
     }
 
     private Instant periodStartInstant(LocalDate periodStart) {
-        // 当前教学项目统一按 UTC 日切账单。生产系统通常会把 billing timezone 存在账户配置中。
-        return periodStart.atStartOfDay(ZoneOffset.UTC).toInstant();
+        // 账单日切必须用 billing timezone。当前项目使用全局 Asia/Tokyo；
+        // 如果这里继续用 UTC，JST 月末 00:00 附近的交易会被分到错误账期。
+        return periodStart.atStartOfDay(ZoneId.of(properties.batch().zone())).toInstant();
     }
 
     private Instant periodEndExclusiveInstant(LocalDate periodEnd) {
-        return periodEnd.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
-    }
-
-    private void publishDomainEvents(Statement statement) {
-        for (StatementDomainEvent event : statement.pullDomainEvents()) {
-            // 仍在同一个 MySQL transaction boundary 内：statement/items/transaction assignment
-            // 和 Outbox row 一起 commit，Kafka publish 交给后台 worker。
-            eventPublisher.append(event);
-        }
+        return periodEnd.plusDays(1).atStartOfDay(ZoneId.of(properties.batch().zone())).toInstant();
     }
 }

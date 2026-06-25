@@ -91,7 +91,7 @@ public class PostingService {
 
         // networkTransactionId 是 presentment 的天然 idempotency key。
         // 新 presentment 必须在 credit account row lock 之后再 INSERT claim：
-        // StatementService 也先锁 account，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
+        // StatementGenerationService 也先锁 account，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
         // 并保证账单生成期间不会漏掉正在入账的交易。
         // 如果 posting 先锁/插交易再锁 account，而 statement 先锁 account 再锁交易，高并发时会形成环路等待。
         boolean claimed = transactionRepository.claim(pending);

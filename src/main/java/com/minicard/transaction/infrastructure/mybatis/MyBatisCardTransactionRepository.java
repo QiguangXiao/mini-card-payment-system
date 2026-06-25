@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
 import com.minicard.transaction.domain.CardTransaction;
+import com.minicard.transaction.domain.CardTransactionBillingStatus;
 import com.minicard.transaction.domain.CardTransactionRepository;
 import com.minicard.transaction.domain.CardTransactionStatus;
 import lombok.RequiredArgsConstructor;
@@ -52,7 +53,7 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
             java.time.Instant postedAtFromInclusive,
             java.time.Instant postedAtToExclusive
     ) {
-        // StatementService 持有 credit account row lock 后再调用这里。
+        // StatementGenerationService 持有 credit account row lock 后再调用这里。
         // FOR UPDATE 锁住本次账单要 snapshot 的交易行，防止重复 statement assignment。
         return mapper.findUnbilledPostedByCreditAccountForUpdate(
                         creditAccountId.toString(),
@@ -91,6 +92,7 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
                 transaction.amount().amount(),
                 transaction.amount().currency().getCurrencyCode(),
                 transaction.status().name(),
+                transaction.billingStatus().name(),
                 transaction.presentmentReceivedAt(),
                 transaction.postedAt(),
                 transaction.statementId().map(UUID::toString).orElse(null),
@@ -109,6 +111,7 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
                 UUID.fromString(row.creditAccountId()),
                 new Money(row.amount(), Currency.getInstance(row.currency())),
                 CardTransactionStatus.valueOf(row.status()),
+                CardTransactionBillingStatus.valueOf(row.billingStatus()),
                 row.presentmentReceivedAt(),
                 row.postedAt(),
                 optionalUuid(row.statementId()),

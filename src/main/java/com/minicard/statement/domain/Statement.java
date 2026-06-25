@@ -3,15 +3,12 @@ package com.minicard.statement.domain;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
-import com.minicard.statement.domain.event.StatementClosedDomainEvent;
-import com.minicard.statement.domain.event.StatementDomainEvent;
 import lombok.Getter;
 import lombok.experimental.Accessors;
 
@@ -42,9 +39,7 @@ public final class Statement {
     private final Instant generatedAt;
     private final Instant createdAt;
     private Instant updatedAt;
-    private final List<StatementItem> items;
-    // Domain event buffer 只存在于内存中；restore 历史账单不会重新发布 statement.closed。
-    private final List<StatementDomainEvent> domainEvents = new ArrayList<>();
+    private final List<StatementLine> lines;
 
     private Statement(
             UUID id,
@@ -60,7 +55,7 @@ public final class Statement {
             Instant generatedAt,
             Instant createdAt,
             Instant updatedAt,
-            List<StatementItem> items
+            List<StatementLine> lines
     ) {
         this.id = Objects.requireNonNull(id);
         this.creditAccountId = Objects.requireNonNull(creditAccountId);
@@ -75,7 +70,7 @@ public final class Statement {
         this.generatedAt = Objects.requireNonNull(generatedAt);
         this.createdAt = Objects.requireNonNull(createdAt);
         this.updatedAt = Objects.requireNonNull(updatedAt);
-        this.items = List.copyOf(items);
+        this.lines = List.copyOf(lines);
         validateState();
     }
 
@@ -84,16 +79,16 @@ public final class Statement {
             LocalDate periodStart,
             LocalDate periodEnd,
             LocalDate dueDate,
-            List<StatementTransaction> transactions,
+            List<StatementLineSource> lineSources,
             Money minimumPaymentAmount,
             Instant generatedAt
     ) {
-        Objects.requireNonNull(transactions, "transactions must not be null");
+        Objects.requireNonNull(lineSources, "lineSources must not be null");
         UUID statementId = UUID.randomUUID();
-        List<StatementItem> snapshotItems = transactions.stream()
-                .map(transaction -> StatementItem.snapshot(statementId, transaction, generatedAt))
+        List<StatementLine> snapshotLines = lineSources.stream()
+                .map(source -> StatementLine.snapshot(statementId, source, generatedAt))
                 .toList();
-        Money totalAmount = sum(snapshotItems);
+        Money totalAmount = sum(snapshotLines);
         Currency currency = totalAmount.currency();
         Statement statement = new Statement(
                 statementId,
@@ -104,26 +99,13 @@ public final class Statement {
                 totalAmount,
                 minimumPaymentAmount,
                 zero(currency),
-                snapshotItems.size(),
+                snapshotLines.size(),
                 StatementStatus.CLOSED,
                 generatedAt,
                 generatedAt,
                 generatedAt,
-                snapshotItems
+                snapshotLines
         );
-        // CLOSED 是账单周期被固定的业务事实。事件由 aggregate 产生，
-        // application service 只负责把它交给 Outbox，避免在 service 里反向拼业务事件。
-        statement.domainEvents.add(new StatementClosedDomainEvent(
-                statement.id,
-                statement.creditAccountId,
-                statement.periodStart,
-                statement.periodEnd,
-                statement.dueDate,
-                statement.totalAmount,
-                statement.minimumPaymentAmount,
-                statement.transactionCount,
-                statement.generatedAt
-        ));
         return statement;
     }
 
@@ -141,7 +123,7 @@ public final class Statement {
             Instant generatedAt,
             Instant createdAt,
             Instant updatedAt,
-            List<StatementItem> items
+            List<StatementLine> lines
     ) {
         return new Statement(
                 id,
@@ -157,16 +139,14 @@ public final class Statement {
                 generatedAt,
                 createdAt,
                 updatedAt,
-                items
+                lines
         );
     }
 
-    public List<StatementDomainEvent> pullDomainEvents() {
-        // Application service 在同一 transaction 内保存 aggregate 后调用这里。
-        // 返回 copy 并清空，避免同一个 statement.closed 被重复 append 到 Outbox。
-        List<StatementDomainEvent> events = List.copyOf(domainEvents);
-        domainEvents.clear();
-        return events;
+    public List<StatementLine> items() {
+        // API 暂时仍叫 items，但 domain 内部已经是 statement line。
+        // 保留这个 alias 可以降低 controller/read model 的无关 churn。
+        return lines;
     }
 
     public Money remainingAmount() {
@@ -224,10 +204,10 @@ public final class Statement {
                 || !totalAmount.currency().equals(minimumPaymentAmount.currency())) {
             throw new IllegalArgumentException("statement money currencies differ");
         }
-        if (transactionCount <= 0 || transactionCount != items.size()) {
-            throw new IllegalArgumentException("statement transactionCount must match items");
+        if (transactionCount <= 0 || transactionCount != lines.size()) {
+            throw new IllegalArgumentException("statement transactionCount must match lines");
         }
-        Money itemTotal = sum(items);
+        Money itemTotal = sum(lines);
         if (!itemTotal.equals(totalAmount)) {
             throw new IllegalArgumentException("statement totalAmount must match item total");
         }
@@ -236,16 +216,16 @@ public final class Statement {
     }
 
     private void validateItemOwnership() {
-        for (StatementItem item : items) {
-            if (!item.statementId().equals(id)) {
-                throw new IllegalArgumentException("statement item belongs to another statement");
+        for (StatementLine line : lines) {
+            if (!line.statementId().equals(id)) {
+                throw new IllegalArgumentException("statement line belongs to another statement");
             }
-            if (!item.amount().currency().equals(totalAmount.currency())) {
-                throw new IllegalArgumentException("statement item currency differs");
+            if (!line.amount().currency().equals(totalAmount.currency())) {
+                throw new IllegalArgumentException("statement line currency differs");
             }
-            LocalDate postedDate = item.postedAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+            LocalDate postedDate = line.postedAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
             if (postedDate.isBefore(periodStart) || postedDate.isAfter(periodEnd)) {
-                throw new IllegalArgumentException("statement item postedAt is outside billing period");
+                throw new IllegalArgumentException("statement line postedAt is outside billing period");
             }
         }
     }
@@ -281,14 +261,14 @@ public final class Statement {
         }
     }
 
-    private static Money sum(List<StatementItem> items) {
-        if (items == null || items.isEmpty()) {
+    private static Money sum(List<StatementLine> lines) {
+        if (lines == null || lines.isEmpty()) {
             throw new IllegalArgumentException("statement requires at least one posted transaction");
         }
-        Currency currency = items.getFirst().amount().currency();
+        Currency currency = lines.getFirst().amount().currency();
         Money total = zero(currency);
-        for (StatementItem item : items) {
-            total = total.add(item.amount());
+        for (StatementLine line : lines) {
+            total = total.add(line.amount());
         }
         return total;
     }

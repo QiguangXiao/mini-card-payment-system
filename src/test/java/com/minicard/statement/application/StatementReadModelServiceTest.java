@@ -15,7 +15,8 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.infrastructure.cache.SnapshotCache;
 import com.minicard.infrastructure.cache.TransactionAwareSnapshotCacheEvictor;
 import com.minicard.statement.domain.Statement;
-import com.minicard.statement.domain.StatementTransaction;
+import com.minicard.statement.domain.StatementLine;
+import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,23 +28,23 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class StatementReadModelServiceTest {
+class StatementReadServiceTest {
 
     private static final UUID STATEMENT_ID =
             UUID.fromString("22222222-2222-2222-2222-222222222222");
     private static final UUID ACCOUNT_ID =
             UUID.fromString("11111111-1111-1111-1111-111111111111");
 
-    private StatementService statementService;
+    private StatementGenerationService statementGenerationService;
     private FakeSnapshotCache cache;
-    private StatementReadModelService service;
+    private StatementReadService service;
 
     @BeforeEach
     void setUp() {
-        statementService = mock(StatementService.class);
+        statementGenerationService = mock(StatementGenerationService.class);
         cache = new FakeSnapshotCache();
-        service = new StatementReadModelService(
-                statementService,
+        service = new StatementReadService(
+                statementGenerationService,
                 cache,
                 new TransactionAwareSnapshotCacheEvictor()
         );
@@ -59,7 +60,7 @@ class StatementReadModelServiceTest {
     @Test
     void cachesStatementReadModelInsteadOfReloadingAggregateEveryTime() {
         Statement statement = statement();
-        when(statementService.get(statement.id())).thenReturn(statement);
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
 
         StatementReadModel first = service.get(statement.id());
         StatementReadModel second = service.get(statement.id());
@@ -67,7 +68,7 @@ class StatementReadModelServiceTest {
         assertThat(first).isSameAs(second);
         assertThat(first.status()).isEqualTo("CLOSED");
         assertThat(first.items()).hasSize(1);
-        verify(statementService, times(1)).get(statement.id());
+        verify(statementGenerationService, times(1)).get(statement.id());
     }
 
     @Test
@@ -95,7 +96,8 @@ class StatementReadModelServiceTest {
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30"),
                 LocalDate.parse("2026-07-25"),
-                List.of(new StatementTransaction(
+                List.of(new StatementLineSource(
+                        UUID.randomUUID(),
                         UUID.randomUUID(),
                         "ntx-001",
                         UUID.randomUUID(),
@@ -106,7 +108,6 @@ class StatementReadModelServiceTest {
                 money("1000.00"),
                 Instant.parse("2026-07-01T00:00:00Z")
         );
-        statement.pullDomainEvents();
         return Statement.restore(
                 STATEMENT_ID,
                 statement.creditAccountId(),
@@ -122,10 +123,11 @@ class StatementReadModelServiceTest {
                 statement.createdAt(),
                 statement.updatedAt(),
                 statement.items().stream()
-                        .map(item -> com.minicard.statement.domain.StatementItem.restore(
+                        .map(item -> StatementLine.restore(
                                 item.id(),
                                 STATEMENT_ID,
                                 item.cardTransactionId(),
+                                item.ledgerEntryId().orElse(null),
                                 item.networkTransactionId(),
                                 item.authorizationId(),
                                 item.cardId(),

@@ -26,11 +26,12 @@
     </resultMap>
 
     <resultMap id="statementItemRowMap"
-               type="com.minicard.statement.infrastructure.mybatis.StatementItemRow">
+               type="com.minicard.statement.infrastructure.mybatis.StatementLineRow">
         <constructor>
             <arg column="id" javaType="java.lang.String"/>
             <arg column="statement_id" javaType="java.lang.String"/>
             <arg column="card_transaction_id" javaType="java.lang.String"/>
+            <arg column="ledger_entry_id" javaType="java.lang.String"/>
             <arg column="network_transaction_id" javaType="java.lang.String"/>
             <arg column="authorization_id" javaType="java.lang.String"/>
             <arg column="card_id" javaType="java.lang.String"/>
@@ -48,7 +49,7 @@
     </sql>
 
     <sql id="statementItemColumns">
-        id, statement_id, card_transaction_id, network_transaction_id,
+        id, statement_id, card_transaction_id, ledger_entry_id, network_transaction_id,
         authorization_id, card_id, amount, currency, posted_at, created_at
     </sql>
 
@@ -74,12 +75,13 @@
     </insert>
 
     <insert id="insertItem">
-        INSERT INTO statement_items (
+        INSERT INTO statement_lines (
             <include refid="statementItemColumns"/>
         ) VALUES (
             #{id},
             #{statementId},
             #{cardTransactionId},
+            #{ledgerEntryId,jdbcType=CHAR},
             #{networkTransactionId},
             #{authorizationId},
             #{cardId},
@@ -122,7 +124,7 @@
 
     <select id="findItemsByStatementId" resultMap="statementItemRowMap">
         SELECT <include refid="statementItemColumns"/>
-        FROM statement_items
+        FROM statement_lines
         WHERE statement_id = #{statementId}
         ORDER BY posted_at, card_transaction_id
     </select>

@@ -7,7 +7,7 @@ import java.util.UUID;
 
 import com.minicard.authorization.domain.Money;
 import com.minicard.statement.domain.Statement;
-import com.minicard.statement.domain.StatementItem;
+import com.minicard.statement.domain.StatementLine;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +18,7 @@ import org.springframework.stereotype.Repository;
  * StatementRepository 的 MyBatis adapter。
  *
  * <p>它负责把 aggregate + statement items snapshot 持久化到两张表。
- * 账单生成顺序、锁和 minimum payment 规则仍留在 StatementService/domain。</p>
+ * 账单生成顺序、锁和 minimum payment 规则仍留在 StatementGenerationService/domain。</p>
  */
 @Repository
 @RequiredArgsConstructor
@@ -30,18 +30,18 @@ public class MyBatisStatementRepository implements StatementRepository {
     public boolean insert(Statement statement) {
         try {
             // 只把 statement 主表的 cycle unique conflict 转成 false。
-            // 这样 StatementService 可以把“同周期已出账”当成幂等结果处理。
+            // 这样 StatementGenerationService 可以把“同周期已出账”当成幂等结果处理。
             mapper.insertStatement(toRow(statement));
         } catch (DuplicateKeyException exception) {
             // 只在 statement header insert 阶段把 duplicate key 当成幂等命中。
-            // 后续 item insert 的 duplicate key 代表数据不一致，必须继续抛出并 rollback。
+            // 后续 line insert 的 duplicate key 代表数据不一致，必须继续抛出并 rollback。
             return false;
         }
         // 只有 statement 主表唯一键冲突才是 cycle-level idempotency。
-        // statement_items 的唯一键冲突代表数据不一致，必须继续抛出并 rollback。
-        for (StatementItem item : statement.items()) {
-            // item 插入失败不吞掉：主表已插入但 item 冲突说明数据损坏，应 rollback 整个 transaction。
-            mapper.insertItem(toRow(item));
+        // statement_lines 的唯一键冲突代表数据不一致，必须继续抛出并 rollback。
+        for (StatementLine line : statement.items()) {
+            // line 插入失败不吞掉：主表已插入但 line 冲突说明数据不一致，应 rollback 整个 transaction。
+            mapper.insertItem(toRow(line));
         }
         return true;
     }
@@ -74,12 +74,12 @@ public class MyBatisStatementRepository implements StatementRepository {
 
     @Override
     public void updatePayment(Statement statement) {
-        // Repayment 只推进 paidAmount/status，不允许重写 totalAmount 或 statement_items 快照。
+        // Repayment 只推进 paidAmount/status，不允许重写 totalAmount 或 statement_lines 快照。
         mapper.updatePayment(toRow(statement));
     }
 
     private Statement toDomainWithItems(StatementRow row) {
-        List<StatementItem> items = mapper.findItemsByStatementId(row.id())
+        List<StatementLine> lines = mapper.findItemsByStatementId(row.id())
                 .stream()
                 .map(this::toDomain)
                 .toList();
@@ -98,7 +98,7 @@ public class MyBatisStatementRepository implements StatementRepository {
                 row.generatedAt(),
                 row.createdAt(),
                 row.updatedAt(),
-                items
+                lines
         );
     }
 
@@ -121,26 +121,28 @@ public class MyBatisStatementRepository implements StatementRepository {
         );
     }
 
-    private StatementItemRow toRow(StatementItem item) {
-        return new StatementItemRow(
-                item.id().toString(),
-                item.statementId().toString(),
-                item.cardTransactionId().toString(),
-                item.networkTransactionId(),
-                item.authorizationId().toString(),
-                item.cardId(),
-                item.amount().amount(),
-                item.amount().currency().getCurrencyCode(),
-                item.postedAt(),
-                item.createdAt()
+    private StatementLineRow toRow(StatementLine line) {
+        return new StatementLineRow(
+                line.id().toString(),
+                line.statementId().toString(),
+                line.cardTransactionId().toString(),
+                line.ledgerEntryId().map(UUID::toString).orElse(null),
+                line.networkTransactionId(),
+                line.authorizationId().toString(),
+                line.cardId(),
+                line.amount().amount(),
+                line.amount().currency().getCurrencyCode(),
+                line.postedAt(),
+                line.createdAt()
         );
     }
 
-    private StatementItem toDomain(StatementItemRow row) {
-        return StatementItem.restore(
+    private StatementLine toDomain(StatementLineRow row) {
+        return StatementLine.restore(
                 UUID.fromString(row.id()),
                 UUID.fromString(row.statementId()),
                 UUID.fromString(row.cardTransactionId()),
+                optionalUuid(row.ledgerEntryId()),
                 row.networkTransactionId(),
                 UUID.fromString(row.authorizationId()),
                 row.cardId(),
@@ -148,5 +150,9 @@ public class MyBatisStatementRepository implements StatementRepository {
                 row.postedAt(),
                 row.createdAt()
         );
+    }
+
+    private UUID optionalUuid(String value) {
+        return value == null ? null : UUID.fromString(value);
     }
 }

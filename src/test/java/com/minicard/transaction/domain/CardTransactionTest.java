@@ -23,6 +23,7 @@ class CardTransactionTest {
         transaction.markPosted(NOW.plusSeconds(1));
 
         assertThat(transaction.status()).isEqualTo(CardTransactionStatus.POSTED);
+        assertThat(transaction.billingStatus()).isEqualTo(CardTransactionBillingStatus.UNBILLED);
         assertThat(transaction.postedAt()).isEqualTo(NOW.plusSeconds(1));
         assertThat(transaction.pullDomainEvents())
                 .hasSize(1)
@@ -49,6 +50,7 @@ class CardTransactionTest {
         transaction.assignToStatement(statementId, NOW.plusSeconds(2));
 
         assertThat(transaction.statementId()).contains(statementId);
+        assertThat(transaction.billingStatus()).isEqualTo(CardTransactionBillingStatus.BILLED);
         assertThat(transaction.statementAssignedAt()).contains(NOW.plusSeconds(2));
         assertThatThrownBy(() -> transaction.assignToStatement(UUID.randomUUID(), NOW.plusSeconds(3)))
                 .isInstanceOf(IllegalStateException.class)

@@ -31,7 +31,7 @@ public record StatementReadModel(
         int transactionCount,
         String status,
         Instant generatedAt,
-        List<StatementItemReadModel> items
+        List<StatementLineReadModel> items
 ) {
 
     public static StatementReadModel from(Statement statement) {
@@ -49,7 +49,7 @@ public record StatementReadModel(
                 statement.status().name(),
                 statement.generatedAt(),
                 statement.items().stream()
-                        .map(StatementItemReadModel::from)
+                        .map(StatementLineReadModel::from)
                         .toList()
         );
     }

@@ -2,6 +2,7 @@ package com.minicard.infrastructure.async;
 
 import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.outbox.OutboxProperties;
+import com.minicard.statement.application.StatementProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -56,6 +57,25 @@ public class WorkerExecutorConfiguration {
         executor.setCorePoolSize(properties.workerPoolSize());
         executor.setMaxPoolSize(properties.workerPoolSize());
         executor.setQueueCapacity(properties.workerQueueCapacity());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
+
+    /**
+     * Statement billing job worker pool。
+     */
+    @Bean(name = "statementJobWorkerExecutor")
+    public ThreadPoolTaskExecutor statementJobWorkerExecutor(
+            StatementProperties properties
+    ) {
+        StatementProperties.Jobs jobs = properties.jobs();
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("statement-job-worker-");
+        // Statement job 内部会按 account 进入小事务，但仍可能同时竞争 credit_accounts row lock，线程数必须有界。
+        executor.setCorePoolSize(jobs.workerPoolSize());
+        executor.setMaxPoolSize(jobs.workerPoolSize());
+        executor.setQueueCapacity(jobs.workerQueueCapacity());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(10);
         return executor;

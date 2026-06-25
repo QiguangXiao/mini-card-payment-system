@@ -37,6 +37,7 @@ public final class CardTransaction {
     private final UUID creditAccountId;
     private final Money amount;
     private CardTransactionStatus status;
+    private CardTransactionBillingStatus billingStatus;
     private final Instant presentmentReceivedAt;
     private Instant postedAt;
     private UUID statementId;
@@ -54,6 +55,7 @@ public final class CardTransaction {
             UUID creditAccountId,
             Money amount,
             CardTransactionStatus status,
+            CardTransactionBillingStatus billingStatus,
             Instant presentmentReceivedAt,
             Instant postedAt,
             UUID statementId,
@@ -71,6 +73,7 @@ public final class CardTransaction {
             throw new IllegalArgumentException("transaction amount must be greater than zero");
         }
         this.status = Objects.requireNonNull(status);
+        this.billingStatus = Objects.requireNonNull(billingStatus);
         this.presentmentReceivedAt = Objects.requireNonNull(presentmentReceivedAt);
         this.postedAt = postedAt;
         this.statementId = statementId;
@@ -97,6 +100,7 @@ public final class CardTransaction {
                 creditAccountId,
                 amount,
                 CardTransactionStatus.PENDING,
+                CardTransactionBillingStatus.UNBILLED,
                 receivedAt,
                 null,
                 null,
@@ -114,6 +118,7 @@ public final class CardTransaction {
             UUID creditAccountId,
             Money amount,
             CardTransactionStatus status,
+            CardTransactionBillingStatus billingStatus,
             Instant presentmentReceivedAt,
             Instant postedAt,
             UUID statementId,
@@ -129,6 +134,7 @@ public final class CardTransaction {
                 creditAccountId,
                 amount,
                 status,
+                billingStatus,
                 presentmentReceivedAt,
                 postedAt,
                 statementId,
@@ -168,8 +174,13 @@ public final class CardTransaction {
         if (this.statementId != null) {
             throw new IllegalStateException("card transaction is already assigned to a statement");
         }
+        if (billingStatus == CardTransactionBillingStatus.BILLED) {
+            // billingStatus 是显式 billed marker；没有这个 guard，脏数据可能让同一交易被重复写入 statement line。
+            throw new IllegalStateException("card transaction is already billed");
+        }
         this.statementId = Objects.requireNonNull(statementId);
         this.statementAssignedAt = Objects.requireNonNull(assignedAt);
+        this.billingStatus = CardTransactionBillingStatus.BILLED;
         updatedAt = assignedAt;
     }
 
@@ -210,8 +221,18 @@ public final class CardTransaction {
                 && (statementId != null || statementAssignedAt != null)) {
             throw new IllegalArgumentException("pending transaction cannot be assigned to statement");
         }
+        if (status == CardTransactionStatus.PENDING
+                && billingStatus == CardTransactionBillingStatus.BILLED) {
+            throw new IllegalArgumentException("pending transaction cannot be billed");
+        }
         if ((statementId == null) != (statementAssignedAt == null)) {
             throw new IllegalArgumentException("statement assignment requires both id and timestamp");
+        }
+        if (billingStatus == CardTransactionBillingStatus.BILLED && statementId == null) {
+            throw new IllegalArgumentException("billed transaction requires statement assignment");
+        }
+        if (billingStatus == CardTransactionBillingStatus.UNBILLED && statementId != null) {
+            throw new IllegalArgumentException("statement assignment requires billed status");
         }
     }
 

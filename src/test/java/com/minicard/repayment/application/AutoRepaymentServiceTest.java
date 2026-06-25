@@ -12,7 +12,7 @@ import com.minicard.authorization.domain.Money;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
-import com.minicard.statement.domain.StatementTransaction;
+import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -91,7 +91,8 @@ class AutoRepaymentServiceTest {
                 LocalDate.parse("2026-05-16"),
                 LocalDate.parse("2026-06-15"),
                 LocalDate.parse("2026-07-27"),
-                List.of(new StatementTransaction(
+                List.of(new StatementLineSource(
+                        UUID.randomUUID(),
                         UUID.randomUUID(),
                         "ntx-001",
                         UUID.randomUUID(),
@@ -102,7 +103,6 @@ class AutoRepaymentServiceTest {
                 money("1000.00"),
                 Instant.parse("2026-06-16T00:00:00Z")
         );
-        statement.pullDomainEvents();
         return statement;
     }
 

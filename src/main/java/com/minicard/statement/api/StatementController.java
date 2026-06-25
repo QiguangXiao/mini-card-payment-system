@@ -5,8 +5,8 @@ import java.util.UUID;
 import com.minicard.statement.api.dto.GenerateStatementRequest;
 import com.minicard.statement.api.dto.StatementResponse;
 import com.minicard.statement.application.GenerateStatementCommand;
-import com.minicard.statement.application.StatementReadModelService;
-import com.minicard.statement.application.StatementService;
+import com.minicard.statement.application.StatementGenerationService;
+import com.minicard.statement.application.StatementReadService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,9 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Statement API controller。
  *
- * <p>真实主路径是 StatementBatchPoller 触发的 monthly batch。
+ * <p>真实主路径是 BillingCycleScheduler 创建 statement_batch/jobs 后由 worker 处理。
  * 这个 HTTP 入口保留为学习/运营 backfill 用；账单生成的 idempotency、row lock、
- * transaction boundary、snapshot 和 due-date DelayJob 仍在 StatementService/domain 内。</p>
+ * transaction boundary、snapshot 和 due-date DelayJob 仍在 StatementGenerationService/domain 内。</p>
  */
 @RestController
 @RequestMapping("/api/statements")
@@ -30,8 +30,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class StatementController {
 
-    private final StatementService statementService;
-    private final StatementReadModelService statementReadModelService;
+    private final StatementGenerationService statementGenerationService;
+    private final StatementReadService statementReadService;
 
     @PostMapping("/generate")
     // @Valid 校验手动入口的 body；真实 batch 路径不会经过 controller，所以 service/domain 仍要防御非法账期。
@@ -42,13 +42,13 @@ public class StatementController {
                 request.periodEnd(),
                 request.dueDate()
         );
-        return StatementResponse.from(statementService.generate(command));
+        return StatementResponse.from(statementGenerationService.generate(command));
     }
 
     @GetMapping("/{id}")
     // @PathVariable 由 Spring MVC 把路径文本转换成 UUID；格式错误会在 HTTP boundary 变成 400。
     // 如果先收 String 再手动 parse，错误处理容易散到 controller 里。
     public StatementResponse get(@PathVariable UUID id) {
-        return StatementResponse.from(statementReadModelService.get(id));
+        return StatementResponse.from(statementReadService.get(id));
     }
 }

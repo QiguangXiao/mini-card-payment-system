@@ -14,7 +14,7 @@ import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobRepository;
 import com.minicard.delayjob.DelayJobType;
 import com.minicard.statement.domain.Statement;
-import com.minicard.statement.domain.StatementTransaction;
+import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -53,7 +53,8 @@ class AutoRepaymentDelayJobSchedulerTest {
                 LocalDate.parse("2026-05-16"),
                 LocalDate.parse("2026-06-15"),
                 LocalDate.parse("2026-07-27"),
-                List.of(new StatementTransaction(
+                List.of(new StatementLineSource(
+                        UUID.randomUUID(),
                         UUID.randomUUID(),
                         "ntx-001",
                         UUID.randomUUID(),
@@ -64,7 +65,6 @@ class AutoRepaymentDelayJobSchedulerTest {
                 money("1000.00"),
                 NOW
         );
-        statement.pullDomainEvents();
         return statement;
     }
 

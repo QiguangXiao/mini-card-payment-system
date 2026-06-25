@@ -27,7 +27,7 @@ public interface StatementMapper {
     /**
      * 插入账单明细 snapshot。
      */
-    int insertItem(StatementItemRow item);
+    int insertItem(StatementLineRow item);
 
     /**
      * 按账期查询并加 FOR UPDATE row lock。
@@ -59,5 +59,5 @@ public interface StatementMapper {
     /**
      * 查询 statement 明细列表。
      */
-    List<StatementItemRow> findItemsByStatementId(@Param("statementId") String statementId);
+    List<StatementLineRow> findItemsByStatementId(@Param("statementId") String statementId);
 }

@@ -16,14 +16,10 @@ import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
 import com.minicard.statement.domain.Statement;
+import com.minicard.statement.domain.StatementLineSource;
 import com.minicard.statement.domain.StatementRepository;
-import com.minicard.statement.domain.event.StatementDomainEvent;
-import com.minicard.statement.domain.event.StatementClosedDomainEvent;
-import com.minicard.transaction.domain.CardTransaction;
-import com.minicard.transaction.domain.CardTransactionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,36 +30,30 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class StatementServiceTest {
+class StatementGenerationServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
     private static final UUID ACCOUNT_ID =
             UUID.fromString("11111111-1111-1111-1111-111111111111");
 
     private StatementRepository statementRepository;
-    private CardTransactionRepository transactionRepository;
+    private StatementBillingRepository billingRepository;
     private CreditAccountRepository creditAccountRepository;
-    private StatementDomainEventPublisher eventPublisher;
     private StatementDueJobScheduler dueJobScheduler;
-    private StatementService service;
+    private StatementGenerationService service;
 
     @BeforeEach
     void setUp() {
         statementRepository = mock(StatementRepository.class);
-        transactionRepository = mock(CardTransactionRepository.class);
+        billingRepository = mock(StatementBillingRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
-        eventPublisher = mock(StatementDomainEventPublisher.class);
         dueJobScheduler = mock(StatementDueJobScheduler.class);
-        service = new StatementService(
+        service = new StatementGenerationService(
                 statementRepository,
-                transactionRepository,
+                billingRepository,
                 creditAccountRepository,
-                eventPublisher,
                 dueJobScheduler,
-                new StatementPolicyProperties(
-                        new BigDecimal("0.10"),
-                        Map.of("JPY", new BigDecimal("1000.00"))
-                ),
+                statementProperties(),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -71,18 +61,23 @@ class StatementServiceTest {
     @Test
     void generatesStatementFromUnbilledPostedTransactions() {
         CreditAccount account = account();
-        CardTransaction first = postedTransaction("ntx-001", "1000.00");
-        CardTransaction second = postedTransaction("ntx-002", "500.00");
+        StatementLineSource first = lineSource("ntx-001", "1000.00");
+        StatementLineSource second = lineSource("ntx-002", "500.00");
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
         when(statementRepository.findByCycleForUpdate(
                 ACCOUNT_ID,
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30")
         )).thenReturn(Optional.empty());
-        when(transactionRepository.findUnbilledPostedByCreditAccountForUpdate(
+        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
                 eq(ACCOUNT_ID),
-                eq(Instant.parse("2026-06-01T00:00:00Z")),
-                eq(Instant.parse("2026-07-01T00:00:00Z"))
+                eq(Instant.parse("2026-05-31T15:00:00Z")),
+                eq(Instant.parse("2026-06-30T15:00:00Z"))
+        )).thenReturn(false);
+        when(billingRepository.findBillableLineSourcesForUpdate(
+                eq(ACCOUNT_ID),
+                eq(Instant.parse("2026-05-31T15:00:00Z")),
+                eq(Instant.parse("2026-06-30T15:00:00Z"))
         )).thenReturn(List.of(first, second));
         when(statementRepository.insert(any())).thenReturn(true);
 
@@ -91,15 +86,12 @@ class StatementServiceTest {
         assertThat(statement.creditAccountId()).isEqualTo(ACCOUNT_ID);
         assertThat(statement.totalAmount().amount()).isEqualByComparingTo("1500.00");
         assertThat(statement.minimumPaymentAmount().amount()).isEqualByComparingTo("1000.00");
-        assertThat(first.statementId()).contains(statement.id());
-        assertThat(second.statementId()).contains(statement.id());
+        assertThat(statement.items())
+                .extracting(item -> item.ledgerEntryId().orElseThrow())
+                .containsExactly(first.ledgerEntryId(), second.ledgerEntryId());
         verify(statementRepository).insert(statement);
-        verify(transactionRepository).assignStatement(List.of(first, second));
+        verify(billingRepository).markCardTransactionsBilled(statement.id(), List.of(first, second), NOW);
         verify(dueJobScheduler).scheduleAutoRepayment(statement);
-        ArgumentCaptor<StatementDomainEvent> event =
-                ArgumentCaptor.forClass(StatementDomainEvent.class);
-        verify(eventPublisher).append(event.capture());
-        assertThat(event.getValue()).isInstanceOf(StatementClosedDomainEvent.class);
     }
 
     @Test
@@ -116,11 +108,10 @@ class StatementServiceTest {
         Statement result = service.generate(command());
 
         assertThat(result).isSameAs(existing);
-        verify(transactionRepository, never())
-                .findUnbilledPostedByCreditAccountForUpdate(any(), any(), any());
+        verify(billingRepository, never())
+                .findBillableLineSourcesForUpdate(any(), any(), any());
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
-        verify(eventPublisher, never()).append(any());
     }
 
     @Test
@@ -132,15 +123,42 @@ class StatementServiceTest {
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30")
         )).thenReturn(Optional.empty());
-        when(transactionRepository.findUnbilledPostedByCreditAccountForUpdate(
+        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
+                any(),
+                any(),
+                any()
+        )).thenReturn(false);
+        when(billingRepository.findBillableLineSourcesForUpdate(
                 any(),
                 any(),
                 any()
         )).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.generate(command()))
-                .isInstanceOf(StatementGenerationRejectedException.class)
+                .isInstanceOf(StatementGenerationException.class)
                 .hasMessageContaining("no unbilled posted transactions");
+        verify(statementRepository, never()).insert(any());
+        verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
+    }
+
+    @Test
+    void retriesWhenPostedTransactionsAreWaitingForLedgerEntries() {
+        CreditAccount account = account();
+        when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
+        when(statementRepository.findByCycleForUpdate(
+                ACCOUNT_ID,
+                LocalDate.parse("2026-06-01"),
+                LocalDate.parse("2026-06-30")
+        )).thenReturn(Optional.empty());
+        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
+                any(),
+                any(),
+                any()
+        )).thenReturn(true);
+
+        assertThatThrownBy(() -> service.generate(command()))
+                .isInstanceOf(StatementGenerationException.class)
+                .hasMessageContaining("waiting for ledger entries");
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
     }
@@ -154,6 +172,17 @@ class StatementServiceTest {
         );
     }
 
+    private StatementProperties statementProperties() {
+        return new StatementProperties(
+                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 1000),
+                new StatementProperties.Jobs(true, 1000, 10000, 10, 3, 300, 4, 20),
+                new StatementProperties.Policy(
+                        new BigDecimal("0.10"),
+                        Map.of("JPY", new BigDecimal("1000.00"))
+                )
+        );
+    }
+
     private CreditAccount account() {
         return CreditAccount.restore(
                 ACCOUNT_ID,
@@ -164,18 +193,16 @@ class StatementServiceTest {
         );
     }
 
-    private CardTransaction postedTransaction(String networkTransactionId, String amount) {
-        CardTransaction transaction = CardTransaction.pending(
+    private StatementLineSource lineSource(String networkTransactionId, String amount) {
+        return new StatementLineSource(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),
                 "card-123",
-                ACCOUNT_ID,
                 money(amount),
-                Instant.parse("2026-06-15T10:00:00Z")
+                Instant.parse("2026-06-15T10:00:01Z")
         );
-        transaction.markPosted(Instant.parse("2026-06-15T10:00:01Z"));
-        transaction.pullDomainEvents();
-        return transaction;
     }
 
     private Statement existingStatement() {
@@ -184,7 +211,8 @@ class StatementServiceTest {
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30"),
                 LocalDate.parse("2026-07-25"),
-                List.of(new com.minicard.statement.domain.StatementTransaction(
+                List.of(new StatementLineSource(
+                        UUID.randomUUID(),
                         UUID.randomUUID(),
                         "ntx-existing",
                         UUID.randomUUID(),

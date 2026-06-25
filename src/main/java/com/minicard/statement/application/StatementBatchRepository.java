@@ -1,20 +1,22 @@
 package com.minicard.statement.application;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
+import com.minicard.statement.domain.StatementBatch;
+
 /**
- * Statement batch 候选账户查询 port。
+ * Statement batch 持久化 port。
  *
- * <p>它只找“可能需要出账”的 account id；真正的 row lock、账单幂等和交易归账
- * 仍由 StatementService 在每个账户自己的 transaction boundary 内完成。</p>
+ * <p>关键词：账单批次仓储, cycle idempotency, batch completion,
+ * statement batch repository, durable batch, 請求バッチリポジトリ(せいきゅうバッチリポジトリ)。</p>
  */
 public interface StatementBatchRepository {
 
-    List<UUID> findCreditAccountIdsWithUnbilledPostedTransactions(
-            Instant periodStartInclusive,
-            Instant periodEndExclusive,
-            int limit
-    );
+    boolean insert(StatementBatch batch);
+
+    StatementBatch findById(UUID id);
+
+    StatementBatch findByIdForUpdate(UUID id);
+
+    void updateState(StatementBatch batch);
 }

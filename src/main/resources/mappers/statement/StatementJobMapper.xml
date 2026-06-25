@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.statement.infrastructure.mybatis.StatementJobMapper">
+
+    <resultMap id="statementJobRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementJobRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="batch_id" javaType="java.lang.String"/>
+            <arg column="shard_no" javaType="int"/>
+            <arg column="shard_count" javaType="int"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="claimed_by" javaType="java.lang.String"/>
+            <arg column="claimed_at" javaType="java.time.Instant"/>
+            <arg column="claim_until" javaType="java.time.Instant"/>
+            <arg column="attempt_count" javaType="int"/>
+            <arg column="processed_account_count" javaType="int"/>
+            <arg column="generated_statement_count" javaType="int"/>
+            <arg column="skipped_account_count" javaType="int"/>
+            <arg column="failed_account_count" javaType="int"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+            <arg column="last_error" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="statementJobStatusSummaryRowMap"
+               type="com.minicard.statement.infrastructure.mybatis.StatementJobStatusSummaryRow">
+        <constructor>
+            <arg column="total_count" javaType="int"/>
+            <arg column="pending_count" javaType="int"/>
+            <arg column="processing_count" javaType="int"/>
+            <arg column="done_count" javaType="int"/>
+            <arg column="dead_count" javaType="int"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="statementJobColumns">
+        id, batch_id, shard_no, shard_count, status, claimed_by, claimed_at,
+        claim_until, attempt_count, processed_account_count, generated_statement_count,
+        skipped_account_count, failed_account_count, created_at, updated_at, last_error
+    </sql>
+
+    <insert id="insert">
+        INSERT INTO statement_jobs (
+            <include refid="statementJobColumns"/>
+        ) VALUES (
+            #{id},
+            #{batchId},
+            #{shardNo},
+            #{shardCount},
+            #{status},
+            #{claimedBy,jdbcType=VARCHAR},
+            #{claimedAt,jdbcType=TIMESTAMP},
+            #{claimUntil,jdbcType=TIMESTAMP},
+            #{attemptCount},
+            #{processedAccountCount},
+            #{generatedStatementCount},
+            #{skippedAccountCount},
+            #{failedAccountCount},
+            #{createdAt},
+            #{updatedAt},
+            #{lastError,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <!-- 多个 worker/pod 并发 claim 时，SKIP LOCKED 会跳过别人已锁住的 job row。 -->
+    <select id="findClaimableBatchForUpdate" resultMap="statementJobRowMap">
+        SELECT <include refid="statementJobColumns"/>
+        FROM statement_jobs
+        WHERE status = 'PENDING'
+        ORDER BY created_at, shard_no, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!-- PROCESSING 不是永久状态；claim_until 到期说明 worker 可能宕机，需要 recover。 -->
+    <select id="findStuckProcessingBatchForUpdate" resultMap="statementJobRowMap">
+        SELECT <include refid="statementJobColumns"/>
+        FROM statement_jobs
+        WHERE status = 'PROCESSING'
+          AND claim_until &lt;= #{now}
+        ORDER BY claim_until, created_at, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="statementJobRowMap">
+        SELECT <include refid="statementJobColumns"/>
+        FROM statement_jobs
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="updateExecutionState">
+        UPDATE statement_jobs
+        SET status = #{status},
+            claimed_by = #{claimedBy,jdbcType=VARCHAR},
+            claimed_at = #{claimedAt,jdbcType=TIMESTAMP},
+            claim_until = #{claimUntil,jdbcType=TIMESTAMP},
+            attempt_count = #{attemptCount},
+            processed_account_count = #{processedAccountCount},
+            generated_statement_count = #{generatedStatementCount},
+            skipped_account_count = #{skippedAccountCount},
+            failed_account_count = #{failedAccountCount},
+            updated_at = #{updatedAt},
+            last_error = #{lastError,jdbcType=VARCHAR}
+        WHERE id = #{id}
+    </update>
+
+    <select id="summarizeByBatchId" resultMap="statementJobStatusSummaryRowMap">
+        SELECT
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count,
+            SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END) AS processing_count,
+            SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END) AS done_count,
+            SUM(CASE WHEN status = 'DEAD' THEN 1 ELSE 0 END) AS dead_count
+        FROM statement_jobs
+        WHERE batch_id = #{batchId}
+    </select>
+
+</mapper>
