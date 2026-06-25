@@ -1,13 +1,16 @@
 package com.minicard.statement.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * statement_jobs 表的 MyBatis row DTO。
  */
 public record StatementJobRow(
         String id,
-        String batchId,
+        LocalDate periodStart,
+        LocalDate periodEnd,
+        LocalDate dueDate,
         int shardNo,
         int shardCount,
         String status,

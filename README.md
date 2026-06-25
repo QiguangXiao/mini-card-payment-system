@@ -42,6 +42,9 @@ See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
 side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
 producer/consumer contexts, platform execution resources, and why their names
 are similar or intentionally different.
+See [Statement Job Design](docs/statement-job-design-cn.md) for the flattened
+sharded claimable-job design, the before/after of dropping the parent batch,
+and a comparison with the DelayJob and Outbox job implementations.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.

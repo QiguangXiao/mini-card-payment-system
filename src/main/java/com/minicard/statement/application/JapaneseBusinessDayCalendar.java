@@ -46,7 +46,7 @@ public class JapaneseBusinessDayCalendar implements BusinessDayCalendar {
      * 日本固定/Happy Monday 祝日规则。
      *
      * <p>这里只覆盖当前学习项目需要的现代日本规则；interview可以说明这属于
-     * business calendar rule，不应该散落在 StatementBatchService 里。</p>
+     * business calendar rule，不应该散落在 StatementCycleService 里。</p>
      */
     private Set<LocalDate> baseNationalHolidays(int year) {
         // TreeSet 让日期天然排序；后续查阅日志/调试 holiday set 时输出顺序稳定。

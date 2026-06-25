@@ -24,6 +24,4 @@ public interface StatementJobRepository {
     Optional<StatementJob> findByIdForUpdate(UUID id);
 
     void updateExecutionState(StatementJob job);
-
-    StatementJobStatusSummary summarizeByBatchId(UUID batchId);
 }

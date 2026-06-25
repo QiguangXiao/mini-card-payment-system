@@ -6,7 +6,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.minicard.statement.application.StatementJobRepository;
-import com.minicard.statement.application.StatementJobStatusSummary;
 import com.minicard.statement.domain.StatementJob;
 import com.minicard.statement.domain.StatementJobStatus;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +25,7 @@ public class MyBatisStatementJobRepository implements StatementJobRepository {
 
     @Override
     public void insertAll(List<StatementJob> jobs) {
+        // 逐条 INSERT IGNORE：同一个 cycle 的分片创建是幂等的，重复触发不会产生重复 job。
         for (StatementJob job : jobs) {
             mapper.insert(toRow(job));
         }
@@ -58,22 +58,12 @@ public class MyBatisStatementJobRepository implements StatementJobRepository {
         mapper.updateExecutionState(toRow(job));
     }
 
-    @Override
-    public StatementJobStatusSummary summarizeByBatchId(UUID batchId) {
-        StatementJobStatusSummaryRow row = mapper.summarizeByBatchId(batchId.toString());
-        return new StatementJobStatusSummary(
-                row.totalCount(),
-                row.pendingCount(),
-                row.processingCount(),
-                row.doneCount(),
-                row.deadCount()
-        );
-    }
-
     private StatementJobRow toRow(StatementJob job) {
         return new StatementJobRow(
                 job.id().toString(),
-                job.batchId().toString(),
+                job.periodStart(),
+                job.periodEnd(),
+                job.dueDate(),
                 job.shardNo(),
                 job.shardCount(),
                 job.status().name(),
@@ -94,7 +84,9 @@ public class MyBatisStatementJobRepository implements StatementJobRepository {
     private StatementJob toDomain(StatementJobRow row) {
         return StatementJob.restore(
                 UUID.fromString(row.id()),
-                UUID.fromString(row.batchId()),
+                row.periodStart(),
+                row.periodEnd(),
+                row.dueDate(),
                 row.shardNo(),
                 row.shardCount(),
                 StatementJobStatus.valueOf(row.status()),
