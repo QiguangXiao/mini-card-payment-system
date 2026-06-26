@@ -68,9 +68,11 @@ scope, and request-by-request examples.
 See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
 issuer-side business concepts such as authorization, presentment, statement,
 payment, refund, dispute, ledger, and reconciliation.
-See [Snapshot Cache Design](docs/cache-snapshot-design-cn.md) for the Caffeine
-L1 + Redis L2 cache design, naming choices, TTL/evict behavior, and why only
-low-risk snapshots are cached.
+See [Distributed Cache, Rate Limiting & Lua](docs/distributed-cache-cn.md) for
+the velocity sliding-window limiter, why the card/statement read caches were
+removed, rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general
+cache design rules (cache-aside, penetration/breakdown/avalanche), and hardcore
+interview Q&A.
 See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
 for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
 topics.

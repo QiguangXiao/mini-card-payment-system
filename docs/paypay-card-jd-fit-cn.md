@@ -383,7 +383,7 @@ SnapshotCache<K, V>
 - `CachedCardRepository`
 - `StatementReadModelService`
 - `TransactionAwareSnapshotCacheEvictor`
-- `docs/cache-snapshot-design-cn.md`
+- `docs/distributed-cache-cn.md`
 
 ### 8.3 Cache 回答口径
 
@@ -623,7 +623,7 @@ JD 提到 Confluence、Miro、JIRA、Slack、Zoom、Office 365，以及 multicul
 - `README.md` 是项目入口。
 - `docs/paypay-card-backend-interview-guide-cn.md` 是总复习手册。
 - `docs/implementation-walkthrough-cn.md` 是 request-to-table walkthrough。
-- `docs/kafka-learning-cn.md`、`docs/mybatis-sql-learning-cn.md`、`docs/cache-snapshot-design-cn.md` 是专题学习材料。
+- `docs/kafka-learning-cn.md`、`docs/mybatis-sql-learning-cn.md`、`docs/distributed-cache-cn.md` 是专题学习材料。
 - `docs/trilingual-glossary-cn.md` 做中文、English、日本語对照。
 
 可以这样讲：
@@ -738,7 +738,7 @@ JD 提到 Confluence、Miro、JIRA、Slack、Zoom、Office 365，以及 multicul
 
 1. 看 `docs/paypay-card-backend-interview-guide-cn.md` 的主链路。
 2. 看本文件第 5、6、8、9、10 节。
-3. 看 `docs/cache-snapshot-design-cn.md` 和 `docs/thread-runtime-learning-cn.md`。
+3. 看 `docs/distributed-cache-cn.md` 和 `docs/thread-runtime-learning-cn.md`。
 4. 用自己的话讲一遍：authorization 请求如何从 HTTP 到 DB lock，再到 Outbox/Kafka/cache/metrics。
 
 如果有 1 天：

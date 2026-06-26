@@ -1155,7 +1155,7 @@ public record IntegrationEvent(
 
 ## 9. 缓存、Redis 与 Caffeine
 
-更完整 cache 说明见 `docs/cache-snapshot-design-cn.md`。
+更完整 cache 说明见 `docs/distributed-cache-cn.md`。
 
 ### 9.1 为什么用 `StringRedisTemplate`
 
