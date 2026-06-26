@@ -36,7 +36,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     // AOP starter 是 @CircuitBreaker 等 proxy-based annotation 的运行基础。
     implementation 'org.springframework.boot:spring-boot-starter-aop'
-    // Redis starter 提供 StringRedisTemplate，用于 L2 snapshot cache。
+    // Redis starter 提供 StringRedisTemplate，用于分布式 velocity sliding-window 限流计数器。
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     // Liquibase 管理 schema 版本；如果只靠 schema.sql，持久化 volume 上的旧表不会自动迁移。
     implementation 'org.liquibase:liquibase-core'
@@ -46,8 +46,6 @@ dependencies {
     implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
     // Actuator 提供 health/metrics/info，业务 controller 不需要承担 JVM/依赖诊断职责。
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    // Caffeine 是 in-process L1 cache；Redis 是跨实例 L2 cache，二者职责不同。
-    implementation 'com.github.ben-manes.caffeine:caffeine'
     // Lombok 只参与编译期生成代码，运行时不需要打进 artifact。
     compileOnly 'org.projectlombok:lombok'
     runtimeOnly 'com.mysql:mysql-connector-j'

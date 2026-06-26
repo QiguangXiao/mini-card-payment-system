@@ -125,18 +125,6 @@ delay-jobs:
     worker-pool-size: 4
     worker-queue-capacity: 100
 
-snapshot-cache:
-  enabled: true
-  key-prefix: mini-card
-  caches:
-    card-snapshot-v1:
-      # Card snapshot 会参与 authorization/posting 决策，风险高于纯展示型 read model。
-      # 因此 TTL 设置得更短；未来如果加入 block/unblock card API，写路径必须 after-commit evict。
-      local-ttl: 10s
-      maximum-size: 5000
-      remote-ttl: 1m
-      remote-ttl-jitter: 10s
-
 authorization:
   policy:
     single-transaction-limits:
@@ -180,6 +168,9 @@ repayment:
     failure-reason: simulated insufficient bank balance
 
 risk:
+  # velocity 限流计数器实现：redis(默认, sliding window, 主库零读压) 或 jdbc(COUNT(*) 精确对照)。
+  velocity:
+    store: redis
   local:
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
