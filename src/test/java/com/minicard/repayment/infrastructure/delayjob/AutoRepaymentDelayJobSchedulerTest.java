@@ -43,7 +43,7 @@ class AutoRepaymentDelayJobSchedulerTest {
         assertThat(job.getValue().aggregateType()).isEqualTo("Statement");
         assertThat(job.getValue().aggregateId()).isEqualTo(statement.id().toString());
         assertThat(job.getValue().scheduledAt())
-                .isEqualTo(Instant.parse("2026-07-27T00:00:00Z"));
+                .isEqualTo(Instant.parse("2026-07-26T15:00:00Z"));
         assertThat(job.getValue().nextAttemptAt()).isEqualTo(job.getValue().scheduledAt());
     }
 

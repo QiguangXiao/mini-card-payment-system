@@ -38,6 +38,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-aop'
     // Redis starter 提供 StringRedisTemplate，用于分布式 velocity sliding-window 限流计数器。
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // Caffeine 提供 JVM 内 L1 cache；statement GET 用它配合 Redis L2 演示两级 cache-aside。
+    implementation 'com.github.ben-manes.caffeine:caffeine'
     // Liquibase 管理 schema 版本；如果只靠 schema.sql，持久化 volume 上的旧表不会自动迁移。
     implementation 'org.liquibase:liquibase-core'
     implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.4'

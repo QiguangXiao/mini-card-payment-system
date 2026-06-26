@@ -160,6 +160,16 @@ statement:
     minimum-payment-floors:
       JPY: 1000.00
       USD: 25.00
+  read-cache:
+    # Statement GET read model 的两级 cache：Caffeine L1 + Redis L2。
+    # 只缓存可从 MySQL 重建的查询快照，不缓存额度、幂等 claim 或写模型。
+    # L1 很快但只在本 JVM 生效，所以 TTL 要短；L2 跨实例共享，所以 TTL 可以稍长。
+    local-ttl: 30s
+    # 生产 cache 必须有容量上限，避免无限 key 把应用 heap 吃满。
+    local-maximum-size: 1000
+    remote-ttl: 5m
+    # 在基础 TTL 上加随机抖动，避免一批 key 同秒过期后一起回源 MySQL。
+    remote-ttl-jitter: 30s
 
 repayment:
   auto-debit:

@@ -12,8 +12,8 @@ Backend Engineer interview.
 - Spring Boot 3.x
 - Gradle with Gradle Wrapper
 - MySQL 8.4 LTS with Docker Compose
-- Redis for risk velocity sliding-window counting; historical Caffeine L1 +
-  Redis L2 cache-aside design is kept in docs as a learning reference
+- Redis for risk velocity sliding-window counting and statement GET L2 cache
+- Caffeine L1 for statement GET read-model cache
 - MyBatis for primary repository implementations
 - JdbcTemplate retained for one focused comparison example
 - Apache Kafka with Transactional Outbox event publication
@@ -25,7 +25,8 @@ The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
 checks with Redis velocity counting, minimal Ledger projection, Kafka-based event
-delivery, Transactional Outbox, Consumer Inbox, and DelayJob scheduling.
+delivery, Transactional Outbox, Consumer Inbox, DelayJob scheduling, and
+Caffeine L1 + Redis L2 cache-aside for statement GET read models.
 
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
@@ -77,8 +78,8 @@ See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
 issuer-side business concepts such as authorization, presentment, statement,
 payment, refund, dispute, ledger, and reconciliation.
 See [Distributed Cache, Rate Limiting & Lua](docs/distributed-cache-cn.md) for
-the velocity sliding-window limiter, why the card/statement read caches were
-removed, rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general
+the velocity sliding-window limiter, why card snapshot cache was removed, how
+statement GET uses L1/L2 cache-aside, rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general
 cache design rules (cache-aside, penetration/breakdown/avalanche), and hardcore
 interview Q&A.
 See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
@@ -168,13 +169,14 @@ Statement generation snapshots posted transactions into `statement_lines`, and
 repayment reduces `posted_balance` while advancing statement payment status.
 Minimal Ledger then consumes posted transaction and repayment events to record
 append-only internal accounting entries.
-The current code no longer keeps the earlier Caffeine L1 + Redis L2 snapshot
-cache in the request path. `GET /api/statements/{id}` reads the aggregate
-directly, card lookup goes through MyBatis, and Redis is used where it has a
-clearer high-traffic payoff: the risk velocity sliding-window counter. The
-previous two-level cache-aside design is still documented as a historical design
-trade-off because it is useful for learning cache boundaries, TTL, single-flight,
-and after-commit eviction.
+`GET /api/statements/{id}` uses a small statement read-model cache: Caffeine is
+the per-JVM L1 and Redis is the cross-instance L2. Repayment updates the MySQL
+source of truth first, then evicts the statement read cache after transaction
+commit. Card lookup remains direct MyBatis because card snapshot stale data can
+affect authorization decisions and the real hot-path bottleneck is still the
+locked credit account row. Redis is also used for the risk velocity
+sliding-window counter, where every authorization request benefits from avoiding
+a recent-count query on MySQL.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
@@ -236,9 +238,8 @@ mini-card.repayment-events.v1
 ```
 
 Local Redis is available at `localhost:6379`. The current application uses it
-for the risk velocity sliding-window counter. The removed Caffeine L1 + Redis L2
-snapshot cache design is retained in the docs as a learning reference, not as a
-current request path.
+for the risk velocity sliding-window counter and as the L2 cache for statement
+GET read models; Caffeine remains the per-JVM L1 for that statement cache.
 
 Describe a topic or inspect events:
 

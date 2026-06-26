@@ -15,6 +15,7 @@ import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
+import com.minicard.statement.application.StatementReadService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,7 @@ public class RepaymentService {
     private final StatementRepository statementRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RepaymentDomainEventPublisher eventPublisher;
+    private final StatementReadService statementReadService;
     private final Clock clock;
 
     @Transactional
@@ -119,7 +121,11 @@ public class RepaymentService {
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
-        // statement GET 直接读 DB，不再有读缓存，因此还款后无需 evict 任何快照。
+        // 写路径不要“顺手更新 cache”，而是更新 MySQL source of truth 后删 cache。
+        // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
+        // statement GET 的 L1/L2 cache 只能在 DB commit 后失效；如果事务内提前 evict，
+        // 另一个 GET 可能读旧 DB 值并重新写回 Redis，制造 stale read model。
+        statementReadService.evictAfterCommit(statement.id());
     }
 
     private void validateCanApply(

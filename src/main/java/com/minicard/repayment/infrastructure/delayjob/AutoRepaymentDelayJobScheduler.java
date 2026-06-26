@@ -2,7 +2,7 @@ package com.minicard.repayment.infrastructure.delayjob;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.UUID;
 
 import com.minicard.delayjob.DelayJob;
@@ -29,6 +29,7 @@ public class AutoRepaymentDelayJobScheduler implements StatementDueJobScheduler 
 
     /** aggregate_type 进入 DelayJob contract，handler 会用它做 defensive check。 */
     private static final String AGGREGATE_TYPE = "Statement";
+    private static final ZoneId JAPAN_BILLING_ZONE = ZoneId.of("Asia/Tokyo");
 
     /** 通用 DelayJob repository，负责 insertIfAbsent 和后续 scheduler claim。 */
     private final DelayJobRepository delayJobRepository;
@@ -38,12 +39,12 @@ public class AutoRepaymentDelayJobScheduler implements StatementDueJobScheduler 
     /**
      * 为 statement 到期日创建 AUTO_REPAYMENT job。
      *
-     * <p>scheduledAt 当前取 dueDate 的 UTC 零点；真实日本业务可能需要指定 JST 银行批处理时间，
-     * 这里先保留“日期级”调度，降低interview demo 的复杂度。</p>
+     * <p>scheduledAt 当前固定取 dueDate 的 JST 零点。dueDate 是日本支払日；如果用 UTC 零点，
+     * 任务会在日本时间 09:00 才到期，和账单日切不一致。</p>
      */
     @Override
     public void scheduleAutoRepayment(Statement statement) {
-        Instant scheduledAt = statement.dueDate().atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant scheduledAt = statement.dueDate().atStartOfDay(JAPAN_BILLING_ZONE).toInstant();
         Instant now = Instant.now(clock);
 
         // DelayJob 与 statement 生成在同一个 MySQL transaction boundary 内提交。

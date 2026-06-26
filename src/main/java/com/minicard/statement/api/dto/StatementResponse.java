@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+import com.minicard.statement.application.StatementReadModel;
 import com.minicard.statement.domain.Statement;
 
 /**
@@ -67,6 +68,26 @@ public record StatementResponse(
                 statement.generatedAt(),
                 statement.items().stream()
                         // Java Stream mapping；这里只做 presentation 转换，不改变业务状态。
+                        .map(StatementLineResponse::from)
+                        .toList()
+        );
+    }
+
+    public static StatementResponse from(StatementReadModel statement) {
+        return new StatementResponse(
+                statement.id(),
+                statement.creditAccountId(),
+                statement.periodStart(),
+                statement.periodEnd(),
+                statement.dueDate(),
+                statement.totalAmount(),
+                statement.minimumPaymentAmount(),
+                statement.paidAmount(),
+                statement.currency(),
+                statement.transactionCount(),
+                statement.status(),
+                statement.generatedAt(),
+                statement.items().stream()
                         .map(StatementLineResponse::from)
                         .toList()
         );

@@ -130,7 +130,7 @@ repayment 阶段减少 `postedBalance`，恢复可用额度。
 
 - `id`：statement id，由 `Statement.close(...)` 内部 `UUID.randomUUID()` 生成。
 - `credit_account_id`：账单属于哪个信用账户。
-- `period_start` / `period_end`：账单周期，当前按 UTC 日期切分。
+- `period_start` / `period_end`：账单周期，当前固定按 Asia/Tokyo billing timezone 的日期切分。
 - `due_date`：还款到期日。
 - `total_amount`：本期已入账交易汇总金额。
 - `minimum_payment_amount`：当前简化规则计算出的最低还款额。
@@ -887,7 +887,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
    job_type = AUTO_REPAYMENT
    aggregate_type = Statement
    aggregate_id = statement.id
-   scheduled_at = dueDate 00:00 UTC
+   scheduled_at = dueDate 00:00 JST（保存为 UTC instant）
    ```
 
    为什么用 DelayJob：
@@ -1553,21 +1553,21 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - `AuthorizationController.get(id)`
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
-- `StatementGenerationService.get(id)`
+- `StatementReadService.get(id)`（statement GET 先走 Caffeine L1 + Redis L2）
 - `RepaymentController.get(id)`
 - `RepaymentService.get(id)`
 
 处理：
 
-- `@Transactional(readOnly = true)`
-- 通过 authorization id、statement id 或 repayment id 查询当前状态。
+- authorization/repayment 查询用 `@Transactional(readOnly = true)` 直接读 DB。
+- statement GET 先读 read model cache，miss 后通过 `StatementGenerationService.get(id)` 回源 DB。
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
 
 ### 9.1 `GET /api/statements/{id}` 的当前路径
 
-当前 `GET /api/statements/{id}` 不走 cache：
+当前 `GET /api/statements/{id}` 用两级 cache：
 
 ```bash
 curl http://localhost:8080/api/statements/{statementId}
@@ -1577,34 +1577,27 @@ curl http://localhost:8080/api/statements/{statementId}
 
 ```text
 StatementController.get(id)
--> StatementGenerationService.get(id)
--> StatementRepository.findById(id)
--> StatementResponse.from(statement)
+-> StatementReadService.get(id)
+   -> Caffeine L1
+   -> Redis L2
+   -> StatementGenerationService.get(id)
+   -> StatementRepository.findById(id)
+-> StatementResponse.from(readModel)
 ```
 
-删除旧 statement read model cache 的原因：
+为什么只缓存 `StatementReadModel`：
 
-- 当前项目的 statement GET 还不是主要读热点，直接查 aggregate 更简单。
-- `paidAmount/status` 会被 repayment 更新，恢复 cache 就必须重新维护 after-commit eviction。
-- 对这个学习项目来说，缓存技术点已经迁移到更有收益的 `RedisRiskVelocityCounter`：
-  velocity 是每笔授权都会触发的 workload，不依赖 cache hit rate。
+- `Statement` aggregate 有还款状态转换和不变量保护，属于写模型。
+- `StatementReadModel` 只有 response 字段，没有 business behavior。
+- Redis JSON 存 read model，避免把 cache 当成 domain object store。
 
-### 9.2 已删除的 L1/L2 snapshot cache 设计
-
-旧版本为了学习 cache-aside，做过两类 snapshot cache：
-
-| cache name | value | 用途 | 删除原因 |
-| --- | --- | --- | --- |
-| `statement-read-model-v1` | `StatementReadModel` | 加速 `GET /api/statements/{id}` | 当前不是读热点；还款后需要维护 eviction |
-| `card-snapshot-v1` | `CardSnapshot` | 加速 card 状态和 account 归属读取 | stale card 状态会影响授权判断；短 TTL 命中率有限 |
-
-旧读取策略：
+读取策略：
 
 1. 先查 Caffeine L1。
 2. L1 miss 后查 Redis L2。
 3. L2 hit 时回填 L1。
-4. L1/L2 都 miss 时调用 loader，从 MySQL/source of truth 读取并重建 snapshot。
-5. Redis 读写失败时降级回 DB，不让低风险缓存影响业务可用性。
+4. L1/L2 都 miss 时调用 `StatementGenerationService.get(id)` 从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
+5. Redis 读写失败时降级回 DB，不让低风险缓存影响 GET 可用性。
 
 为什么 Redis TTL 要加 jitter：
 
@@ -1613,28 +1606,26 @@ StatementController.get(id)
 
 为什么还需要 evict：
 
-- `statement_items` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
+- `statement_lines` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
 - 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
-- 旧版本在 `RepaymentService.applyToStatementAndAccount(...)` 同一 transaction boundary 内更新 account 和
-  statement 后，调用 `StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())`。
+- `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和
+  statement 后，调用 `StatementReadService.evictAfterCommit(statement.id())`。
 - after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
   造成 stale read model。
 
-当前 evict 范围：
+仍然可能出现的不一致：
 
-- 当前 JVM 的 Caffeine L1。
-- Redis L2。
-- 其他 pod 的 Caffeine L1 不会收到本地内存通知，因此 L1 TTL 必须短。
-  如果生产要求“还款提交后所有 pod 立即不可读旧账单”，可以在这个 invalidation port 后面增加 Redis Pub/Sub、
-  Kafka invalidation event 或集中式 cache invalidation service。
+- 其他 pod 的 Caffeine L1 不会被本 pod 直接删除，可能在 `local-ttl` 内读到旧 statement read model。
+- 如果 DB commit 成功但 Redis delete 失败，本 pod L1 已删，但 Redis L2 可能保留旧值到 `remote-ttl`。
+- 如果还款事务提交前有 GET 请求，它读到旧状态是正常的，因为旧状态当时仍是已提交事实。
 
-这段旧设计仍然值得保留学习，因为它能解释：
+### 9.2 已删除的 Card snapshot cache 设计
 
-- 只缓存可重建的 read model，不缓存写模型和强一致决策。
-- DB 仍然是 source of truth；cache miss 或 Redis 故障不会改变业务结果。
-- L1 降低同 JVM 热点开销，L2 让多实例共享缓存。
-- TTL 负责最终兜底，evict 负责业务更新后的及时失效。
-- after-commit evict 避免 transaction boundary 内的 stale reload 竞态。
+旧版本还做过 Card snapshot cache：
+
+| cache name | value | 用途 | 删除原因 |
+| --- | --- | --- | --- |
+| `card-snapshot-v1` | `CardSnapshot` | 加速 card 状态和 account 归属读取 | stale card 状态会影响授权判断；短 TTL 命中率有限 |
 
 为什么始终不缓存额度：
 

@@ -811,10 +811,12 @@ ledger-projection-group
 
 ## 10. Redis/ElastiCache：缓存加速，不承担资金真相
 
-本项目缓存的是低风险 snapshot：
+本项目当前缓存的是低风险 statement read model：
 
-- card snapshot
 - statement read model
+
+旧版还讨论过 card snapshot cache，但当前代码已删除它，因为 stale card status 会影响
+authorization 判断；如果以后恢复，必须配套更强的 invalidation 或 bypass 策略。
 
 真正资金状态仍然在 MySQL/RDS：
 
@@ -842,11 +844,11 @@ RDS source of truth
 本地只有一个 JVM 时，Caffeine L1 很容易理解。ECS 上有多个 task 后：
 
 ```text
-task-a has card-123 snapshot in Caffeine
-task-b has card-123 snapshot in Caffeine
+task-a has statement-123 read model in Caffeine
+task-b has statement-123 read model in Caffeine
 ```
 
-请求 A 落到 `task-a`，更新了账户状态并 after-commit evict Redis。
+请求 A 落到 `task-a`，还款更新 statement 并 after-commit evict Redis。
 
 请求 B 立刻落到 `task-b`，如果 `task-b` 的 L1 还没过期，就可能读到短暂旧 snapshot。
 
@@ -1506,7 +1508,7 @@ interview 中不要虚报：
 
 高分回答：
 
-> 不应该。这个项目只缓存 reconstructable snapshot，例如 statement read model 和 card snapshot。资金扣减和额度判断仍然在 RDS transaction + row lock 中完成。Redis 故障会增加延迟和 RDS read pressure，但不应该造成错误批准或错误拒绝授权。多 task 下每个 JVM 都有自己的 Caffeine L1，因此更不能把强一致判断放进本地 cache。
+> 不应该。这个项目当前只缓存 reconstructable statement read model；旧版 card snapshot cache 已删除。资金扣减、卡状态判断和额度判断仍然在 RDS transaction / MyBatis read / row lock 中完成。Redis 故障会增加延迟和 RDS read pressure，但不应该造成错误批准或错误拒绝授权。多 task 下每个 JVM 都有自己的 Caffeine L1，因此更不能把强一致判断放进本地 cache。
 
 ### Q6: RDS 使用 Multi-AZ 后是不是就不用管数据库风险？
 

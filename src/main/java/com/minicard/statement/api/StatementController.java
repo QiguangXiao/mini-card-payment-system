@@ -6,6 +6,7 @@ import com.minicard.statement.api.dto.GenerateStatementRequest;
 import com.minicard.statement.api.dto.StatementResponse;
 import com.minicard.statement.application.GenerateStatementCommand;
 import com.minicard.statement.application.StatementGenerationService;
+import com.minicard.statement.application.StatementReadService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class StatementController {
 
     private final StatementGenerationService statementGenerationService;
+    private final StatementReadService statementReadService;
 
     @PostMapping("/generate")
     // @Valid 校验手动入口的 body；真实 batch 路径不会经过 controller，所以 service/domain 仍要防御非法账期。
@@ -46,9 +48,10 @@ public class StatementController {
     @GetMapping("/{id}")
     // @PathVariable 由 Spring MVC 把路径文本转换成 UUID；格式错误会在 HTTP boundary 变成 400。
     // 如果先收 String 再手动 parse，错误处理容易散到 controller 里。
-    // GET 直接读 aggregate 再映射成 DTO：账单查询 QPS 低，没有引入读缓存的必要，
-    // 也省掉了还款后 after-commit 失效缓存这条容易读到 stale 的路径。
+    // GET 走 statement read cache：Controller 不关心 L1/L2 细节，只依赖一个查询服务。
+    // 这能避免把 cache key、Redis JSON、TTL 等技术细节泄漏到 HTTP adapter。
+    // 写路径仍更新 MySQL source of truth；还款提交后由 RepaymentService 注册 after-commit evict。
     public StatementResponse get(@PathVariable UUID id) {
-        return StatementResponse.from(statementGenerationService.get(id));
+        return StatementResponse.from(statementReadService.get(id));
     }
 }
