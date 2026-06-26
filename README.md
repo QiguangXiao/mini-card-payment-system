@@ -49,6 +49,10 @@ See [Event / Outbox / Messaging Design (Claude)](docs/event-outbox-messaging-des
 for the end-to-end producer→outbox→Kafka→consumer→inbox implementation, its real
 strengths and gaps (retention, DEAD observability, version negotiation), and a
 hardcore interview Q&A on delivery semantics, idempotency, and ordering.
+See [Claimable Job Families Comparison (Claude)](docs/claimable-job-families-comparison-claude-cn.md)
+for a side-by-side comparison of the DelayJob, Outbox, and StatementJob queues and
+their executors (claimer/poller/worker/recoverer/dispatcher): the shared
+claim-lease-recover model, the deliberate differences, real gaps, and interview Q&A.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
