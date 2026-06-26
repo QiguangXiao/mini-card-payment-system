@@ -2,7 +2,7 @@ package com.minicard.risk.domain;
 
 import java.util.Locale;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 
 /**
  * 风控评估请求。

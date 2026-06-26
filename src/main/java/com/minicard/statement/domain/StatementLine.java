@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 
 /**
  * Statement line，是账单生成时对 posted CardTransaction + purchase LedgerEntry 的历史快照。

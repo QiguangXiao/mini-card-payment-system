@@ -3,7 +3,7 @@ package com.minicard.repayment.application;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
@@ -62,7 +62,10 @@ public class AutoRepaymentService {
         Money debitAmount = statement.remainingAmount();
         // BankDebitRequest 是 application 层 typed command，不把 Statement aggregate 直接传给外部 gateway。
         // 如果 gateway 依赖整个 Statement，外部 adapter 会被迫了解账单内部状态。
+        // 用与 repayment 入账相同的 deterministic key：整条“自动扣款这张账单一次”端到端幂等，
+        // DelayJob retry 时 gateway 凭此 key 复用首次结果，不会从客户银行账户重复出金。
         BankDebitResult debitResult = bankDebitGateway.debit(new BankDebitRequest(
+                idempotencyKey(statement.id()),
                 statement.id(),
                 statement.creditAccountId(),
                 debitAmount,

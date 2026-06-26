@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.repayment.domain.Repayment;

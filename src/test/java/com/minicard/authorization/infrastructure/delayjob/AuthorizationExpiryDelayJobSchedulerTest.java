@@ -7,7 +7,7 @@ import java.time.ZoneOffset;
 import java.util.Currency;
 
 import com.minicard.authorization.domain.Authorization;
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobRepository;
 import com.minicard.delayjob.DelayJobType;

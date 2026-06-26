@@ -6,7 +6,7 @@ import java.util.Currency;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
 import com.minicard.repayment.application.RepaymentRejectedException;
 import com.minicard.repayment.application.RepaymentService;

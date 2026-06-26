@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.statement.domain.Statement;
@@ -161,16 +161,12 @@ public class StatementGenerationService {
                             + totalAmount.currency().getCurrencyCode()
             );
         }
-        BigDecimal percentageAmount = totalAmount.amount()
-                .multiply(properties.policy().minimumPaymentRate())
-                // CEILING 对最低还款更保守：分以下的小数向上取整到 0.01，避免少收最低还款。
-                // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
-                .setScale(2, RoundingMode.CEILING);
-        BigDecimal minimum = percentageAmount.max(floor);
-        if (minimum.compareTo(totalAmount.amount()) > 0) {
-            minimum = totalAmount.amount();
-        }
-        return new Money(minimum, totalAmount.currency());
+        // CEILING 对最低还款更保守：向上取整到本币种最小单位（JPY 到 1 円、USD 到 0.01），避免少收最低还款。
+        // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
+        // 取整 scale 由 Money.multiply 按 currency 决定，这里不再硬编码 2 位——否则对 JPY 会算出“分以下日元”。
+        Money percentage = totalAmount.multiply(properties.policy().minimumPaymentRate(), RoundingMode.CEILING);
+        Money minimum = percentage.max(new Money(floor, totalAmount.currency()));
+        return minimum.isGreaterThan(totalAmount) ? totalAmount : minimum;
     }
 
     private Instant periodStartInstant(LocalDate periodStart) {

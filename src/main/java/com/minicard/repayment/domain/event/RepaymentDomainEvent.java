@@ -3,7 +3,7 @@ package com.minicard.repayment.domain.event;
 import java.time.Instant;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 
 /**
  * Repayment 聚合对外发布的领域事件 marker interface。

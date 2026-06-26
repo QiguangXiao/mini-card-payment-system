@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.Currency;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
 import org.junit.jupiter.api.Test;
 

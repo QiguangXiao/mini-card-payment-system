@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 
 /**
  * Authorization 被拒绝的领域事件。

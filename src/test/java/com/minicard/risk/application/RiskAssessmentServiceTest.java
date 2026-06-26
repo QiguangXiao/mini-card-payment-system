@@ -8,7 +8,7 @@ import java.util.Currency;
 import java.util.Map;
 import java.util.Set;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;

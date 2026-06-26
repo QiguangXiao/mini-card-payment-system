@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
@@ -63,6 +63,9 @@ class AutoRepaymentServiceTest {
         verify(bankDebitGateway).debit(debitRequest.capture());
         assertThat(debitRequest.getValue().amount().amount()).isEqualByComparingTo("1500.00");
         assertThat(debitRequest.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
+        // 银行扣款必须带 deterministic 幂等键，gateway 凭此让 DelayJob retry 不重复出金。
+        assertThat(debitRequest.getValue().idempotencyKey())
+                .isEqualTo("auto-debit:" + statement.id());
         // 扣款成功后必须经由 RepaymentService.receive 入账，并使用 deterministic 幂等键防止重复扣款。
         ArgumentCaptor<ReceiveRepaymentCommand> command =
                 ArgumentCaptor.forClass(ReceiveRepaymentCommand.class);

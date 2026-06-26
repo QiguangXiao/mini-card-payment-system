@@ -8,7 +8,7 @@ import java.util.Currency;
 import java.util.HexFormat;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.repayment.domain.Repayment;
 
 /**

@@ -16,6 +16,10 @@ public interface BankDebitGateway {
      * 请求银行从客户绑定账户扣款。
      *
      * <p>返回 SUCCESS 才允许 repayment posting；FAILED 必须走失败恢复/通知路径。</p>
+     *
+     * <p>幂等契约：实现必须按 {@link BankDebitRequest#idempotencyKey()} 去重——
+     * 同一 key 最多实扣一笔，重复调用返回首次结果而不再次出金。
+     * 这样 DelayJob 重试（含金额因并发手动还款而变化的情况）不会从客户账户重复取钱。</p>
      */
     // port interface 让 application 依赖“扣款能力”，而不是依赖 Feign、文件上传或本地模拟类。
     // 如果 service 直接 new 模拟 gateway，未来接真实银行时会改动核心用例。

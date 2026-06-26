@@ -6,7 +6,7 @@ import java.util.Currency;
 import java.util.Objects;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.ledger.domain.LedgerEntryType;
 import com.minicard.ledger.domain.LedgerSourceType;
 
