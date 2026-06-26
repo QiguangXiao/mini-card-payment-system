@@ -3,6 +3,7 @@ package com.minicard.statement.domain;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Currency;
 import java.util.List;
 import java.util.Objects;
@@ -25,6 +26,8 @@ import lombok.experimental.Accessors;
 @Getter
 @Accessors(fluent = true)
 public final class Statement {
+
+    private static final ZoneId JAPAN_BILLING_ZONE = ZoneId.of("Asia/Tokyo");
 
     private final UUID id;
     private final UUID creditAccountId;
@@ -223,7 +226,9 @@ public final class Statement {
             if (!line.amount().currency().equals(totalAmount.currency())) {
                 throw new IllegalArgumentException("statement line currency differs");
             }
-            LocalDate postedDate = line.postedAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+            // 本项目固定按日本发卡业务的 JST billing day 切账期，而不是按 UTC 日期。
+            // 如果这里用 UTC，JST 月初 00:30 的交易会被误判成上一天，导致合法账单明细被拒绝。
+            LocalDate postedDate = line.postedAt().atZone(JAPAN_BILLING_ZONE).toLocalDate();
             if (postedDate.isBefore(periodStart) || postedDate.isAfter(periodEnd)) {
                 throw new IllegalArgumentException("statement line postedAt is outside billing period");
             }

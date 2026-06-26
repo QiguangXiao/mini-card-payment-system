@@ -1,18 +1,37 @@
 # Snapshot Cache 设计说明
 
-这份文档专门解释当前项目的 cache 设计：Caffeine L1 + Redis L2、命名取舍、
-缓存边界、过期和 evict 策略，以及为什么只缓存低风险 snapshot。
+> 当前状态：这套 Caffeine L1 + Redis L2 snapshot cache 代码已经从主分支删除。
+> 本文保留为“已删除设计取舍”的学习材料，用来解释 cache-aside、two-level cache、
+> per-key single-flight、TTL jitter 和 after-commit eviction。当前代码里的 Redis 主要用于
+> `RedisRiskVelocityCounter` 的 sliding-window velocity 计数。
 
-## 1. 当前缓存范围
+## 1. 为什么删除这套 snapshot cache
 
-当前有两个 cache：
+删除不是因为这套设计“错了”，而是因为它在当前项目的真实请求形态里收益不够稳定：
+
+- `GET /api/statements/{id}` 当前不是主要高流量入口；直接读 aggregate 更简单，少一条 stale read
+  风险和 after-commit eviction 路径。
+- Card snapshot 会参与 authorization/card lifecycle 判断。它不是资金 source of truth，但 stale
+  `ACTIVE` 仍可能让刚 blocked 的卡短时间通过卡状态检查；为了安全 TTL 必须短，而短 TTL 又压低命中率。
+- 授权热路径真正的瓶颈仍然是 `credit_accounts` 的 `SELECT ... FOR UPDATE`，缓存 card 主键读取不能解决
+  同账户写串行化。
+- Redis 更合适的落脚点是 velocity 计数：每笔授权都要做近期次数判断，把这类 workload 从主库搬到
+  Redis，收益不依赖 cache hit rate。
+
+所以当前取舍是：删除主路径上的 snapshot cache，保留本文作为学习材料；当项目未来出现真正读多的
+statement summary、账单列表、客服后台查询或报表查询时，再把 cache-aside + after-commit eviction
+放回低风险 read model。
+
+## 2. 历史设计范围
+
+当时设计过两个 cache：
 
 | cache name | key | value | 用途 | 风险等级 |
 | --- | --- | --- | --- | --- |
 | `statement-read-model-v1` | statement id | `StatementReadModel` | `GET /api/statements/{id}` 查询响应快照 | 中低 |
 | `card-snapshot-v1` | card id | `CardSnapshot` | authorization/posting/expiry 读取 card 状态和 account 归属 | 中 |
 
-都使用同一套通用 infrastructure：
+它们都使用同一套通用 infrastructure：
 
 ```text
 SnapshotCache<K, V>
@@ -25,14 +44,14 @@ TransactionAwareSnapshotCacheEvictor
 -> 写路径需要失效 cache 时，统一注册 after-commit evict
 ```
 
-配置入口：
+当时的配置入口：
 
 ```text
 src/main/resources/application.yml
 snapshot-cache.caches.*
 ```
 
-## 2. 为什么改名成 SnapshotCache
+## 3. 为什么改名成 SnapshotCache
 
 上一版叫 `ReadModelCache`，对 statement 很准确，因为 `GET /api/statements/{id}` 缓存的是
 `StatementReadModel`。
@@ -58,24 +77,24 @@ snapshot-cache.caches.*
 
 这样命名的好处是：通用层不被 statement 绑死，业务层又不会变成模糊的 `ObjectCache`。
 
-### 2.1 这次命名复盘结论
+### 3.1 这次命名复盘结论
 
 这里不要理解成“把 ReadModel 又改回 Snapshot”。更准确的边界是：
 
-| 层级 | 推荐理解 | 当前名字 | 为什么 |
+| 层级 | 推荐理解 | 历史名字 | 为什么 |
 | --- | --- | --- | --- |
 | 通用缓存能力 | 只能缓存可重建快照 | `SnapshotCache<K, V>` | 强调 cache 不是 source of truth，也不是任意写模型缓存 |
 | Statement 查询对象 | API response read model | `StatementReadModel` | 它没有业务行为，只服务 `GET /api/statements/{id}` |
 | Card 参考数据 | reference data snapshot | `CardSnapshot` | 它不是公开查询模型，而是授权/posting/expiry 决策前的卡状态快照 |
-| 具体 L1/L2 实现 | Caffeine + Redis read-through | `TwoLevelSnapshotCache` | 当前名字能表达两级结构；如果以后重命名，`CaffeineRedisSnapshotCache` 会更直说技术栈 |
-| 事务后失效 helper | after-commit evict | `TransactionAwareSnapshotCacheEvictor` | 当前名字准确但偏泛；如果以后重命名，`AfterCommitSnapshotCacheEvictor` 更直观 |
+| 具体 L1/L2 实现 | Caffeine + Redis read-through | `TwoLevelSnapshotCache` | 这个名字能表达两级结构；如果以后重命名，`CaffeineRedisSnapshotCache` 会更直说技术栈 |
+| 事务后失效 helper | after-commit evict | `TransactionAwareSnapshotCacheEvictor` | 这个名字准确但偏泛；如果以后重命名，`AfterCommitSnapshotCacheEvictor` 更直观 |
 
-所以现阶段文档口径是：通用接口继续叫 `SnapshotCache`，但具体业务对象不要强行统一成
-snapshot。Statement 仍然是 read model，Card 仍然是 snapshot。
+所以当时的文档口径是：通用接口叫 `SnapshotCache`，但具体业务对象不要强行统一成 snapshot。
+Statement 是 read model，Card 是 snapshot。
 
-## 3. 通用读取和失效策略
+## 4. 通用读取和失效策略
 
-读取顺序：
+历史读取顺序：
 
 ```text
 1. 查 Caffeine L1
@@ -92,7 +111,7 @@ snapshot。Statement 仍然是 read model，Card 仍然是 snapshot。
 - Redis JSON 损坏：删除坏 value，下次从 MySQL 重建。
 - loader 返回 `null`：不写 cache，用于避免 negative cache。
 
-失效策略：
+历史失效策略：
 
 - 如果没有事务同步，立即 evict。
 - 如果当前线程有 Spring transaction synchronization，注册 after-commit evict。
@@ -116,7 +135,7 @@ snapshot。Statement 仍然是 read model，Card 仍然是 snapshot。
 | TTL jitter | 一批 key 同秒过期，下一波请求同时回源，制造 cache avalanche |
 | after-commit evict | 事务提交前删 cache 时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis |
 
-## 4. Statement read model cache
+## 5. Statement read model cache（历史设计）
 
 请求链路：
 
@@ -162,7 +181,7 @@ StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())
 - 如果事务提交前 evict，另一个 GET 可能读到旧 DB 值并重新写入 Redis。
 - after-commit evict 避开这个 stale reload race。
 
-## 5. Card snapshot cache
+## 6. Card snapshot cache（历史设计）
 
 使用链路：
 
@@ -200,20 +219,20 @@ snapshot-cache:
 
 - `card-not-found` 可能是测试数据或发卡数据刚创建前的瞬时状态。
 - 如果缓存 404，新卡会在 TTL 内继续不可见。
-- 现在让 missing card 每次回源，安全性优先。
+- 当时让 missing card 每次回源，安全性优先。
 
 风险边界：
 
 - Card snapshot 会影响 authorization 决策，风险高于纯展示型 statement read model。
 - stale `ACTIVE` 可能让刚 blocked 的卡在短 TTL 内继续通过 card lifecycle check。
-- 当前项目没有 card block/unblock API；未来加入时，必须在 card 状态变更提交后调用
+- 当时项目没有 card block/unblock API；如果恢复这类 cache，card 状态变更提交后必须调用
   `CardSnapshotCacheInvalidator.evictAfterCommit(cardId)`。
 - 如果业务要求 block 后全局立即生效，可以选择：
   - block/unblock 写路径 after-commit evict Redis。
   - 增加 Redis Pub/Sub 或 Kafka cache invalidation event 清其他 pod 的 L1。
   - 对高风险卡状态检查直接 bypass cache。
 
-## 6. 为什么不能缓存额度
+## 7. 为什么不能缓存额度
 
 不要缓存：
 
@@ -238,7 +257,7 @@ creditAccountRepository.findByIdForUpdate(accountId)
 -> creditAccountRepository.update(account)
 ```
 
-## 7. 命名规则
+## 8. 命名规则
 
 cache name 建议格式：
 
@@ -246,7 +265,7 @@ cache name 建议格式：
 {business-snapshot-name}-v{version}
 ```
 
-当前例子：
+历史例子：
 
 - `statement-read-model-v1`
 - `card-snapshot-v1`
@@ -267,15 +286,19 @@ cache name 建议格式：
 
 命名取舍：
 
-- `TwoLevelSnapshotCache` 是 package-private 实现类，当前不影响业务读代码；如果未来真的要做代码级命名整理，优先考虑改成 `CaffeineRedisSnapshotCache`。
-- `StatementSnapshotCacheInvalidator` 当前表达“statement 相关缓存失效”，但它实际失效的是 `StatementReadModel`。如果以后做命名整理，`StatementReadModelCacheInvalidator` 会更精确。
-- `CachedCardRepository` 当前表达 repository decorator；如果想让动词更自然，`CachingCardRepository` 也可以，但不是必须改。
+- `TwoLevelSnapshotCache` 当时是 package-private 实现类；如果以后恢复代码级设计，`CaffeineRedisSnapshotCache` 会更直说技术栈。
+- `StatementSnapshotCacheInvalidator` 表达“statement 相关缓存失效”，但它实际失效的是 `StatementReadModel`。如果以后恢复，`StatementReadModelCacheInvalidator` 会更精确。
+- `CachedCardRepository` 表达 repository decorator；如果想让动词更自然，`CachingCardRepository` 也可以。
 
-## 8. interview 解释口径
+## 9. interview 解释口径
 
 可以这样回答：
 
-> 我们没有把 cache 当成 source of truth。MySQL 仍然负责状态和一致性，cache 只保存可从 DB 重建的 snapshot。Statement read model 是展示型 cache，repayment 后 after-commit evict；Card snapshot 是低频变化 reference data，用较短 TTL，未来 card block/unblock 必须提交后失效。额度、幂等 claim 和还款入账不缓存，因为这些必须依赖 transaction boundary 和 row lock。
+> 我们曾经实现过 Caffeine L1 + Redis L2 的 snapshot cache，用来学习 cache-aside、single-flight、
+> TTL jitter 和 after-commit eviction。但后来删除了主路径上的 statement/card snapshot cache：
+> statement GET 当前不是读热点，card snapshot 会影响授权判断且安全 TTL 太短，收益有限。
+> 现在 Redis 放在更合适的 velocity 计数上。无论是否恢复读缓存，MySQL 仍然负责状态和一致性，
+> 额度、幂等 claim 和还款入账不能放进 cache。
 
 常见追问：
 

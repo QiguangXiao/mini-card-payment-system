@@ -12,7 +12,8 @@ Backend Engineer interview.
 - Spring Boot 3.x
 - Gradle with Gradle Wrapper
 - MySQL 8.4 LTS with Docker Compose
-- Redis with Caffeine L1 for low-risk read model caching
+- Redis for risk velocity sliding-window counting; historical Caffeine L1 +
+  Redis L2 cache-aside design is kept in docs as a learning reference
 - MyBatis for primary repository implementations
 - JdbcTemplate retained for one focused comparison example
 - Apache Kafka with Transactional Outbox event publication
@@ -23,9 +24,8 @@ Backend Engineer interview.
 The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
-checks, minimal Ledger projection, Kafka-based event delivery, Transactional
-Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 snapshot
-caching for statement and card snapshots.
+checks with Redis velocity counting, minimal Ledger projection, Kafka-based event
+delivery, Transactional Outbox, Consumer Inbox, and DelayJob scheduling.
 
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
@@ -164,15 +164,17 @@ Amounts use a `Money` value object backed by Java `BigDecimal` and MySQL
 approved or declined by a domain policy. Approved authorizations reserve credit
 from a locked `CreditAccount`. Presentment posting later moves money from
 `reserved_amount` to `posted_balance` and creates a posted `CardTransaction`.
-Statement generation snapshots posted transactions into `statement_items`, and
+Statement generation snapshots posted transactions into `statement_lines`, and
 repayment reduces `posted_balance` while advancing statement payment status.
 Minimal Ledger then consumes posted transaction and repayment events to record
 append-only internal accounting entries.
-The cache layer stores only low-risk snapshots: `GET /api/statements/{id}` uses
-a cached statement read model, and authorization/posting/expiry use a cached
-card snapshot. Caffeine handles short-lived in-process hits, Redis shares a
-TTL-based L2 cache across app instances, and repayment evicts the cached
-statement after commit.
+The current code no longer keeps the earlier Caffeine L1 + Redis L2 snapshot
+cache in the request path. `GET /api/statements/{id}` reads the aggregate
+directly, card lookup goes through MyBatis, and Redis is used where it has a
+clearer high-traffic payoff: the risk velocity sliding-window counter. The
+previous two-level cache-aside design is still documented as a historical design
+trade-off because it is useful for learning cache boundaries, TTL, single-flight,
+and after-commit eviction.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
@@ -233,8 +235,10 @@ mini-card.statement-events.v1
 mini-card.repayment-events.v1
 ```
 
-Local Redis is available at `localhost:6379`. It is used as the L2 cache for
-statement read models and card snapshots; Caffeine remains the per-JVM L1 cache.
+Local Redis is available at `localhost:6379`. The current application uses it
+for the risk velocity sliding-window counter. The removed Caffeine L1 + Redis L2
+snapshot cache design is retained in the docs as a learning reference, not as a
+current request path.
 
 Describe a topic or inspect events:
 

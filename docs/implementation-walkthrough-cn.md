@@ -28,7 +28,7 @@
 | 位置 | 例子 | 含义 | 为什么不合并 |
 | --- | --- | --- | --- |
 | 业务模块内的 `infrastructure` | `authorization.infrastructure.messaging`, `repayment.infrastructure.delayjob` | 某个 bounded context 的 adapter，把业务意图接到 MyBatis、Outbox、DelayJob、Kafka 等机制上 | 它依赖本模块业务语义，例如 authorization expiry、auto repayment |
-| 根 `com.minicard.infrastructure` | `cache`, `async`, `scheduler`, `transaction`, `time`, `web` | shared platform helper，提供线程池、scheduler bean、transaction helper、web error handling、cache 基础设施 | 它不拥有业务状态机，也不决定发布什么事件或执行什么 job |
+| 根 `com.minicard.infrastructure` | `async`, `scheduler`, `transaction`, `time`, `web` | shared platform helper，提供线程池、scheduler bean、transaction helper、web error handling | 它不拥有业务状态机，也不决定发布什么事件或执行什么 job |
 | 根机制包 | `messaging`, `delayjob` | 一等 reliability mechanism，有自己的表、状态、lease、retry、recoverer | 它们比普通 helper 更重；放在根包可以让 Outbox/Inbox/DelayJob 的可靠性语义更清楚 |
 
 所以 `com.minicard.infrastructure.scheduler` 不是“所有 scheduler 业务逻辑”的地方。
@@ -364,12 +364,12 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 2. `cardRepository.findById(...)`
 
-   查询 card aggregate。当前实际 Bean 是 `CachedCardRepository`：
-   先查 `card-snapshot-v1`，miss 时再回到 `MyBatisCardRepository` 查询 `cards` 表。
+   查询 card aggregate。当前实际实现是 `MyBatisCardRepository`，直接查询 `cards` 表。
 
    Card 回答“这张卡是否存在、是否被 blocked、是否过期”。
-   这个 cache 只保存 `CardSnapshot(id, creditAccountId, status)`，不缓存额度，也不替代后面的
-   `credit_accounts` row lock。
+   旧版本曾经有 `CachedCardRepository` + `card-snapshot-v1`，只缓存
+   `CardSnapshot(id, creditAccountId, status)`，不缓存额度。后来删除它，是因为 card 状态会影响
+   authorization 决策，安全 TTL 必须短，而真正的并发瓶颈仍是后面的 `credit_accounts` row lock。
 
 3. `riskAssessmentService.assess(command.toRiskAssessmentRequest())`
 
@@ -1466,8 +1466,9 @@ repayment.received
 4. `cardRepository.findById(...)`
 
    根据 authorization.cardId 找到 card，再找到 creditAccountId。
-   这里同样会经过 `CachedCardRepository` 的 Card snapshot cache；但释放额度仍必须以后面的
-   `creditAccountRepository.findByIdForUpdate(...)` 为准。
+   当前直接经过 `MyBatisCardRepository` 读取 `cards` 表；释放额度仍必须以后面的
+   `creditAccountRepository.findByIdForUpdate(...)` 为准。旧版本的 Card snapshot cache 已删除，
+   原因同授权主路径：card 读不是主要瓶颈，且 stale card 状态会影响授权判断。
 
 5. `creditAccountRepository.findByIdForUpdate(...)`
 
@@ -1552,9 +1553,7 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - `AuthorizationController.get(id)`
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
-- `StatementReadModelService.get(id)`
-- `SnapshotCache<UUID, StatementReadModel>`
-- `StatementService.get(id)`
+- `StatementGenerationService.get(id)`
 - `RepaymentController.get(id)`
 - `RepaymentService.get(id)`
 
@@ -1566,9 +1565,9 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - 不写 delay job。
 - 不修改额度。
 
-### 9.1 `GET /api/statements/{id}` 的 L1/L2 snapshot cache
+### 9.1 `GET /api/statements/{id}` 的当前路径
 
-当前只缓存一类低风险读模型：
+当前 `GET /api/statements/{id}` 不走 cache：
 
 ```bash
 curl http://localhost:8080/api/statements/{statementId}
@@ -1578,35 +1577,34 @@ curl http://localhost:8080/api/statements/{statementId}
 
 ```text
 StatementController.get(id)
--> StatementReadModelService.get(id)
--> SnapshotCache<UUID, StatementReadModel>
-   -> Caffeine L1
-   -> Redis L2
-   -> StatementService.get(id)
-   -> StatementRepository.findById(id)
+-> StatementGenerationService.get(id)
+-> StatementRepository.findById(id)
+-> StatementResponse.from(statement)
 ```
 
-为什么缓存 `StatementReadModel`，而不是缓存 `Statement` aggregate：
+删除旧 statement read model cache 的原因：
 
-- `Statement` aggregate 有还款状态转换和不变量保护，属于写模型。
-- `StatementReadModel` 只包含 response 需要的字段，没有 business behavior。
-- 这样可以明确表达：cache 只是 read acceleration，不是 source of truth。
+- 当前项目的 statement GET 还不是主要读热点，直接查 aggregate 更简单。
+- `paidAmount/status` 会被 repayment 更新，恢复 cache 就必须重新维护 after-commit eviction。
+- 对这个学习项目来说，缓存技术点已经迁移到更有收益的 `RedisRiskVelocityCounter`：
+  velocity 是每笔授权都会触发的 workload，不依赖 cache hit rate。
 
-当前配置：
+### 9.2 已删除的 L1/L2 snapshot cache 设计
 
-- cache name：`statement-read-model-v1`。
-- Redis key 形状：`mini-card:cache:statement-read-model-v1:{statementId}`。
-- L1：Caffeine，`local-ttl = 30s`，`maximum-size = 1000`。
-- L2：Redis，`remote-ttl = 5m`，`remote-ttl-jitter = 30s`。
-- 不缓存 404 negative result。`statement not found` 仍然直接来自 DB/source of truth。
+旧版本为了学习 cache-aside，做过两类 snapshot cache：
 
-读取策略：
+| cache name | value | 用途 | 删除原因 |
+| --- | --- | --- | --- |
+| `statement-read-model-v1` | `StatementReadModel` | 加速 `GET /api/statements/{id}` | 当前不是读热点；还款后需要维护 eviction |
+| `card-snapshot-v1` | `CardSnapshot` | 加速 card 状态和 account 归属读取 | stale card 状态会影响授权判断；短 TTL 命中率有限 |
+
+旧读取策略：
 
 1. 先查 Caffeine L1。
 2. L1 miss 后查 Redis L2。
 3. L2 hit 时回填 L1。
-4. L1/L2 都 miss 时调用 `StatementService.get(id)`，从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
-5. Redis 读写失败时降级回 DB，不让低风险缓存影响 GET 可用性。
+4. L1/L2 都 miss 时调用 loader，从 MySQL/source of truth 读取并重建 snapshot。
+5. Redis 读写失败时降级回 DB，不让低风险缓存影响业务可用性。
 
 为什么 Redis TTL 要加 jitter：
 
@@ -1617,8 +1615,8 @@ StatementController.get(id)
 
 - `statement_items` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
 - 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
-- `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和 statement 后，
-  调用 `StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())`。
+- 旧版本在 `RepaymentService.applyToStatementAndAccount(...)` 同一 transaction boundary 内更新 account 和
+  statement 后，调用 `StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())`。
 - after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
   造成 stale read model。
 
@@ -1630,7 +1628,7 @@ StatementController.get(id)
   如果生产要求“还款提交后所有 pod 立即不可读旧账单”，可以在这个 invalidation port 后面增加 Redis Pub/Sub、
   Kafka invalidation event 或集中式 cache invalidation service。
 
-interview可以这样解释：
+这段旧设计仍然值得保留学习，因为它能解释：
 
 - 只缓存可重建的 read model，不缓存写模型和强一致决策。
 - DB 仍然是 source of truth；cache miss 或 Redis 故障不会改变业务结果。
@@ -1638,42 +1636,11 @@ interview可以这样解释：
 - TTL 负责最终兜底，evict 负责业务更新后的及时失效。
 - after-commit evict 避免 transaction boundary 内的 stale reload 竞态。
 
-### 9.2 Card snapshot cache
-
-Card snapshot 不是一个公开 GET API，而是 authorization/posting/expiry 流程里的 reference snapshot：
-
-```text
-AuthorizationService.decideAndReserve(...)
--> CardRepository.findById(cardId)
--> CachedCardRepository
--> SnapshotCache<String, CardSnapshot>
-   -> Caffeine L1
-   -> Redis L2
-   -> MyBatisCardRepository.findById(cardId)
-   -> cards
-```
-
-当前配置：
-
-- cache name：`card-snapshot-v1`。
-- Redis key 形状：`mini-card:cache:card-snapshot-v1:{cardId}`。
-- L1：Caffeine，`local-ttl = 10s`，`maximum-size = 5000`。
-- L2：Redis，`remote-ttl = 1m`，`remote-ttl-jitter = 10s`。
-- 不缓存 card-not-found negative result。
-
-为什么 Card 可以缓存，但要比 statement 更保守：
-
-- Card 状态和 account 归属通常变化低频，适合做 reference data cache。
-- 但 Card 会影响授权批准/拒绝，stale `ACTIVE` 可能让刚 blocked 的卡短时间继续通过卡状态检查。
-- 因此 Card snapshot TTL 比 statement read model 短。
-- 当前项目还没有 card block/unblock API；未来加入时，状态变更写路径必须在 transaction commit 后
-  通过 `CardSnapshotCacheInvalidator.evictAfterCommit(cardId)` evict `card-snapshot-v1:{cardId}`。
-
-为什么不缓存额度：
+为什么始终不缓存额度：
 
 - 额度是高并发写模型，必须读 `credit_accounts` 并使用 `SELECT ... FOR UPDATE`。
 - 如果缓存 available credit，会绕开 row lock，产生超额授权风险。
-- Card snapshot 只让系统少查一张低频变化的 `cards` 表，不改变额度一致性边界。
+- Card snapshot 即使恢复，也只能让系统少查一张低频变化的 `cards` 表，不改变额度一致性边界。
 
 这个接口适合观察状态变化：
 

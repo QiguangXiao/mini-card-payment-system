@@ -82,6 +82,30 @@ class StatementTest {
     }
 
     @Test
+    void acceptsTransactionOnPeriodStartInBillingTimezone() {
+        StatementLineSource transaction = transactionAt(
+                "ntx-jst-start",
+                "500.00",
+                // UTC では 5/31 だが、JST の請求日切では 6/1 00:30。
+                // 旧実装の UTC 判定だとここを誤って outside billing period として拒否していた。
+                Instant.parse("2026-05-31T15:30:00Z")
+        );
+
+        Statement statement = Statement.close(
+                UUID.randomUUID(),
+                LocalDate.parse("2026-06-01"),
+                LocalDate.parse("2026-06-30"),
+                LocalDate.parse("2026-07-25"),
+                List.of(transaction),
+                money("500.00"),
+                NOW
+        );
+
+        assertThat(statement.items()).singleElement()
+                .satisfies(line -> assertThat(line.networkTransactionId()).isEqualTo("ntx-jst-start"));
+    }
+
+    @Test
     void appliesPartialAndFullRepayment() {
         Statement statement = statement("1500.00");
 
@@ -108,6 +132,14 @@ class StatementTest {
     }
 
     private StatementLineSource transaction(String networkTransactionId, String amount) {
+        return transactionAt(networkTransactionId, amount, Instant.parse("2026-06-15T10:00:00Z"));
+    }
+
+    private StatementLineSource transactionAt(
+            String networkTransactionId,
+            String amount,
+            Instant postedAt
+    ) {
         return new StatementLineSource(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -115,7 +147,7 @@ class StatementTest {
                 UUID.randomUUID(),
                 "card-123",
                 money(amount),
-                Instant.parse("2026-06-15T10:00:00Z")
+                postedAt
         );
     }
 
