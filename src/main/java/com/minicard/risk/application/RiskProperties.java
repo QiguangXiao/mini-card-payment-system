@@ -31,6 +31,10 @@ public record RiskProperties(
             long velocityWindowSeconds,
             /** 窗口内允许的最大授权次数。 */
             int maxAuthorizationsPerWindow,
+            /** 触发长期画像拒绝前所需的最小历史样本量。 */
+            long minHistoricalAuthorizations,
+            /** 历史拒绝率阈值，例如 0.80 表示 80%。 */
+            BigDecimal maxHistoricalDeclineRate,
             /** 各币种高风险金额阈值。 */
             Map<String, BigDecimal> highRiskAmountThresholds,
             /** 商户黑名单。 */

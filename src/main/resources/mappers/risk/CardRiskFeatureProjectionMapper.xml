@@ -4,6 +4,16 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.minicard.risk.infrastructure.mybatis.CardRiskFeatureProjectionMapper">
 
+    <resultMap id="CardRiskFeatureResultMap" type="com.minicard.risk.application.CardRiskFeature">
+        <constructor>
+            <arg column="card_id" javaType="String"/>
+            <arg column="authorization_count" javaType="long"/>
+            <arg column="approved_count" javaType="long"/>
+            <arg column="declined_count" javaType="long"/>
+            <arg column="last_decision_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
     <!--
       MySQL performs the counter update atomically. The consumer Inbox prevents
       the same event from incrementing these counters twice after redelivery.
@@ -31,5 +41,15 @@
             <!-- GREATEST 防止迟到事件把 last_decision_at 倒退。 -->
             last_decision_at = GREATEST(last_decision_at, #{decidedAt})
     </insert>
+
+    <select id="findByCardId" resultMap="CardRiskFeatureResultMap">
+        SELECT card_id,
+               authorization_count,
+               approved_count,
+               declined_count,
+               last_decision_at
+        FROM card_risk_features
+        WHERE card_id = #{cardId}
+    </select>
 
 </mapper>

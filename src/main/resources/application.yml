@@ -193,6 +193,10 @@ risk:
   local:
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
+    # 长期画像来自 card_risk_features projection：样本太少时不参与拒绝，避免一两次失败就永久打标签。
+    min-historical-authorizations: 5
+    # 0.80 表示历史拒绝率达到 80% 时触发长期画像拒绝。它是长窗口信号，不替代 Redis 短窗口 velocity。
+    max-historical-decline-rate: 0.80
     high-risk-amount-thresholds:
       JPY: 50000.00
       USD: 500.00

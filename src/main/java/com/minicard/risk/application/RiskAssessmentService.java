@@ -28,6 +28,7 @@ import org.springframework.stereotype.Service;
 public class RiskAssessmentService {
 
     private final RiskVelocityCounter velocityCounter;
+    private final RiskFeatureReader riskFeatureReader;
     private final ExternalRiskGateway externalRiskGateway;
     private final RiskProperties properties;
     private final Clock clock;
@@ -36,12 +37,14 @@ public class RiskAssessmentService {
 
     public RiskAssessmentService(
             RiskVelocityCounter velocityCounter,
+            RiskFeatureReader riskFeatureReader,
             ExternalRiskGateway externalRiskGateway,
             RiskProperties properties,
             Clock clock,
             MeterRegistry meterRegistry
     ) {
         this.velocityCounter = velocityCounter;
+        this.riskFeatureReader = riskFeatureReader;
         this.externalRiskGateway = externalRiskGateway;
         this.properties = properties;
         this.clock = clock;
@@ -99,7 +102,30 @@ public class RiskAssessmentService {
             return RiskDecision.decline(RiskDeclineReason.GEOLOCATION_MISMATCH, 75);
         }
 
+        RiskDecision historicalDecision = assessHistoricalProfile(request);
+        if (!historicalDecision.approved()) {
+            return historicalDecision;
+        }
+
         return RiskDecision.approve(20);
+    }
+
+    private RiskDecision assessHistoricalProfile(RiskAssessmentRequest request) {
+        return riskFeatureReader.findByCardId(request.cardId())
+                .filter(feature -> feature.hasEnoughSample(
+                        properties.local().minHistoricalAuthorizations()
+                ))
+                .filter(feature -> feature.declineRateAtLeast(
+                        properties.local().maxHistoricalDeclineRate()
+                ))
+                .map(feature -> {
+                    // card_risk_features 是 Kafka consumer 异步维护的 long-window profile。
+                    // 它补齐 CQRS projection 的读侧，但代价是每笔通过 cheap rules 的授权多一次 DB read。
+                    // counterfactual：如果把它当 Redis velocity 的替代品，会混淆“实时短窗口限流”和
+                    // “eventually consistent 历史画像”两种完全不同的风险信号。
+                    return RiskDecision.decline(RiskDeclineReason.HISTORICAL_RISK_PROFILE, 88);
+                })
+                .orElseGet(() -> RiskDecision.approve(20));
     }
 
 }

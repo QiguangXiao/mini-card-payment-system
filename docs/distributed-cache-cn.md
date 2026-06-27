@@ -100,6 +100,11 @@ return count
 让 `RiskAssessmentService` 不知道底层是哪种,用 `@ConditionalOnProperty(risk.velocity.store)`
 切换；但 port 返回 `VelocityCheckResult`,所以 service 仍能知道这次结果是否 `degraded`。
 
+注意：`card_risk_features` 是另一层 long-window profile。它由 Kafka event 异步 upsert,
+现在也会被 `RiskAssessmentService` 读回决策；它解决的是历史画像,不是 60 秒短窗口 velocity。
+这能补齐 CQRS projection 的读侧,但会让通过 cheap rules 的授权多一次 DB read,所以生产要监控
+projection read latency / Hikari pending,必要时走 read replica 或 profile cache。
+
 ---
 
 ## 3. 限流(Rate Limiting)通用知识

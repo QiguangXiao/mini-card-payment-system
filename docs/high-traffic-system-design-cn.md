@@ -978,7 +978,7 @@ SELECT ... FROM credit_accounts WHERE id = ? FOR UPDATE
 | Credit available amount | 通常不可以 | 直接决定 approve/decline |
 | Authorization final response | 不应该随意变化 | 客户端 retry 要稳定 |
 | Notification | 可以 | side effect，可延迟 |
-| Risk feature projection | 可以但要监控 freshness | 落后会影响后续风控 |
+| Risk feature projection | 可以但要监控 freshness | 当前已作为 long-window profile 读回风控；落后会影响后续授权判断 |
 | Ledger projection | 可以短暂延迟，但要可重放/对账 | 内部账务不能永久丢 |
 | Statement read model cache | 可以短 stale window | 展示型读取，DB 是 source of truth |
 
@@ -1050,6 +1050,8 @@ queue 满时：
 - 用 Lua 原子完成“记录本次尝试 + 裁剪窗口 + 计数 + TTL”。
 - Redis 不可用时显式 fail-open：`VelocityCheckResult.degraded=true`，
   `risk.velocity.redis.unavailable` 和 `risk.velocity.fallback.allow` 会增长，而不是静默把降级当成真正 0 次。
+- `card_risk_features` 不再只是写侧 demo：授权热路径会按 `card_id` 读一行 long-window profile。
+  这补齐 CQRS projection 读侧，但会重新引入一次 DB read，不能和 Redis short-window velocity 混为一谈。
 - statement read model GET。
 - Caffeine L1 降低同 JVM 热点读取延迟，Redis L2 跨实例共享 statement read model。
 - repayment commit 后 after-commit evict statement read cache。
@@ -1168,7 +1170,7 @@ consumer side Inbox/unique constraint
 但长期有业务风险：
 
 - Notification 晚到。
-- Risk feature projection 变旧。
+- Risk feature projection 变旧，后续授权使用到的 long-window profile 会 stale。
 - Ledger projection 落后。
 - Outbox 表膨胀。
 - DLT 未处理会隐藏数据问题。

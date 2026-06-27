@@ -226,6 +226,7 @@ public class AuthorizationService {
     private AuthorizationDeclineReason mapRiskFailure(RiskDeclineReason failure) {
         return switch (failure) {
             case VELOCITY_EXCEEDED -> AuthorizationDeclineReason.RISK_VELOCITY_EXCEEDED;
+            case HISTORICAL_RISK_PROFILE -> AuthorizationDeclineReason.RISK_HISTORICAL_PROFILE;
             case HIGH_RISK_AMOUNT -> AuthorizationDeclineReason.RISK_HIGH_AMOUNT;
             case GEOLOCATION_MISMATCH -> AuthorizationDeclineReason.RISK_GEOLOCATION_MISMATCH;
             case BLOCKED_MERCHANT -> AuthorizationDeclineReason.RISK_BLOCKED_MERCHANT;

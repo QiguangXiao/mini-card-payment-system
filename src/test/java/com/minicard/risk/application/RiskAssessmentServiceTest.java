@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import com.minicard.shared.domain.Money;
@@ -28,8 +29,9 @@ class RiskAssessmentServiceTest {
     @Test
     void localBlockedMerchantShortCircuitsExternalRisk() {
         RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        RiskFeatureReader riskFeatureReader = mock(RiskFeatureReader.class);
         ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
-        RiskAssessmentService service = service(velocityCounter, externalRiskGateway);
+        RiskAssessmentService service = service(velocityCounter, riskFeatureReader, externalRiskGateway);
 
         RiskDecision decision = service.assess(request("merchant-blocked", "100.00"));
 
@@ -40,13 +42,16 @@ class RiskAssessmentServiceTest {
     @Test
     void callsExternalRiskAfterLocalChecksPass() {
         RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        RiskFeatureReader riskFeatureReader = mock(RiskFeatureReader.class);
         ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
         RiskAssessmentRequest request = request("merchant-123", "100.00");
         when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
                 .thenReturn(VelocityCheckResult.available(1, VelocitySource.REDIS));
+        when(riskFeatureReader.findByCardId("card-123")).thenReturn(Optional.empty());
         when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
 
-        RiskDecision decision = service(velocityCounter, externalRiskGateway).assess(request);
+        RiskDecision decision = service(velocityCounter, riskFeatureReader, externalRiskGateway)
+                .assess(request);
 
         assertThat(decision.approved()).isTrue();
         verify(externalRiskGateway).assess(request);
@@ -55,14 +60,21 @@ class RiskAssessmentServiceTest {
     @Test
     void velocityDegradedFailsOpenAndRecordsFallbackMetric() {
         RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        RiskFeatureReader riskFeatureReader = mock(RiskFeatureReader.class);
         ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
         RiskAssessmentRequest request = request("merchant-123", "100.00");
         SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
                 .thenReturn(VelocityCheckResult.degradedAllow(VelocitySource.REDIS));
+        when(riskFeatureReader.findByCardId("card-123")).thenReturn(Optional.empty());
         when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
 
-        RiskDecision decision = service(velocityCounter, externalRiskGateway, meterRegistry).assess(request);
+        RiskDecision decision = service(
+                velocityCounter,
+                riskFeatureReader,
+                externalRiskGateway,
+                meterRegistry
+        ).assess(request);
 
         assertThat(decision.approved()).isTrue();
         assertThat(meterRegistry.counter("risk.velocity.fallback.allow", "source", "redis").count())
@@ -70,20 +82,77 @@ class RiskAssessmentServiceTest {
         verify(externalRiskGateway).assess(request);
     }
 
-    private RiskAssessmentService service(
-            RiskVelocityCounter velocityCounter,
-            ExternalRiskGateway externalRiskGateway
-    ) {
-        return service(velocityCounter, externalRiskGateway, new SimpleMeterRegistry());
+    @Test
+    void historicalRiskProfileDeclinesBeforeExternalRisk() {
+        RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        RiskFeatureReader riskFeatureReader = mock(RiskFeatureReader.class);
+        ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
+        RiskAssessmentRequest request = request("merchant-123", "100.00");
+        when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
+                .thenReturn(VelocityCheckResult.available(1, VelocitySource.REDIS));
+        when(riskFeatureReader.findByCardId("card-123"))
+                .thenReturn(Optional.of(new CardRiskFeature(
+                        "card-123",
+                        10,
+                        1,
+                        9,
+                        NOW.minusSeconds(1)
+                )));
+
+        RiskDecision decision = service(velocityCounter, riskFeatureReader, externalRiskGateway)
+                .assess(request);
+
+        assertThat(decision.declineReason()).isEqualTo(RiskDeclineReason.HISTORICAL_RISK_PROFILE);
+        verify(externalRiskGateway, never()).assess(request);
+    }
+
+    @Test
+    void historicalRiskProfileIgnoresSmallSamples() {
+        RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        RiskFeatureReader riskFeatureReader = mock(RiskFeatureReader.class);
+        ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
+        RiskAssessmentRequest request = request("merchant-123", "100.00");
+        when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
+                .thenReturn(VelocityCheckResult.available(1, VelocitySource.REDIS));
+        when(riskFeatureReader.findByCardId("card-123"))
+                .thenReturn(Optional.of(new CardRiskFeature(
+                        "card-123",
+                        4,
+                        0,
+                        4,
+                        NOW.minusSeconds(1)
+                )));
+        when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
+
+        RiskDecision decision = service(velocityCounter, riskFeatureReader, externalRiskGateway)
+                .assess(request);
+
+        assertThat(decision.approved()).isTrue();
+        verify(externalRiskGateway).assess(request);
     }
 
     private RiskAssessmentService service(
             RiskVelocityCounter velocityCounter,
+            RiskFeatureReader riskFeatureReader,
+            ExternalRiskGateway externalRiskGateway
+    ) {
+        return service(
+                velocityCounter,
+                riskFeatureReader,
+                externalRiskGateway,
+                new SimpleMeterRegistry()
+        );
+    }
+
+    private RiskAssessmentService service(
+            RiskVelocityCounter velocityCounter,
+            RiskFeatureReader riskFeatureReader,
             ExternalRiskGateway externalRiskGateway,
             SimpleMeterRegistry meterRegistry
     ) {
         return new RiskAssessmentService(
                 velocityCounter,
+                riskFeatureReader,
                 externalRiskGateway,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -96,6 +165,8 @@ class RiskAssessmentServiceTest {
                 new RiskProperties.Local(
                         60,
                         3,
+                        5,
+                        new BigDecimal("0.80"),
                         Map.of("JPY", new BigDecimal("50000.00")),
                         Set.of("merchant-blocked")
                 ),

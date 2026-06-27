@@ -377,8 +377,22 @@ curl -X POST http://localhost:8080/api/authorizations \
    本地 velocity 查询通过 `RiskVelocityCounter` port 进入 Redis sliding-window adapter
    （`JdbcRiskVelocityCounter` 保留为对照实现）。port 返回 `VelocityCheckResult(count, degraded, source)`，
    所以 service 能区分“窗口内确实 0 次”和“Redis 不可用，按 fail-open policy 降级放行”；
+   长期画像通过 `RiskFeatureReader` 读取 `card_risk_features` projection：
+   `AuthorizationRiskFeatureListener` 消费 authorization decision event，`RiskFeatureProjectionService`
+   用 Inbox 幂等后 upsert 这张表；下一笔授权再把它作为 long-window risk profile 使用。
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
+
+   当前同步风控形成两层特征：
+
+   - Redis short-window velocity：实时近似，适合防 card-testing 突刺，主库零读压。
+   - MySQL projection long-window profile：`card_risk_features` 按 `card_id` 读一行，
+     当历史样本量达到 `min-historical-authorizations` 且 decline ratio 达到
+     `max-historical-decline-rate` 时拒绝。
+
+   trade-off 也要讲清楚：projection 补齐了 CQRS 读侧，但每笔通过 cheap rules 的授权会多一次 DB read。
+   生产上可以让它走 read replica、加本地/Redis profile cache，或只对高风险候选请求启用；
+   本项目先保留最直观的一行主键读取，方便看懂“实时 Redis + 历史 DB 特征”的分层。
 
    这里故意让两类风控依赖的失败策略不同：
 
@@ -1344,7 +1358,7 @@ credit account row lock -> statement row lock
 - Outbox 是 messaging 的 reliable delivery 机制，不是业务 aggregate。
 - `OutboxEvent` 表达的是一条待发布消息的 delivery state，不需要伪装成业务 domain。
 - 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务发送/消费入口放回各自 bounded context。
-- interview中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
+- interview 中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
 
 PayPay Card interview提示：
 
