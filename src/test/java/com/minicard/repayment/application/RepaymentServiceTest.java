@@ -92,7 +92,7 @@ class RepaymentServiceTest {
         lockOrder.verify(statementRepository).findByIdForUpdate(command.statementId());
         verify(creditAccountRepository).update(account);
         verify(statementRepository).updatePayment(statement);
-        verify(statementReadService).evictAfterCommit(statement.id());
+        verify(statementReadService).evictAfterCommit(statement);
         verify(repaymentRepository).update(repayment);
         ArgumentCaptor<RepaymentDomainEvent> event =
                 ArgumentCaptor.forClass(RepaymentDomainEvent.class);

@@ -35,7 +35,14 @@ public record StatementReadCacheProperties(
          * Redis TTL 抖动上限。实际 TTL = remoteTtl + [0, remoteTtlJitter] 随机值，
          * 用来错开过期时间，降低 cache avalanche。
          */
-        Duration remoteTtlJitter
+        Duration remoteTtlJitter,
+        /*
+         * 还款 after-commit 写入 L2 的"版本地板"(tombstone)的存活时间。evict 不再 delete，而是写一个带版本
+         * 的墓碑作为地板，挡住迟到写覆盖新值（见 StatementReadService 的 CAS 写）。
+         * 必须 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞，否则地板先过期、迟到写又能落在空 key 上。
+         * 它只需活到第一个新鲜 reader 用真实值替换掉地板为止，所以通常远短于 remoteTtl。
+         */
+        Duration tombstoneTtl
 ) {
 
     public StatementReadCacheProperties {
@@ -43,5 +50,6 @@ public record StatementReadCacheProperties(
         localMaximumSize = localMaximumSize == null ? 1000L : localMaximumSize;
         remoteTtl = remoteTtl == null ? Duration.ofMinutes(5) : remoteTtl;
         remoteTtlJitter = remoteTtlJitter == null ? Duration.ofSeconds(30) : remoteTtlJitter;
+        tombstoneTtl = tombstoneTtl == null ? Duration.ofSeconds(10) : tombstoneTtl;
     }
 }

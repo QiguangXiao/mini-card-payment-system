@@ -31,7 +31,7 @@ public class RedisStatementReadCacheBroadcaster implements StatementReadCacheBro
 
     // 频道名带 cache 版本号，必须与 L2 key 的 CACHE_NAME 对齐：换 read model schema 时一起换，
     // 避免新旧 pod 订阅同一频道却用不兼容的 value contract。
-    public static final String EVICT_CHANNEL = "mini-card:cache-evict:statement-read-model-v1";
+    public static final String EVICT_CHANNEL = "mini-card:cache-evict:statement-read-model-v2";
 
     private final StringRedisTemplate redisTemplate;
 

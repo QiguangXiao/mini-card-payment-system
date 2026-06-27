@@ -179,6 +179,10 @@ statement:
     remote-ttl: 5m
     # 在基础 TTL 上加随机抖动，避免一批 key 同秒过期后一起回源 MySQL。
     remote-ttl-jitter: 30s
+    # 还款 after-commit 写入 L2 的"版本地板"墓碑存活时间。它挡住"迟到写"覆盖新值，
+    # 只需活到第一个新鲜 reader 用真实值替换墓碑为止，所以远短于 remote-ttl。
+    # 取值要 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞。
+    tombstone-ttl: 10s
     broadcast:
       # 跨 pod L1 失效广播（Redis Pub/Sub）。默认关闭：单实例/测试不需要，跨 pod L1 由 local-ttl 兜底。
       # 开启后，还款 after-commit 会 PUBLISH 一条失效消息，所有 pod 的订阅者清各自 Caffeine L1，

@@ -1,6 +1,7 @@
 package com.minicard.statement.application;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -9,8 +10,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.minicard.shared.domain.Money;
+import com.minicard.statement.domain.Statement;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -30,16 +34,47 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * 还款入账结果仍然必须由 DB transaction / row lock 保护。</p>
  *
  * <p>当前采用 cache-aside：读的时候先看 cache，miss 后回源 DB，再把结果写回 cache。
- * 写的时候不直接更新 cache，而是更新 DB 后删除 cache，让下一次读重新从 DB 构造。
+ * 写的时候不直接更新 cache，而是更新 DB 后失效 cache，让下一次读重新从 DB 构造。
  * 这比“写 DB 同时更新 cache”更容易解释和排查，因为并发下更新 cache 很容易写入旧计算结果。</p>
+ *
+ * <p><strong>L2 用版本号 + Lua CAS + 墓碑根治"迟到写"竞态</strong>：单纯 after-commit delete 关不掉
+ * "GET 在 commit 前读到旧值、evict 后才写回 L2"的迟到写（delete 把可比的版本也删了，迟到写落在空 key 上）。
+ * 这里 evict 不再 delete，而是写一个带版本的<strong>墓碑</strong>(版本地板)；读回填和墓碑写都走同一段
+ * Lua CAS（仅当 incoming.version >= stored.version 或不存在才写），于是旧版本的迟到写被地板挡下。
+ * 版本取 paidAmount 的 minor units（本域单调非减）。详见 docs/cache-invalidation-broadcast-cn.md 第 3 节。</p>
  */
 @Service
 @Slf4j
 public class StatementReadService {
 
-    // cache name 带版本号。Redis value 是 JSON contract；字段语义不兼容时换名字比全量清 Redis 更安全。
-    private static final String CACHE_NAME = "statement-read-model-v1";
+    // cache name 带版本号。L2 value contract 从 v1 的"纯 JSON"变成 v2 的"<version>|<payload>"信封，
+    // 不兼容，所以 bump 到 v2；旧 v1 key 让它自然按 TTL 过期，避免新代码误读旧格式。
+    private static final String CACHE_NAME = "statement-read-model-v2";
     private static final String REDIS_KEY_PREFIX = "mini-card:cache:" + CACHE_NAME + ":";
+
+    // L2 value 信封格式：<version>|<payload>。
+    //   - 真实值： "<version>|<read model JSON>"
+    //   - 墓碑：   "<version>|"            （'|' 后为空 = tombstone，读到视作 miss）
+    // 用前缀数字 + 分隔符，而不是 JSON 包一层 version，是为了让 Lua 端不依赖 cjson、只做一次数字前缀解析。
+    private static final char VERSION_SEPARATOR = '|';
+
+    // 版本化写入的 Lua CAS：仅当"Redis 里没有该 key，或已存版本不比 incoming 更新"时才写。
+    // KEYS[1]=key  ARGV[1]=incoming version  ARGV[2]=信封字符串  ARGV[3]=TTL 毫秒
+    // 返回 1=写入，0=被拒（已有更新版本/墓碑挡住了这次迟到写）。
+    // 整段在 Redis 内单线程原子执行，所以 GET 比较 + SET 之间不会被插入其他写。
+    private static final RedisScript<Long> CAS_WRITE_SCRIPT = RedisScript.of(
+            "local incoming = tonumber(ARGV[1])\n"
+                    + "local current = redis.call('GET', KEYS[1])\n"
+                    + "if current then\n"
+                    + "  local cur = tonumber(string.match(current, '^([%-%d]+)|'))\n"
+                    + "  if cur ~= nil and cur > incoming then\n"
+                    + "    return 0\n"
+                    + "  end\n"
+                    + "end\n"
+                    + "redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])\n"
+                    + "return 1\n",
+            Long.class
+    );
 
     private final StatementGenerationService statementGenerationService;
     private final StringRedisTemplate redisTemplate;
@@ -79,30 +114,33 @@ public class StatementReadService {
         return localCache.get(id, this::loadThroughRedis);
     }
 
-    public void evictAfterCommit(UUID statementId) {
+    public void evictAfterCommit(Statement statement) {
+        UUID statementId = statement.id();
+        // 墓碑的版本 = 还款后新的 paidAmount minor units。还款 transaction 已经把 statement 推进到新状态，
+        // 所以这里取到的就是"地板该有多高"。旧 reader 的版本一定低于它，于是迟到写会被 CAS 拒绝。
+        long version = StatementReadModel.minorUnits(
+                statement.paidAmount().amount(),
+                statement.paidAmount().currency().getCurrencyCode()
+        );
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            // 没有 Spring transaction 时直接删，通常用于测试或未来非事务调用。
-            evict(statementId);
+            // 没有 Spring transaction 时直接 evict，通常用于测试或未来非事务调用。
+            evict(statementId, version);
             return;
         }
-        // 还款 transaction commit 后再删缓存。afterCommit 的含义是：只有 DB 真的提交成功，
-        // cache 才需要失效；rollback 时不做多余删除。在事务内提前 evict 会更糟——删完之后、commit 之前，
-        // 另一个 GET 仍读到旧 DB 值并写回 Redis，旧值反而被“固化”。所以失效一定排到 commit 之后。
+        // 还款 transaction commit 后再失效缓存。afterCommit 的含义是：只有 DB 真的提交成功，cache 才需要
+        // 失效；rollback 时不做多余处理。在事务内提前失效会更糟——失效后、commit 前，另一个 GET 仍读到旧
+        // DB 值并写回 Redis，旧值反而被"固化"。所以失效一定排到 commit 之后。
         //
-        // 重要：afterCommit 只是“写侧的删除时机”，它并不能消除 cache-aside 固有的 read-write 竞态。
-        // 仍然存在的 stale window（delete-after-commit 无法解决）：
+        // afterCommit 解决"什么时候失效"，但单纯 delete 关不掉"迟到写"竞态：
         //   1) GET 线程在还款 commit 之前读到旧 DB 快照（MySQL RR 下是事务开始时的一致性快照），但写得慢；
-        //   2) 还款 commit，这里的 afterCommit 删掉 Redis；
-        //   3) GET 线程“迟到”地 writeRedis(旧值)，旧 read model 重新落到 Redis，直到 remoteTtl 才过期。
-        // 也就是说：写后删 + 短 TTL 只能把不一致窗口收敛到 remoteTtl，并不能做到强一致。
-        // 工程缓解手段（按成本递增）：把 remoteTtl 设短、delayed double-delete（commit 后删一次、延迟数百 ms 再删一次）、
-        // 或给 read model 加版本号让旧值写入时被拒。本项目刻意停在“写后删 + 短 TTL + 文档化窗口”，
-        // 因为账单查询能容忍秒级 stale；强一致请直接读 DB，不要靠 cache。
-        // 详见 docs/cache-snapshot-design-cn.md 的 "after-commit evict 不是强一致" 一节。
+        //   2) 还款 commit，afterCommit 失效 Redis；
+        //   3) GET 线程"迟到"地写回旧值——如果只是 delete，旧值会落在空 key 上、活到 remoteTtl。
+        // 本实现用墓碑根治这一步：evict 写一个 version=新paidAmount 的墓碑作为版本地板，第 3) 步的迟到写
+        // （旧版本）会被 CAS 的 "stored.version > incoming 则拒绝" 挡下。详见 evict / writeViaCas。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                evict(statementId);
+                evict(statementId, version);
             }
         });
     }
@@ -123,12 +161,25 @@ public class StatementReadService {
     private StatementReadModel readRedis(UUID id) {
         String key = redisKey(id);
         try {
-            String json = redisTemplate.opsForValue().get(key);
-            if (json == null) {
+            String stored = redisTemplate.opsForValue().get(key);
+            if (stored == null) {
                 // null 是正常 cache miss，不是错误；继续回源 DB。
                 return null;
             }
-            return objectMapper.readValue(json, StatementReadModel.class);
+            int separator = stored.indexOf(VERSION_SEPARATOR);
+            if (separator < 0) {
+                // 没有 "<version>|" 前缀 = 非本版本格式（理论上 v2 不会遇到 v1 值，仍防御）：删掉回源重建。
+                deleteCorruptRedisValue(key);
+                log.warn("statement_read_cache_unversioned key={} action=evict_and_reload", key);
+                return null;
+            }
+            String payload = stored.substring(separator + 1);
+            if (payload.isEmpty()) {
+                // 墓碑（版本地板占位，'|' 后为空）：视作 miss，回源 DB 重建真值。
+                // 回填时 CAS 会用 incoming.version 和墓碑版本比较：新鲜读替换墓碑，迟到写被拒。
+                return null;
+            }
+            return objectMapper.readValue(payload, StatementReadModel.class);
         } catch (JsonProcessingException exception) {
             // Redis 里是旧格式或坏 JSON 时，不要让这个坏值永久挡住请求；删除后回源 DB 重建。
             deleteCorruptRedisValue(key);
@@ -144,12 +195,15 @@ public class StatementReadService {
     private void writeRedis(UUID id, StatementReadModel value) {
         String key = redisKey(id);
         try {
-            redisTemplate.opsForValue().set(
-                    key,
-                    objectMapper.writeValueAsString(value),
-                    // Redis TTL 比 L1 长；再加 jitter，把大量 key 的过期时间错开，降低 cache avalanche。
-                    remoteTtlWithJitter()
-            );
+            long version = value.version();
+            // 信封 = "<version>|<read model JSON>"。版本同时单独作为 ARGV[1] 传给 CAS，省得脚本再解析一次。
+            String envelope = version + "|" + objectMapper.writeValueAsString(value);
+            Long written = writeViaCas(key, version, envelope, remoteTtlWithJitter().toMillis());
+            if (written != null && written == 0L) {
+                // CAS 拒绝：Redis 里已有更新版本或墓碑，说明本次读到的是较旧快照。
+                // 不写回缓存即可（避免迟到写覆盖新值）；本次仍把 loaded 返回给调用方，那是它读到的一致结果。
+                log.debug("statement_read_cache_cas_skipped key={} version={}", key, version);
+            }
         } catch (JsonProcessingException exception) {
             // 序列化失败说明这次 cache value 写不了；不要影响 GET，直接返回 DB 结果。
             log.warn("statement_read_cache_serialize_failed key={} action=skip_redis", key, exception);
@@ -157,6 +211,20 @@ public class StatementReadService {
             // Redis 写失败时保留本 JVM L1。本次请求成功，但其他 pod 可能仍需要回源 DB。
             log.warn("statement_read_cache_redis_write_failed key={} action=keep_l1_only", key, exception);
         }
+    }
+
+    /**
+     * 版本化 CAS 写：把信封写进 L2，但仅当"key 不存在或已存版本不比 incoming 更新"才写。
+     * 读回填和墓碑写共用它——区别只在 envelope 是"真实值"还是"版本地板"。
+     */
+    private Long writeViaCas(String key, long version, String envelope, long ttlMillis) {
+        return redisTemplate.execute(
+                CAS_WRITE_SCRIPT,
+                List.of(key),
+                Long.toString(version),
+                envelope,
+                Long.toString(ttlMillis)
+        );
     }
 
     /**
@@ -174,22 +242,23 @@ public class StatementReadService {
         localCache.invalidate(statementId);
     }
 
-    private void evict(UUID statementId) {
-        // 写路径只做 delete，不做 cache update。下一次读会用 DB 最新事实重建 read model。
-        // 三步顺序：先清本 pod L1 → 删共享 L2 → 广播让其他 pod 清各自 L1。
+    private void evict(UUID statementId, long version) {
+        // 写路径不更新 cache，而是写一个"版本地板"墓碑让下一次读回源重建。三步顺序：
+        // 先清本 pod L1 → 在 L2 写墓碑(版本地板) → 广播让其他 pod 清各自 L1。
         localCache.invalidate(statementId);
         String key = redisKey(statementId);
         try {
-            redisTemplate.delete(key);
+            // 墓碑信封 = "<version>|"（'|' 后为空）。同样走 CAS：如果 L2 里已有更高版本（更晚的还款），
+            // 这次较低版本的墓碑会被拒绝，不会把地板降低。墓碑 TTL 远短于 remoteTtl，只需活到首个新鲜读替换它。
+            writeViaCas(key, version, version + "|", properties.tombstoneTtl().toMillis());
         } catch (RuntimeException exception) {
-            // 这里会留下一个可能的短暂不一致：本 JVM L1 已删，但 Redis L2 可能还保留旧值到 remote TTL。
-            // 这是 cache-aside 的常见风险，靠短 TTL、告警和必要时的重试/二次删除降低影响。
-            log.warn("statement_read_cache_redis_evict_failed key={} action=l1_evicted", key, exception);
+            // 墓碑写失败：退化成"只清了本 pod L1"。此时迟到写可能落在空 key 上（回到旧 delete 的风险），
+            // 靠 remoteTtl 和告警兜底。Redis 不应成为 statement GET / 还款的 hard dependency。
+            log.warn("statement_read_cache_tombstone_failed key={} action=l1_evicted_only", key, exception);
         }
         // 跨 pod L1 失效：上面只清了"本 pod"的 L1，其他 pod 的 Caffeine 还留着旧值最长 local-ttl。
         // 广播一条 Pub/Sub 消息，让所有 pod（含自己）的订阅者 invalidateLocal，把跨 pod L1 stale 窗口
-        // 从 local-ttl 压到一次广播延迟（亚毫秒~毫秒级）。它是 best-effort：广播丢失时退回 local-ttl 兜底，
-        // 也不解决 L2 的 late-write 竞态（那要版本号/CAS，见 docs/cache-invalidation-broadcast-cn.md 第 3 节）。
+        // 从 local-ttl 压到一次广播延迟（亚毫秒~毫秒级）。它是 best-effort：广播丢失时退回 local-ttl 兜底。
         // 默认是 no-op 实现；只有显式开启 statement.read-cache.broadcast.enabled=true 才走 Redis Pub/Sub。
         broadcaster.broadcastEvict(statementId);
     }
