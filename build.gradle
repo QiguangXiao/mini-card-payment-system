@@ -55,6 +55,16 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // spring-boot-testcontainers 提供 @ServiceConnection：容器一启动就把 jdbc/kafka 连接信息
+    // 注入 Spring，省掉手写 @DynamicPropertySource。版本由 Spring Boot BOM 统一管理。
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    // 真 MySQL 才能验证 SELECT ... FOR UPDATE / SKIP LOCKED 的行锁语义；H2 不支持 SKIP LOCKED。
+    testImplementation 'org.testcontainers:mysql'
+    // 真 Kafka broker（KRaft 模式 apache/kafka 镜像）验证 Outbox→Kafka→Inbox 往返与重复投递幂等。
+    testImplementation 'org.testcontainers:kafka'
+    // Awaitility 用于异步消息断言：轮询等待 consumer 把 inbox/projection 写好，避免 sleep 魔法数。
+    testImplementation 'org.awaitility:awaitility'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

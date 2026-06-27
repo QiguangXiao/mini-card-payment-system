@@ -11,17 +11,19 @@
             <arg column="period_start" javaType="java.time.LocalDate"/>
             <arg column="period_end" javaType="java.time.LocalDate"/>
             <arg column="due_date" javaType="java.time.LocalDate"/>
-            <arg column="shard_no" javaType="int"/>
-            <arg column="shard_count" javaType="int"/>
+            <!-- "_int" 别名才是基本类型 int；"int" 在 MyBatis 里指向 Integer，
+                 与 StatementJobRow 的基本类型 int 字段不匹配，会在读结果时抛 NoSuchMethodException。 -->
+            <arg column="shard_no" javaType="_int"/>
+            <arg column="shard_count" javaType="_int"/>
             <arg column="status" javaType="java.lang.String"/>
             <arg column="claimed_by" javaType="java.lang.String"/>
             <arg column="claimed_at" javaType="java.time.Instant"/>
             <arg column="claim_until" javaType="java.time.Instant"/>
-            <arg column="attempt_count" javaType="int"/>
-            <arg column="processed_account_count" javaType="int"/>
-            <arg column="generated_statement_count" javaType="int"/>
-            <arg column="skipped_account_count" javaType="int"/>
-            <arg column="failed_account_count" javaType="int"/>
+            <arg column="attempt_count" javaType="_int"/>
+            <arg column="processed_account_count" javaType="_int"/>
+            <arg column="generated_statement_count" javaType="_int"/>
+            <arg column="skipped_account_count" javaType="_int"/>
+            <arg column="failed_account_count" javaType="_int"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="updated_at" javaType="java.time.Instant"/>
             <arg column="last_error" javaType="java.lang.String"/>

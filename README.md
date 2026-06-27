@@ -64,6 +64,9 @@ See [High Traffic System Design Notes](docs/high-traffic-system-design-cn.md)
 for authorization hot-path capacity analysis, bottleneck diagnosis, load-test
 scenarios, rate limiting, backpressure, cache/Kafka degradation, and production
 interview answers.
+See [Production Runtime Sizing Notes](docs/production-runtime-sizing-cn.md) for
+Tomcat thread, Hikari pool, JVM heap/GC, worker pool, Kafka concurrency, and
+small/medium/large production configuration trade-offs.
 See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
 beginner-friendly but production-oriented map from this project's Docker Compose
 shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,

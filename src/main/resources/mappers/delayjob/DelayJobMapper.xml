@@ -12,7 +12,9 @@
             <arg column="aggregate_type" javaType="java.lang.String"/>
             <arg column="aggregate_id" javaType="java.lang.String"/>
             <arg column="status" javaType="java.lang.String"/>
-            <arg column="attempts" javaType="int"/>
+            <!-- MyBatis 的 "int" 别名指向 java.lang.Integer；DelayJobRow.attempts 是基本类型 int，
+                 必须用 "_int" 别名匹配到那个构造函数参数，否则 result handling 抛 NoSuchMethodException。 -->
+            <arg column="attempts" javaType="_int"/>
             <arg column="scheduled_at" javaType="java.time.Instant"/>
             <arg column="next_attempt_at" javaType="java.time.Instant"/>
             <arg column="created_at" javaType="java.time.Instant"/>

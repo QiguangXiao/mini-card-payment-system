@@ -1,0 +1,31 @@
+# Testcontainers 集成测试专用 profile（@ActiveProfiles("it")）。
+# datasource / kafka 连接信息由 @ServiceConnection 在容器启动后注入，这里不写死。
+spring:
+  # 关闭后台调度，避免 outbox/delay-job/statement poller 与并发测试线程争抢同一批 row，
+  # 让“谁在改 DB”在测试里是确定的：只有测试自己驱动的事务。
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+risk:
+  velocity:
+    # 用 jdbc 计数器，集成测试不再依赖 Redis 连接（Redis 仅在 store=redis 时才被使用）。
+    store: jdbc
+
+outbox:
+  publisher:
+    enabled: false
+delay-jobs:
+  scheduler:
+    enabled: false
+statement:
+  batch:
+    enabled: false
+  jobs:
+    enabled: false
+
+logging:
+  level:
+    # MySQL-only 测试不连 Kafka，broker 不可达的连接重试日志压成 ERROR，保持报告干净。
+    org.apache.kafka: ERROR
+    org.springframework.kafka: ERROR
+    liquibase: WARN
