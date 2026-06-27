@@ -12,7 +12,7 @@ import java.time.Instant;
  * <p>Database shape 与 aggregate 分开，避免 MyBatis 的 String id 转换泄漏到 domain model。</p>
  */
 // Row record 表达数据库形状，不放发送通知的业务方法。
-// 如果 row 和 aggregate 混用，String id、template/status 列名会污染 domain model。
+// 如果 row 和 aggregate 混用，String id、notification_type/status 列名会污染 domain model。
 public record NotificationRow(
         /** notification id。 */
         String id,
@@ -24,8 +24,8 @@ public record NotificationRow(
         String subjectId,
         /** 收件人 key。 */
         String recipientKey,
-        /** 通知模板/类型。 */
-        String template,
+        /** NotificationType 字符串（语义事件类型，不是渲染模板）。 */
+        String type,
         /** NotificationStatus 字符串。 */
         String status,
         /** 已投递尝试次数。 */

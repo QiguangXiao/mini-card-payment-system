@@ -12,11 +12,9 @@ public enum NotificationType {
     AUTHORIZATION_DECLINED,
     CARD_TRANSACTION_POSTED,
     /**
-     * 预留给账单已生成/可查看通知；当前简化版 statement flow 不再发布 statement.closed 事件。
-     */
-    STATEMENT_READY,
-    /**
      * 来自 repayment.received 事件，表达用户还款已成功入账。
      */
     REPAYMENT_RECEIVED
+    // 提醒：STATEMENT_READY 等账单通知等到真正实现“账单生成 -> 通知”整条切片时再加，
+    // 那时会连同事件生产者、模板和投递渠道一起设计，而不是先留一个没人发布的枚举值。
 }
