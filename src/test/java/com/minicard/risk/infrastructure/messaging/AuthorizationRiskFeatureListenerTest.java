@@ -64,6 +64,53 @@ class AuthorizationRiskFeatureListenerTest {
         verifyNoInteractions(service);
     }
 
+    @Test
+    void genuineRiskDeclineProjectsDeclinedFeature() throws Exception {
+        RiskFeatureProjectionService service = mock(RiskFeatureProjectionService.class);
+        AuthorizationRiskFeatureListener listener = listener(service);
+
+        listener.onAuthorizationDecision(record(
+                UUID.randomUUID(),
+                "authorization.declined",
+                declinedPayload("RISK_VELOCITY_EXCEEDED")
+        ));
+
+        ArgumentCaptor<ProjectRiskFeatureCommand> command =
+                ArgumentCaptor.forClass(ProjectRiskFeatureCommand.class);
+        verify(service).project(command.capture());
+        assertThat(command.getValue().outcome()).isEqualTo(AuthorizationDecisionOutcome.DECLINED);
+    }
+
+    @Test
+    void historicalProfileDeclineIsNotProjected() throws Exception {
+        // 断开自我强化环：投影自己造成的拒绝绝不能再计入 decline rate，否则越拒越拒、永久 brick。
+        RiskFeatureProjectionService service = mock(RiskFeatureProjectionService.class);
+        AuthorizationRiskFeatureListener listener = listener(service);
+
+        listener.onAuthorizationDecision(record(
+                UUID.randomUUID(),
+                "authorization.declined",
+                declinedPayload("RISK_HISTORICAL_PROFILE")
+        ));
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void operationalDeclineIsNotProjected() throws Exception {
+        // 额度不足是运营信号不是欺诈信号：不能让刷爆额度的正常高消费用户被风控误标。
+        RiskFeatureProjectionService service = mock(RiskFeatureProjectionService.class);
+        AuthorizationRiskFeatureListener listener = listener(service);
+
+        listener.onAuthorizationDecision(record(
+                UUID.randomUUID(),
+                "authorization.declined",
+                declinedPayload("INSUFFICIENT_AVAILABLE_CREDIT")
+        ));
+
+        verifyNoInteractions(service);
+    }
+
     private AuthorizationRiskFeatureListener listener(RiskFeatureProjectionService service) {
         return new AuthorizationRiskFeatureListener(
                 new IntegrationEventReader(objectMapper),
@@ -78,6 +125,13 @@ class AuthorizationRiskFeatureListenerTest {
         payload.put("amount", "100.00");
         payload.put("currency", "JPY");
         payload.put(timeField, NOW.toString());
+        return payload;
+    }
+
+    // declined 事件额外带 declineReason；listener 用它决定该拒绝是否计入风控画像。
+    private ObjectNode declinedPayload(String declineReason) {
+        ObjectNode payload = payload("declinedAt");
+        payload.put("declineReason", declineReason);
         return payload;
     }
 

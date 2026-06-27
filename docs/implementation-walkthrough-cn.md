@@ -383,12 +383,23 @@ curl -X POST http://localhost:8080/api/authorizations \
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
 
-   当前同步风控形成两层特征：
+   当前同步风控形成两层特征 + 一个外部判定：
 
    - Redis short-window velocity：实时近似，适合防 card-testing 突刺，主库零读压。
    - MySQL projection long-window profile：`card_risk_features` 按 `card_id` 读一行，
      当历史样本量达到 `min-historical-authorizations` 且 decline ratio 达到
-     `max-historical-decline-rate` 时拒绝。
+     `max-historical-decline-rate` 时，把这张卡置于 **elevated scrutiny**。
+   - 历史画像是 **soft signal**：它本身从不单独拒绝，只在外部风控 approve 但分数偏高
+     （≥ `elevated-scrutiny-max-approved-score`）时，才把判定收紧为拒绝。
+
+   为什么不让历史画像直接硬拒绝（重要 counterfactual）：早期实现让它在 external 之前单独拒绝，
+   暴露出一个**自我强化反馈环**——画像拒绝 → `authorization.declined` 回灌 projection → decline ratio
+   抬高 → 更容易拒绝；叠加终身累计不衰减与 `(d+1)/(t+1) ≥ d/t`，一张卡越线后会每笔必拒、
+   `approved_count` 再也无法增长、被**永久 brick**。修复分两步：
+   1. 降级为 soft signal：历史再差，只要本次外部判定干净仍放行，`approved_count` 得以增长、ratio 自愈；
+   2. 断开反馈：`AuthorizationRiskFeatureListener` 只统计真正的风险拒绝（如 `RISK_VELOCITY_EXCEEDED`），
+      排除画像自身的 `RISK_HISTORICAL_PROFILE`、外部宕机的 `RISK_EXTERNAL_UNAVAILABLE`、以及额度/卡
+      生命周期等运营类拒绝，避免信号污染与自激。
 
    trade-off 也要讲清楚：projection 补齐了 CQRS 读侧，但每笔通过 cheap rules 的授权会多一次 DB read。
    生产上可以让它走 read replica、加本地/Redis profile cache，或只对高风险候选请求启用；

@@ -193,10 +193,13 @@ risk:
   local:
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
-    # 长期画像来自 card_risk_features projection：样本太少时不参与拒绝，避免一两次失败就永久打标签。
+    # 长期画像来自 card_risk_features projection：样本太少时不参与判定，避免一两次失败就打标签。
     min-historical-authorizations: 5
-    # 0.80 表示历史拒绝率达到 80% 时触发长期画像拒绝。它是长窗口信号，不替代 Redis 短窗口 velocity。
+    # 0.80 表示历史拒绝率达到 80% 时把这张卡提高审查档位。它是长窗口 soft signal，不替代 Redis 短窗口 velocity。
     max-historical-decline-rate: 0.80
+    # elevated scrutiny 下仍可接受的最高外部风险分：历史画像超阈值的卡，外部即使 approve，
+    # 分数 ≥ 60 也会被收紧为拒绝。只在外部参与后生效，所以历史画像永远不会单独把卡永久封死。
+    elevated-scrutiny-max-approved-score: 60
     high-risk-amount-thresholds:
       JPY: 50000.00
       USD: 500.00

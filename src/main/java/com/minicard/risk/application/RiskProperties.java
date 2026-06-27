@@ -35,6 +35,12 @@ public record RiskProperties(
             long minHistoricalAuthorizations,
             /** 历史拒绝率阈值，例如 0.80 表示 80%。 */
             BigDecimal maxHistoricalDeclineRate,
+            /**
+             * elevated scrutiny 下仍可接受的最高外部风险分。
+             * 当某卡历史画像超阈值时，外部即使 approve，只要分数 ≥ 这个值也会被收紧为拒绝。
+             * 它<strong>只在外部参与后</strong>生效，因此历史画像不会单独把卡永久封死。
+             */
+            int elevatedScrutinyMaxApprovedScore,
             /** 各币种高风险金额阈值。 */
             Map<String, BigDecimal> highRiskAmountThresholds,
             /** 商户黑名单。 */
