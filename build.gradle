@@ -46,6 +46,7 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
     implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    implementation 'io.github.resilience4j:resilience4j-bulkhead'
     // Actuator 提供 health/metrics/info，业务 controller 不需要承担 JVM/依赖诊断职责。
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     // Lombok 只参与编译期生成代码，运行时不需要打进 artifact。

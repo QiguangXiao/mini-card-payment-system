@@ -35,6 +35,15 @@ spring:
       auto-offset-reset: earliest
     listener:
       ack-mode: record
+  cloud:
+    openfeign:
+      client:
+        config:
+          external-risk:
+            # 外部风控还在 authorization transaction 内调用，所以 HTTP timeout 是连接被钉住多久的硬上限。
+            # 如果不显式设置，供应商 brownout 时 socket 等待可能先耗尽 Hikari/Tomcat，再等 CircuitBreaker 反应。
+            connect-timeout: 300
+            read-timeout: 800
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -205,3 +214,12 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 2
+  bulkhead:
+    instances:
+      externalRisk:
+        # 使用 semaphore bulkhead，同线程限并发，不把 @Transactional 内的调用丢到另一个线程。
+        # 这个值必须小于 Hikari pool 可用连接数减去 headroom：如果 Hikari 是 10，就不能把 risk bulkhead 配成 10。
+        # 这样外部风控全堵时，最多只有 max-concurrent-calls 条授权事务占着连接，其他端点仍有余量。
+        max-concurrent-calls: 4
+        # 0 表示 bulkhead 满时立即 fail-closed，而不是排队继续占 Tomcat request thread。
+        max-wait-duration: 0
