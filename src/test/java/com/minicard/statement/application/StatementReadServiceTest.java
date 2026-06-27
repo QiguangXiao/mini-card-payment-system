@@ -38,6 +38,7 @@ class StatementReadServiceTest {
     private StringRedisTemplate redisTemplate;
     private ValueOperations<String, String> valueOperations;
     private ObjectMapper objectMapper;
+    private StatementReadCacheBroadcaster broadcaster;
     private StatementReadService service;
 
     @BeforeEach
@@ -48,6 +49,7 @@ class StatementReadServiceTest {
         valueOperations = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         objectMapper = new ObjectMapper().findAndRegisterModules();
+        broadcaster = mock(StatementReadCacheBroadcaster.class);
         service = new StatementReadService(
                 statementGenerationService,
                 redisTemplate,
@@ -57,7 +59,8 @@ class StatementReadServiceTest {
                         1000L,
                         REMOTE_TTL,
                         REMOTE_TTL_JITTER
-                )
+                ),
+                broadcaster
         );
     }
 
@@ -106,10 +109,24 @@ class StatementReadServiceTest {
 
         service.evictAfterCommit(statementId);
 
+        // commit 前不删 L2、不广播；afterCommit 才删 L2 并广播给其他 pod 清各自 L1。
         verify(redisTemplate, never()).delete(redisKey(statementId));
+        verify(broadcaster, never()).broadcastEvict(statementId);
         TransactionSynchronizationManager.getSynchronizations()
                 .forEach(synchronization -> synchronization.afterCommit());
         verify(redisTemplate).delete(redisKey(statementId));
+        verify(broadcaster).broadcastEvict(statementId);
+    }
+
+    @Test
+    void invalidateLocalOnlyTouchesL1NotL2OrBroadcast() {
+        // 订阅者收到其他 pod 的失效广播时只清本地 L1：绝不能再删 L2 或再广播，否则会形成广播风暴。
+        UUID statementId = UUID.randomUUID();
+
+        service.invalidateLocal(statementId);
+
+        verify(redisTemplate, never()).delete(anyString());
+        verify(broadcaster, never()).broadcastEvict(statementId);
     }
 
     private Statement statement() {

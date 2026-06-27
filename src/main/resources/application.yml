@@ -179,6 +179,12 @@ statement:
     remote-ttl: 5m
     # 在基础 TTL 上加随机抖动，避免一批 key 同秒过期后一起回源 MySQL。
     remote-ttl-jitter: 30s
+    broadcast:
+      # 跨 pod L1 失效广播（Redis Pub/Sub）。默认关闭：单实例/测试不需要，跨 pod L1 由 local-ttl 兜底。
+      # 开启后，还款 after-commit 会 PUBLISH 一条失效消息，所有 pod 的订阅者清各自 Caffeine L1，
+      # 把跨 pod L1 stale 窗口从 local-ttl 压到一次广播延迟。它是 best-effort，丢消息时退回 local-ttl。
+      # 它只关 L1 窗口，不解决 L2 late-write 竞态（那要版本号/CAS）。
+      enabled: false
 
 repayment:
   auto-debit:

@@ -45,6 +45,8 @@ public class StatementReadService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final StatementReadCacheProperties properties;
+    // 跨 pod L1 失效广播。默认 no-op；开启后走 Redis Pub/Sub，让其他 pod 也清各自 L1。
+    private final StatementReadCacheBroadcaster broadcaster;
     // L1 是每个 JVM 自己的本地内存 cache，速度快但不跨 pod 共享。
     // 所以 local TTL 必须比 Redis 短，避免其他 pod 写完后，本 pod 长时间拿旧值。
     private final Cache<UUID, StatementReadModel> localCache;
@@ -53,12 +55,14 @@ public class StatementReadService {
             StatementGenerationService statementGenerationService,
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
-            StatementReadCacheProperties properties
+            StatementReadCacheProperties properties,
+            StatementReadCacheBroadcaster broadcaster
     ) {
         this.statementGenerationService = statementGenerationService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.broadcaster = broadcaster;
         this.localCache = Caffeine.newBuilder()
                 // maximumSize 是生产 cache 的基本护栏：没有上限时，热点或恶意 key 会吃满 JVM heap。
                 .maximumSize(properties.localMaximumSize())
@@ -155,8 +159,24 @@ public class StatementReadService {
         }
     }
 
+    /**
+     * 只失效本 JVM 的 L1，不碰 L2、不再广播。
+     *
+     * <p>这是 Redis Pub/Sub 订阅者收到"其他 pod 失效了某 statement"时的回调入口
+     * （见 StatementReadCacheEvictListener）。</p>
+     *
+     * <p><strong>关键约束（避免广播风暴/无限循环）</strong>：订阅者只能调用本方法（L1-only），
+     * 绝不能调用 {@link #evict}——那会再删一次 L2 并再次 {@code broadcastEvict}，
+     * 于是 N 个 pod 会就同一条失效互相广播，形成风暴。失效广播必须是单向的：
+     * 写侧 evict 负责"删 L2 + 广播"，接收侧只负责"清自己的 L1"。</p>
+     */
+    public void invalidateLocal(UUID statementId) {
+        localCache.invalidate(statementId);
+    }
+
     private void evict(UUID statementId) {
         // 写路径只做 delete，不做 cache update。下一次读会用 DB 最新事实重建 read model。
+        // 三步顺序：先清本 pod L1 → 删共享 L2 → 广播让其他 pod 清各自 L1。
         localCache.invalidate(statementId);
         String key = redisKey(statementId);
         try {
@@ -166,6 +186,12 @@ public class StatementReadService {
             // 这是 cache-aside 的常见风险，靠短 TTL、告警和必要时的重试/二次删除降低影响。
             log.warn("statement_read_cache_redis_evict_failed key={} action=l1_evicted", key, exception);
         }
+        // 跨 pod L1 失效：上面只清了"本 pod"的 L1，其他 pod 的 Caffeine 还留着旧值最长 local-ttl。
+        // 广播一条 Pub/Sub 消息，让所有 pod（含自己）的订阅者 invalidateLocal，把跨 pod L1 stale 窗口
+        // 从 local-ttl 压到一次广播延迟（亚毫秒~毫秒级）。它是 best-effort：广播丢失时退回 local-ttl 兜底，
+        // 也不解决 L2 的 late-write 竞态（那要版本号/CAS，见 docs/cache-invalidation-broadcast-cn.md 第 3 节）。
+        // 默认是 no-op 实现；只有显式开启 statement.read-cache.broadcast.enabled=true 才走 Redis Pub/Sub。
+        broadcaster.broadcastEvict(statementId);
     }
 
     private String redisKey(UUID id) {
