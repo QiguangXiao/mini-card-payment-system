@@ -1048,7 +1048,8 @@ queue 满时：
 - risk velocity sliding-window 计数。
 - 降低授权热路径对主库的近期次数查询压力。
 - 用 Lua 原子完成“记录本次尝试 + 裁剪窗口 + 计数 + TTL”。
-- Redis 不可用时 fail-open，让 velocity 信号降级，而不是拒绝所有授权。
+- Redis 不可用时显式 fail-open：`VelocityCheckResult.degraded=true`，
+  `risk.velocity.redis.unavailable` 和 `risk.velocity.fallback.allow` 会增长，而不是静默把降级当成真正 0 次。
 - statement read model GET。
 - Caffeine L1 降低同 JVM 热点读取延迟，Redis L2 跨实例共享 statement read model。
 - repayment commit 后 after-commit evict statement read cache。
@@ -1814,6 +1815,7 @@ PROCESSING rows do not stay invisible forever
 | --- | --- | --- |
 | MySQL primary | 不能 | readiness fail，返回可重试错误 |
 | Redis cache | 可以 | fallback DB，告警，保护 DB |
+| Redis velocity | 当前 fail open | 不默认回查 DB；记录 `risk.velocity.redis.unavailable` / `risk.velocity.fallback.allow`，连续 fallback allow 告警 |
 | Kafka broker | 短期可以 | 写 Outbox，backlog alarm，阈值后限流 |
 | Notification consumer | 可以 | lag alarm，重试/DLT |
 | Ledger consumer | 短期可以 | lag alarm，replay/reconciliation |

@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>反事实：如果把 mapper 的 {@code FOR UPDATE} 去掉，多个线程会读到同一个 availableCredit，
  * 各自 reserve 后写回——出现 lost update：批准数 × 1000 &gt; reserved_amount，此断言立刻失败。
- * 这正是“我怎么知道我的锁是对的”这个面试问题的可运行答案。</p>
+ * 这正是“我怎么知道我的锁是对的”这个 interview 问题的可运行答案。</p>
  */
 class AuthorizationConcurrencyIT extends MySqlIntegrationTestBase {
 

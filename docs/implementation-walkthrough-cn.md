@@ -375,9 +375,21 @@ curl -X POST http://localhost:8080/api/authorizations \
 
    做风控判断。
    本地 velocity 查询通过 `RiskVelocityCounter` port 进入 Redis sliding-window adapter
-   （`JdbcRiskVelocityCounter` 保留为对照实现）；
+   （`JdbcRiskVelocityCounter` 保留为对照实现）。port 返回 `VelocityCheckResult(count, degraded, source)`，
+   所以 service 能区分“窗口内确实 0 次”和“Redis 不可用，按 fail-open policy 降级放行”；
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
+
+   这里故意让两类风控依赖的失败策略不同：
+
+   - Redis velocity 是辅助高频信号，失败时 `RedisRiskVelocityCounter` 记录
+     `risk.velocity.redis.unavailable`，`RiskAssessmentService` 记录
+     `risk.velocity.fallback.allow`，然后 fail-open。
+   - external risk 是最终风险判定依赖，失败、断路器打开或 bulkhead 满时 fail-closed，
+     返回 `EXTERNAL_RISK_UNAVAILABLE`。
+
+   这不是“Redis 查不到所以当作安全”，而是显式 trade-off：避免一次 Redis 抖动拒掉所有授权，
+   同时用 metric/告警让“正在失效放行”可见。
 
    当前实现仍在 `AuthorizationService.authorize(...)` 的同一个 transaction boundary 内调用外部风控。
    这样保留了 idempotency loser 通过 authorization row lock 等 winner 终态的同步语义，

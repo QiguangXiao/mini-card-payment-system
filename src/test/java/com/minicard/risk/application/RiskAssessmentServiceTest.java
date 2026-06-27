@@ -12,6 +12,7 @@ import com.minicard.shared.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,7 +43,7 @@ class RiskAssessmentServiceTest {
         ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
         RiskAssessmentRequest request = request("merchant-123", "100.00");
         when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
-                .thenReturn(1);
+                .thenReturn(VelocityCheckResult.available(1, VelocitySource.REDIS));
         when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
 
         RiskDecision decision = service(velocityCounter, externalRiskGateway).assess(request);
@@ -51,15 +52,42 @@ class RiskAssessmentServiceTest {
         verify(externalRiskGateway).assess(request);
     }
 
+    @Test
+    void velocityDegradedFailsOpenAndRecordsFallbackMetric() {
+        RiskVelocityCounter velocityCounter = mock(RiskVelocityCounter.class);
+        ExternalRiskGateway externalRiskGateway = mock(ExternalRiskGateway.class);
+        RiskAssessmentRequest request = request("merchant-123", "100.00");
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        when(velocityCounter.countRecentAuthorizations("card-123", NOW.minusSeconds(60)))
+                .thenReturn(VelocityCheckResult.degradedAllow(VelocitySource.REDIS));
+        when(externalRiskGateway.assess(request)).thenReturn(RiskDecision.approve(10));
+
+        RiskDecision decision = service(velocityCounter, externalRiskGateway, meterRegistry).assess(request);
+
+        assertThat(decision.approved()).isTrue();
+        assertThat(meterRegistry.counter("risk.velocity.fallback.allow", "source", "redis").count())
+                .isEqualTo(1.0);
+        verify(externalRiskGateway).assess(request);
+    }
+
     private RiskAssessmentService service(
             RiskVelocityCounter velocityCounter,
             ExternalRiskGateway externalRiskGateway
+    ) {
+        return service(velocityCounter, externalRiskGateway, new SimpleMeterRegistry());
+    }
+
+    private RiskAssessmentService service(
+            RiskVelocityCounter velocityCounter,
+            ExternalRiskGateway externalRiskGateway,
+            SimpleMeterRegistry meterRegistry
     ) {
         return new RiskAssessmentService(
                 velocityCounter,
                 externalRiskGateway,
                 properties(),
-                Clock.fixed(NOW, ZoneOffset.UTC)
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                meterRegistry
         );
     }
 

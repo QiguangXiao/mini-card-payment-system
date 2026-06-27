@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -11,6 +12,7 @@ import com.minicard.shared.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 import com.minicard.risk.domain.RiskDecision;
 import com.minicard.risk.domain.RiskDeclineReason;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 
 /**
@@ -29,18 +31,21 @@ public class RiskAssessmentService {
     private final ExternalRiskGateway externalRiskGateway;
     private final RiskProperties properties;
     private final Clock clock;
+    private final MeterRegistry meterRegistry;
     private final Map<Currency, Money> highRiskAmountThresholds;
 
     public RiskAssessmentService(
             RiskVelocityCounter velocityCounter,
             ExternalRiskGateway externalRiskGateway,
             RiskProperties properties,
-            Clock clock
+            Clock clock,
+            MeterRegistry meterRegistry
     ) {
         this.velocityCounter = velocityCounter;
         this.externalRiskGateway = externalRiskGateway;
         this.properties = properties;
         this.clock = clock;
+        this.meterRegistry = meterRegistry;
         this.highRiskAmountThresholds = properties.local().highRiskAmountThresholds()
                 .entrySet()
                 .stream()
@@ -70,8 +75,17 @@ public class RiskAssessmentService {
         Instant since = Instant.now(clock).minus(
                 Duration.ofSeconds(properties.local().velocityWindowSeconds())
         );
-        int recentCount = velocityCounter.countRecentAuthorizations(request.cardId(), since);
-        if (recentCount > properties.local().maxAuthorizationsPerWindow()) {
+        VelocityCheckResult velocity = velocityCounter.countRecentAuthorizations(request.cardId(), since);
+        if (velocity.degraded()) {
+            meterRegistry.counter(
+                    "risk.velocity.fallback.allow",
+                    "source", velocity.source().name().toLowerCase(Locale.ROOT)
+            ).increment();
+            // Redis velocity 是辅助高频信号，所以 degraded 时按显式 fail-open policy 放行。
+            // counterfactual：如果这里静默把 degraded 当作真正的 0 次，运维就看不到“正在失效放行”；
+            // 如果全量回查 DB，Redis brownout 又会放大成 MySQL/Hikari brownout。
+        }
+        if (velocity.count() > properties.local().maxAuthorizationsPerWindow()) {
             return RiskDecision.decline(RiskDeclineReason.VELOCITY_EXCEEDED, 90);
         }
 

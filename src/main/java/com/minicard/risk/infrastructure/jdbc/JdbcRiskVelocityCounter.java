@@ -4,6 +4,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 
 import com.minicard.risk.application.RiskVelocityCounter;
+import com.minicard.risk.application.VelocityCheckResult;
+import com.minicard.risk.application.VelocitySource;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -34,7 +36,7 @@ public class JdbcRiskVelocityCounter implements RiskVelocityCounter {
      * 统计 since 之后某张卡的授权次数。
      */
     @Override
-    public int countRecentAuthorizations(String cardId, Instant since) {
+    public VelocityCheckResult countRecentAuthorizations(String cardId, Instant since) {
         // COUNT(*) 可能返回 null 的 JDBC 包装值；下面兜底成 0，避免 NPE 影响授权主流程。
         Integer count = jdbcTemplate.queryForObject(
                 """
@@ -49,6 +51,6 @@ public class JdbcRiskVelocityCounter implements RiskVelocityCounter {
                 // 如果把这种转换散进 service，application layer 会开始依赖 JDBC 细节。
                 Timestamp.from(since)
         );
-        return count == null ? 0 : count;
+        return VelocityCheckResult.available(count == null ? 0 : count, VelocitySource.JDBC);
     }
 }

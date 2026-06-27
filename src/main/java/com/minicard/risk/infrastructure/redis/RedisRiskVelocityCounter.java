@@ -7,6 +7,9 @@ import java.util.UUID;
 
 import com.minicard.risk.application.RiskProperties;
 import com.minicard.risk.application.RiskVelocityCounter;
+import com.minicard.risk.application.VelocityCheckResult;
+import com.minicard.risk.application.VelocitySource;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataAccessException;
@@ -21,7 +24,7 @@ import org.springframework.stereotype.Repository;
  * rate limiting, Redis ZSET, Lua atomicity, fail-open, ベロシティ制限(せいげん),
  * 分散キャッシュ(ぶんさんキャッシュ)。</p>
  *
- * <h3>为什么 velocity 适合放 Redis，而 card snapshot 不适合（这是面试重点）</h3>
+ * <h3>为什么 velocity 适合放 Redis，而 card snapshot 不适合（这是 interview 重点）</h3>
  * <p>读缓存（read-through cache，比如缓存一张卡的快照）只有在“同一个 key 在 TTL 内被重复读”
  * 时才有收益，依赖 temporal locality；正常持卡人不会在几秒内反复刷同一张卡，所以命中率很低。</p>
  * <p>velocity 计数完全不同：它不是“缓存某次读的结果”，而是把**整个计数 workload 从主 DB 搬到 Redis**。
@@ -79,26 +82,29 @@ public class RedisRiskVelocityCounter implements RiskVelocityCounter {
     private final StringRedisTemplate redisTemplate;
     private final Clock clock;
     private final RiskProperties properties;
+    private final MeterRegistry meterRegistry;
 
     public RedisRiskVelocityCounter(
             StringRedisTemplate redisTemplate,
             Clock clock,
-            RiskProperties properties
+            RiskProperties properties,
+            MeterRegistry meterRegistry
     ) {
         this.redisTemplate = redisTemplate;
         this.clock = clock;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
      * 记录本次授权尝试并返回窗口内（含本次）的总数。
      *
-     * <p>与 JdbcRiskVelocityCounter 的语义差异（面试可讲）：JDBC 版是“读” authorizations 表
+     * <p>与 JdbcRiskVelocityCounter 的语义差异（interview 可讲）：JDBC 版是“读” authorizations 表
      * （该表由 authorization claim 写入，是 audit source of truth）；Redis 版自带一份**近似**滑动窗口，
      * 在本方法里“记录 + 计数”。用近似换主库零读压，是典型的 high-traffic 取舍。</p>
      */
     @Override
-    public int countRecentAuthorizations(String cardId, Instant since) {
+    public VelocityCheckResult countRecentAuthorizations(String cardId, Instant since) {
         Instant now = Instant.now(clock);
         // 唯一成员：同一毫秒内的并发尝试 score 可能相同，ZSET 成员必须唯一，否则会被去重导致少计。
         String member = now.toEpochMilli() + "-" + UUID.randomUUID();
@@ -114,14 +120,16 @@ public class RedisRiskVelocityCounter implements RiskVelocityCounter {
                     member,
                     Long.toString(ttlSeconds)
             );
-            return count == null ? 0 : count.intValue();
+            return VelocityCheckResult.available(count == null ? 0 : count.intValue(), VelocitySource.REDIS);
         } catch (DataAccessException exception) {
-            // Fail-open：Redis 暂时不可用时返回 0（视为“窗口内无尝试”→ 放行），而不是让授权失败。
+            meterRegistry.counter("risk.velocity.redis.unavailable").increment();
+            // Fail-open：Redis 暂时不可用时返回 degraded result，而不是让授权失败。
             // counterfactual：如果 fail-closed（把异常抛出去），一次 Redis 抖动会让**全系统所有授权**
             // 都被拒——为了一个非关键的风控信号牺牲整体可用性，得不偿失。velocity 只是多个风控规则之一，
-            // 限额校验、外部风控、credit limit 仍然生效，所以这里选择降级放行并告警。
+            // 限额校验、external risk、credit limit 仍然生效，所以这里选择降级放行并告警。
+            // 注意这里不回查 DB：Redis 故障时全量 fallback 到 COUNT(*) 会把 DB/Hikari 一起拖进 brownout。
             log.warn("risk_velocity_redis_unavailable cardId={} fallback=allow", cardId, exception);
-            return 0;
+            return VelocityCheckResult.degradedAllow(VelocitySource.REDIS);
         }
     }
 }

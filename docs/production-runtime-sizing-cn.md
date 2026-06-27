@@ -531,6 +531,14 @@ External risk：
 - Resilience4j circuit breaker state/open count。
 - bulkhead saturation 与 Hikari pending 是否同时上升。
 
+Risk velocity：
+
+- `risk.velocity.redis.unavailable`。
+- `risk.velocity.fallback.allow` by source。
+- 短时间连续 `fallback.allow` 要报警；这表示 velocity 正在按显式 fail-open policy 放行。
+- 这个报警和 external risk 告警语义不同：external risk 是最终风险判定依赖，当前 fail-closed；
+  Redis velocity 是辅助高频信号，当前 fail-open，但必须可观测。
+
 JVM：
 
 - heap used、old gen after GC、metaspace、non-heap。
@@ -566,7 +574,7 @@ Business：
 | 同一 account 并发授权 | row lock 热点 | lock wait, p99, decline correctness |
 | external risk 变慢/不可用 | brownout 防护 | timeout, bulkhead rejection, fallback, Hikari headroom |
 | Kafka 暂停/变慢 | Outbox recovery | Outbox backlog, PROCESSING lease, retry |
-| Redis 变慢/不可用 | risk velocity/cache degradation | timeout, fallback, DB pressure |
+| Redis 变慢/不可用 | risk velocity/cache degradation | timeout, fallback allow metric, DB pressure |
 | statement batch 大量账户 | 批处理 | job shard, worker queue, DB write pressure |
 
 最小压测命令思路：

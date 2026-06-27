@@ -9,6 +9,9 @@ import java.util.Map;
 import java.util.Set;
 
 import com.minicard.risk.application.RiskProperties;
+import com.minicard.risk.application.VelocityCheckResult;
+import com.minicard.risk.application.VelocitySource;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,15 +32,18 @@ class RedisRiskVelocityCounterTest {
     private static final Instant SINCE = NOW.minusSeconds(60);
 
     private StringRedisTemplate redisTemplate;
+    private SimpleMeterRegistry meterRegistry;
     private RedisRiskVelocityCounter counter;
 
     @BeforeEach
     void setUp() {
         redisTemplate = mock(StringRedisTemplate.class);
+        meterRegistry = new SimpleMeterRegistry();
         counter = new RedisRiskVelocityCounter(
                 redisTemplate,
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                riskProperties()
+                riskProperties(),
+                meterRegistry
         );
     }
 
@@ -47,9 +53,11 @@ class RedisRiskVelocityCounterTest {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any(), any()))
                 .thenReturn(2L);
 
-        int count = counter.countRecentAuthorizations("card-1", SINCE);
+        VelocityCheckResult result = counter.countRecentAuthorizations("card-1", SINCE);
 
-        assertThat(count).isEqualTo(2);
+        assertThat(result.count()).isEqualTo(2);
+        assertThat(result.degraded()).isFalse();
+        assertThat(result.source()).isEqualTo(VelocitySource.REDIS);
         // 每张卡一个窗口 key；这样不同卡的限流互不影响。
         ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
         verify(redisTemplate).execute(any(RedisScript.class), keys.capture(), any(), any(), any(), any());
@@ -62,8 +70,13 @@ class RedisRiskVelocityCounterTest {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any(), any()))
                 .thenThrow(new RedisConnectionFailureException("redis down"));
 
-        // Redis 不可用时降级放行（返回 0），不能让一次 Redis 抖动拒绝所有授权。
-        assertThat(counter.countRecentAuthorizations("card-1", SINCE)).isZero();
+        // Redis 不可用时降级放行（返回 degraded 结果），不能让一次 Redis 抖动拒绝所有授权。
+        VelocityCheckResult result = counter.countRecentAuthorizations("card-1", SINCE);
+
+        assertThat(result.count()).isZero();
+        assertThat(result.degraded()).isTrue();
+        assertThat(result.source()).isEqualTo(VelocitySource.REDIS);
+        assertThat(meterRegistry.counter("risk.velocity.redis.unavailable").count()).isEqualTo(1.0);
     }
 
     private RiskProperties riskProperties() {
