@@ -1269,6 +1269,8 @@ FOR UPDATE SKIP LOCKED
 
 - 本地 risk rule 先执行。
 - 外部 risk 通过 Feign adapter。
+- OpenFeign connect/read timeout。
+- Resilience4j semaphore Bulkhead。
 - Resilience4j CircuitBreaker。
 - fallback fail-closed。
 - risk check 在 account lock 前。
@@ -1291,6 +1293,52 @@ FOR UPDATE SKIP LOCKED
 - bulkhead 隔离外部 risk 并发。
 - CircuitBreaker metrics。
 - fallback reason 进入 decline/audit。
+
+当前项目已经落地 Path B：
+
+```yaml
+spring.cloud.openfeign.client.config.external-risk.connect-timeout: 300
+spring.cloud.openfeign.client.config.external-risk.read-timeout: 800
+resilience4j.bulkhead.instances.externalRisk.max-concurrent-calls: 4
+resilience4j.bulkhead.instances.externalRisk.max-wait-duration: 0
+```
+
+这里特意使用 **semaphore bulkhead**，不是线程池隔离，也不是事务内 `TimeLimiter`：
+
+- `AuthorizationService.authorize(...)` 当前仍是一个 `@Transactional` 方法，Spring transaction 和 Hikari connection 绑定在当前 request thread 上。
+- 线程池隔离/TimeLimiter 会把调用丢到另一个线程，事务上下文、取消语义和 Feign 调用回收会更难解释。
+- semaphore bulkhead 只是在同一线程上拿一个 permit，把并发 external risk calls 限住。
+
+`max-concurrent-calls` 要小于 Hikari pool 的可用余量。例子：
+
+```text
+Hikari maximumPoolSize = 10
+externalRisk bulkhead = 4
+保留给 repayment / statement / GET / actuator / duplicate loser 等路径的 headroom >= 6
+```
+
+这不是消除阻塞，而是把 brownout 爆炸半径夹死：外部风控全堵时，最多 4 条授权事务同时占着 DB connection，
+其余请求会快速走 fallback fail-closed，不会把整个连接池钉满。
+
+### 12.1.1 为什么暂时不做两阶段 authorization
+
+更彻底的终态是：
+
+```text
+phase 1: 短事务 claim authorization PENDING + owner token/lease
+phase 2: 事务外 external risk
+phase 3: 第二事务锁 authorization row -> 校验 owner token(CAS) -> 锁 account -> reserve/finalize -> 写 Outbox
+```
+
+它的好处是 external risk 完全不占 DB connection。它的代价也很真实：
+
+- 单事务版本里，duplicate loser 可以阻塞在 `findByIdempotencyKeyForUpdate` 的 row lock 上，winner commit 后直接拿终态。
+- 两阶段里 winner 跑 risk 时不持有锁，loser 没有免费的同步等待点，必须改成有界轮询、返回 `PROCESSING`/202，或拒绝“正在处理”的 duplicate。
+- 还要维护 owner token、lease 超时、迟到 winner CAS abort、recoverer 等状态机。
+
+所以当前策略是：**Path B 先行，Path A 按 measurement 触发**。
+如果 `risk.external.latency` p99 长期高、`risk.external.bulkhead.rejected` 经常增长，并且业务不能接受 fail-closed 截顶，
+再把 authorization finalize 设计成 leased claim 状态机；否则不要投机式拆 idempotency 核心。
 
 ### 12.2 fail open 还是 fail closed
 
@@ -1416,6 +1464,7 @@ EXTERNAL_RISK_UNAVAILABLE -> decline
 - DB lock wait 是否增加。
 - Hikari pending 是否出现。
 - external risk 慢时系统如何退化。
+- external risk bulkhead 满时是否 fast fail-closed，Hikari pending 是否仍有 headroom。
 - Redis timeout 时 DB 是否被打爆。
 - Kafka 慢时 Outbox backlog 是否可控。
 - retry storm 是否导致 double hold。
@@ -1429,7 +1478,8 @@ EXTERNAL_RISK_UNAVAILABLE -> decline
 | 同 account 并发 authorization | 测 row lock 和热点 |
 | 同 idempotency key 并发 retry | 测 duplicate winner |
 | 同 key 不同 body | 测 conflict |
-| external risk latency 1s | 测外部依赖拖慢 |
+| external risk latency 1s | 测 timeout、bulkhead、fallback 和 Hikari headroom |
+| external risk bulkhead 饱和 | 测 fail-closed 截顶和 `risk.external.bulkhead.rejected` |
 | Redis timeout | 测 cache fallback 和 DB 压力 |
 | Kafka broker 慢/不可用 | 测 Outbox backlog |
 | Outbox worker queue 满 | 测 backpressure |
@@ -1767,7 +1817,7 @@ PROCESSING rows do not stay invisible forever
 | Kafka broker | 短期可以 | 写 Outbox，backlog alarm，阈值后限流 |
 | Notification consumer | 可以 | lag alarm，重试/DLT |
 | Ledger consumer | 短期可以 | lag alarm，replay/reconciliation |
-| External risk | 视 policy | fail closed 或受限 fail open |
+| External risk | 当前 fail closed | timeout + semaphore bulkhead + CircuitBreaker + fallback metric |
 | Read replica | 可以 | 切回 primary 或 cache |
 
 ### 15.1 Kafka 不可用时还能授权吗
@@ -1902,6 +1952,7 @@ OutboxWorker -> Kafka -> Notification/Risk/Ledger consumers -> Inbox idempotency
 - Cache read model only。
 - Rate limit by client/card/account/merchant。
 - External risk timeout/bulkhead/circuit breaker。
+- Path B 当前选择：用 semaphore bulkhead 限制事务内风控并发；Path A 两阶段 authorization 作为指标触发后的后续设计。
 - Observe p99、DB lock wait、Hikari、Kafka lag、Outbox backlog、Redis、GC。
 
 ### Step 7：Failure mode

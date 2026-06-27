@@ -374,9 +374,31 @@ curl -X POST http://localhost:8080/api/authorizations \
 3. `riskAssessmentService.assess(command.toRiskAssessmentRequest())`
 
    做风控判断。
-   本地 velocity 查询通过 `RiskVelocityCounter` port 进入当前 JDBC adapter；
+   本地 velocity 查询通过 `RiskVelocityCounter` port 进入 Redis sliding-window adapter
+   （`JdbcRiskVelocityCounter` 保留为对照实现）；
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
+
+   当前实现仍在 `AuthorizationService.authorize(...)` 的同一个 transaction boundary 内调用外部风控。
+   这样保留了 idempotency loser 通过 authorization row lock 等 winner 终态的同步语义，
+   也保证 fail-closed 的拒绝结果会落到 `authorizations` audit row。
+   代价是 external risk brownout 时，winner request 仍会短时间占用 Hikari connection。
+   所以当前采用 Path B 防护：OpenFeign connect/read timeout 给等待时间封顶，Resilience4j
+   semaphore `Bulkhead` 把同时进入 external risk 的授权数量限制在 Hikari pool headroom 内，
+   `CircuitBreaker` 负责连续失败后的 fail-closed fallback。
+
+   为什么不是现在就拆成两阶段：
+
+   ```text
+   phase 1: 短事务 claim PENDING
+   phase 2: 事务外 external risk
+   phase 3: 再锁 authorization owner/lease finalize
+   ```
+
+   两阶段可以让风控完全不占 DB connection，但会丢掉“duplicate loser 阻塞在 row lock 上等终态”
+   这个免费同步语义，必须额外设计 owner token、lease、recover 和有界等待/PROCESSING 返回策略。
+   因此本项目先用 timeout + semaphore bulkhead 把爆炸半径夹住；只有当指标证明
+   `risk.external.latency` 和 `risk.external.bulkhead.rejected` 长期限制授权吞吐时，再进入两阶段设计。
 
 4. `creditAccountRepository.findByIdForUpdate(...)`
 

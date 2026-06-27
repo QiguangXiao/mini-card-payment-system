@@ -82,9 +82,9 @@ issuer-side business concepts such as authorization, presentment, statement,
 payment, refund, dispute, ledger, and reconciliation.
 See [Distributed Cache, Rate Limiting & Lua](docs/distributed-cache-cn.md) for
 the velocity sliding-window limiter, why card snapshot cache was removed, how
-statement GET uses L1/L2 cache-aside, rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general
-cache design rules (cache-aside, penetration/breakdown/avalanche), and hardcore
-interview Q&A.
+statement GET uses L1/L2 cache-aside, rate-limiting algorithms, Lua atomicity,
+Redisson build-vs-buy, general cache design rules (cache-aside,
+penetration/breakdown/avalanche), and hardcore interview Q&A.
 See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
 for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
 topics.
@@ -184,8 +184,8 @@ a recent-count query on MySQL.
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
 velocity, high amount, merchant, and geolocation rules before calling a
-simulated external risk service protected by timeout, fallback, and a circuit
-breaker. Authorization reversal, refund, dispute/chargeback, production-grade
+simulated external risk service protected by timeout, semaphore bulkhead,
+fallback, and a circuit breaker. Authorization reversal, refund, dispute/chargeback, production-grade
 double-entry ledger, and reconciliation flows are deliberately deferred learning
 topics.
 
