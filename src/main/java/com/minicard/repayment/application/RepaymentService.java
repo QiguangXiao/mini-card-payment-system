@@ -123,8 +123,10 @@ public class RepaymentService {
         statementRepository.updatePayment(statement);
         // 写路径不要“顺手更新 cache”，而是更新 MySQL source of truth 后删 cache。
         // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
-        // statement GET 的 L1/L2 cache 只能在 DB commit 后失效；如果事务内提前 evict，
-        // 另一个 GET 可能读旧 DB 值并重新写回 Redis，制造 stale read model。
+        // statement GET 的 L1/L2 cache 只能在 DB commit 后失效（见 evictAfterCommit）。
+        // 注意：after-commit evict 收敛了不一致窗口，但并不能消除 cache-aside 的 read-write 竞态——
+        // commit 后最长还有 remoteTtl 的 stale window，以及其他 pod 最长 localTtl 的 L1 stale。
+        // 这是刻意接受的 tradeoff：账单查询容忍秒级 stale；要强一致就直接读 DB。
         statementReadService.evictAfterCommit(statement.id());
     }
 

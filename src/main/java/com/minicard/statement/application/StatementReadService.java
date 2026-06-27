@@ -81,9 +81,20 @@ public class StatementReadService {
             evict(statementId);
             return;
         }
-        // 还款 transaction commit 后再删缓存。若提前删，另一个 GET 可能读到尚未提交前的旧 DB 值，
-        // 再把旧 read model 写回 Redis，形成很隐蔽的 stale cache。
-        // afterCommit 的含义是：只有 DB 真的提交成功，cache 才需要失效；rollback 时不做多余删除。
+        // 还款 transaction commit 后再删缓存。afterCommit 的含义是：只有 DB 真的提交成功，
+        // cache 才需要失效；rollback 时不做多余删除。在事务内提前 evict 会更糟——删完之后、commit 之前，
+        // 另一个 GET 仍读到旧 DB 值并写回 Redis，旧值反而被“固化”。所以失效一定排到 commit 之后。
+        //
+        // 重要：afterCommit 只是“写侧的删除时机”，它并不能消除 cache-aside 固有的 read-write 竞态。
+        // 仍然存在的 stale window（delete-after-commit 无法解决）：
+        //   1) GET 线程在还款 commit 之前读到旧 DB 快照（MySQL RR 下是事务开始时的一致性快照），但写得慢；
+        //   2) 还款 commit，这里的 afterCommit 删掉 Redis；
+        //   3) GET 线程“迟到”地 writeRedis(旧值)，旧 read model 重新落到 Redis，直到 remoteTtl 才过期。
+        // 也就是说：写后删 + 短 TTL 只能把不一致窗口收敛到 remoteTtl，并不能做到强一致。
+        // 工程缓解手段（按成本递增）：把 remoteTtl 设短、delayed double-delete（commit 后删一次、延迟数百 ms 再删一次）、
+        // 或给 read model 加版本号让旧值写入时被拒。本项目刻意停在“写后删 + 短 TTL + 文档化窗口”，
+        // 因为账单查询能容忍秒级 stale；强一致请直接读 DB，不要靠 cache。
+        // 详见 docs/cache-snapshot-design-cn.md 的 "after-commit evict 不是强一致" 一节。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
