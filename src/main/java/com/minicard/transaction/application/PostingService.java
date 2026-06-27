@@ -59,18 +59,12 @@ public class PostingService {
                         "posted authorization references missing card " + authorization.cardId()
                 ));
 
-        Optional<CardTransaction> existingTransaction = transactionRepository
+        Optional<CardTransaction> existing = transactionRepository
                 .findByNetworkTransactionIdForUpdate(command.networkTransactionId());
-        if (existingTransaction.isPresent()) {
-            CardTransaction transaction = existingTransaction.get();
-            assertSamePresentment(command, transaction);
-            if (transaction.status() == CardTransactionStatus.POSTED) {
-                // 如果 duplicate presentment 不先返回已 posted 结果，就可能再次移动 reserved -> postedBalance。
-                return transaction;
-            }
-            throw new PresentmentRejectedException(
-                    "presentment is already being processed: " + command.networkTransactionId()
-            );
+        if (existing.isPresent()) {
+            // 快路径：presentment 已存在。FOR UPDATE 会阻塞到 in-flight 入账事务提交，
+            // 让这次重试直接读到最终 POSTED 结果，而不是误报 in-progress。
+            return resolveExistingPresentment(command, existing.get());
         }
 
         validateAuthorizationCanBePosted(authorization, command.money(), now);
@@ -94,23 +88,18 @@ public class PostingService {
         // StatementGenerationService 也先锁 account，再锁待出账交易，统一锁顺序可以避免 posting/statement 死锁，
         // 并保证账单生成期间不会漏掉正在入账的交易。
         // 如果 posting 先锁/插交易再锁 account，而 statement 先锁 account 再锁交易，高并发时会形成环路等待。
-        boolean claimed = transactionRepository.claim(pending);
-        CardTransaction transaction = transactionRepository
-                .findByNetworkTransactionIdForUpdate(command.networkTransactionId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "presentment claim was not visible"
-                ));
-        assertSamePresentment(command, transaction);
-        if (!claimed) {
-            // duplicate retry 读取已完成的 posted transaction，不能再次释放 hold 或增加 postedBalance。
-            // 没有这层 idempotency，网络重放同一 presentment 会把同一笔消费入账两次。
-            if (transaction.status() == CardTransactionStatus.POSTED) {
-                return transaction;
-            }
-            throw new PresentmentRejectedException(
-                    "presentment is already being processed: " + command.networkTransactionId()
-            );
+        if (!transactionRepository.claim(pending)) {
+            // claim 失败说明在 [首次读, INSERT] 窗口内有并发请求抢先插入了同一 networkTransactionId。
+            // 重新 FOR UPDATE 读赢家行：阻塞到对方事务提交，再判定 POSTED / in-progress。
+            CardTransaction winner = transactionRepository
+                    .findByNetworkTransactionIdForUpdate(command.networkTransactionId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "presentment claim lost but row not visible"
+                    ));
+            return resolveExistingPresentment(command, winner);
         }
+        // claim 成功：pending 行由本事务独占持有，直接用内存里的 aggregate，
+        // 省掉一次多余的 SELECT FOR UPDATE 和对自己刚插入行恒为真的同一性校验。
 
         // 同一个 transaction 内完成三件事：
         // 1. reservedAmount -> postedBalance，2. Authorization APPROVED -> POSTED，
@@ -118,17 +107,37 @@ public class PostingService {
         // 如果拆成多个事务，中途失败会留下“授权已 posted 但账户余额没变”或“余额已变但没有交易流水”的断裂状态。
         account.postAuthorized(command.money());
         authorization.post(now);
-        transaction.markPosted(now);
+        pending.markPosted(now);
 
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
-        transactionRepository.update(transaction);
+        transactionRepository.update(pending);
         // 两个 aggregate 都发生了状态转换，但语义不同：
         // Authorization event 表达授权生命周期结束；CardTransaction event 表达用户交易已入账。
         // 两类 Outbox rows 仍和本次 posting transaction 一起提交，避免消息与状态不一致。
         publishAuthorizationEvents(authorization);
-        publishCardTransactionEvents(transaction);
-        return transaction;
+        publishCardTransactionEvents(pending);
+        return pending;
+    }
+
+    /**
+     * 处理已存在的同 networkTransactionId presentment：要么返回幂等的 POSTED 结果，
+     * 要么说明它仍在并发入账中（或遗留 orphan pending）而拒绝本次重复处理。
+     */
+    private CardTransaction resolveExistingPresentment(
+            PostPresentmentCommand command,
+            CardTransaction existing
+    ) {
+        // 同一 networkTransactionId 必须指向同一笔授权和金额；否则是外部 id 复用错误。
+        assertSamePresentment(command, existing);
+        if (existing.status() == CardTransactionStatus.POSTED) {
+            // duplicate presentment 已入账：返回最终结果，绝不能再次 reserved -> postedBalance。
+            // 没有这层 idempotency，网络重放同一 presentment 会把同一笔消费入账两次。
+            return existing;
+        }
+        throw new PresentmentRejectedException(
+                "presentment is already being processed: " + command.networkTransactionId()
+        );
     }
 
     private void validateAuthorizationCanBePosted(
