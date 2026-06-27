@@ -156,7 +156,7 @@ Statement 是 read model，Card 是 snapshot。
 | Redis JSON 损坏后删除坏值 | 一个旧格式或坏 JSON 会让同一个 key 后续一直解析失败 |
 | per-key single-flight | 热点 statement/card 在 L1/L2 同时 miss 时，多个线程一起打 MySQL，形成 cache stampede |
 | TTL jitter | 一批 key 同秒过期，下一波请求同时回源，制造 cache avalanche |
-| after-commit evict | 事务提交前删 cache 时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis |
+| after-commit evict | 事务提交前删 cache 时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis（注意：after-commit 只收敛窗口、不根治竞态，详见 6.1） |
 
 ## 6. Statement read model cache
 
@@ -201,8 +201,42 @@ StatementReadService.evictAfterCommit(statement.id())
 
 为什么是 after commit：
 
-- 如果事务提交前 evict，另一个 GET 可能读到旧 DB 值并重新写入 Redis。
-- after-commit evict 避开这个 stale reload race。
+- 如果事务提交前 evict，另一个 GET 可能读到旧 DB 值并重新写入 Redis，旧值反而被“固化”。
+- after-commit evict 把失效时机排到 commit 之后，避开上面这条最常见的 stale reload。
+
+### 6.1 after-commit evict 不是强一致（重要）
+
+`evictAfterCommit` 只决定“写侧什么时候删 cache”，它**并不能消除 cache-aside 固有的 read-write 竞态**。
+delete-after-commit 之后仍然存在的 stale window：
+
+```text
+时间线（pod 内或跨 pod 都可能发生）：
+  t0  GET 线程读 MySQL，拿到旧快照（MySQL RR 下是事务开始时的一致性快照），但后续写 Redis 很慢
+  t1  还款事务 commit
+  t2  afterCommit 触发，evict 删掉 Redis key
+  t3  GET 线程“迟到”地 writeRedis(t0 的旧值)  ← 旧 read model 重新落到 Redis
+  ...  旧值一直停留到 remoteTtl 过期才被清掉
+```
+
+也就是说：**写后删 + 短 TTL 只能把不一致窗口收敛到 `remoteTtl`，做不到强一致。** 此外还有第二层 stale：
+evict 只删本 pod 的 L1 + Redis，其他 pod 的 Caffeine L1 仍会服务旧值，最长 `localTtl`（本项目 30s）。
+
+| stale 来源 | 最长窗口 | 触发条件 |
+| --- | --- | --- |
+| 跨 pod L1 未失效 | `localTtl`（30s） | 还款在 pod A，pod B 的 L1 还没过期 |
+| 迟到写覆盖 Redis | `remoteTtl`（5m） | GET 读在 commit 前、writeRedis 落在 evict 后 |
+| Redis evict 失败 | `remoteTtl`（5m） | `redisTemplate.delete` 抛异常，仅 L1 被删 |
+
+工程缓解手段（按成本递增，本项目刻意停在前两项）：
+
+1. **缩短 `remoteTtl`** —— 直接压窗口，最简单。
+2. **文档化并接受窗口** —— 账单查询容忍秒级 stale，要强一致就直接读 DB（本项目选择）。
+3. **delayed double-delete** —— commit 后删一次，延迟数百 ms 再删一次，覆盖“迟到写”。
+4. **read model 版本号 / CAS 写入** —— 旧版本写 Redis 时被拒，根治迟到写。
+5. **Pub/Sub 广播失效** —— Redis Pub/Sub 或 Kafka 通知各 pod 清 L1，压掉跨 pod L1 窗口。
+
+底线口径：**cache 是性能层不是正确性来源**。`paid_amount/status` 的强一致由 `credit_accounts` row lock 和 DB 事务保证；
+cache 只在 GET 展示路径上提速，秒级 stale 是已知且可接受的 tradeoff。
 
 ## 7. Card snapshot cache（已删除设计）
 
@@ -331,3 +365,9 @@ cache name 建议格式：
   - 避免大量 key 同时过期，引发 cache avalanche。
 - 为什么不缓存 404？
   - 当前更重视新数据可见性和安全边界；需要防攻击流量时可以单独设计短 TTL negative cache。
+- after-commit evict 是不是就保证还款后读不到旧账单了？（高频追问，必须答准）
+  - 不是。after-commit 只保证“删 cache 排在 commit 之后”，避开“事务内提前删→提交前的 GET 又写回旧值”这条最常见的坑。
+  - 但它消除不了 cache-aside 固有的 read-write 竞态：一个 GET 在 commit *之前*读到旧 DB 快照、却在 evict *之后*才把旧值写回 Redis，旧值会停留到 `remoteTtl`。
+  - 再加跨 pod 的 L1 不会互相失效，其他实例最长 stale `localTtl`。
+  - 所以写后删 + 短 TTL 只是把不一致**窗口收敛**，不是强一致。要根治可上 delayed double-delete、read model 版本号、或 Pub/Sub 广播失效；本项目刻意停在“收敛窗口 + 文档化”，因为账单查询容忍秒级 stale，强一致路径直接读 DB。
+  - 详见 6.1 节。
