@@ -114,7 +114,8 @@ notification_deliveries(
   channel,                 -- APP_PUSH / EMAIL
   notification_type, subject_id, recipient_key,  -- notification 的 immutable 快照(denormalized)
   status,                  -- PENDING / PROCESSING / SENT / DEAD
-  attempts, next_attempt_at,   -- PENDING 时是下次可投递时间；PROCESSING 时复用为 lease deadline
+  attempts, next_attempt_at,   -- next_attempt_at = lease deadline(WHEN 到期，供 recoverer 扫描)
+  lease_token,             -- lease identity(WHO 持有，CHAR(36) UUID，供 worker finalize 校验)
   last_error, provider_message_id, sent_at,
   created_at, updated_at,
   UNIQUE(notification_id, channel),                       -- 同一(通知,渠道)不可能两条
@@ -363,9 +364,16 @@ poller: 重新 claim D_push → worker 再 send(idem=D_push)
 - **多 pod 同时 poll**：`FOR UPDATE SKIP LOCKED` 让每条 PENDING 只被一个 pod 锁到，其余 pod 跳过该行，
   天然水平扩展，不会两 pod 处理同一投递。
 - **迟到 worker vs recoverer**：worker A 在 D 上超时被 Recoverer 放回、又被 worker B 领取（新 lease）；
-  此时 A 才慢悠悠回来想 markSent。`lockCurrentLease` 比较 `nextAttemptAt`（lease token）：A 持的是旧 lease，
-  与当前行不符 → 返回 null → A 的 finalize **被丢弃**，不会覆盖 B。*如果* 不校验 token，A 可能把 B 正在处理
+  此时 A 才慢悠悠回来想 markSent。`lockCurrentLease` 比较 `lease_token`：A 持的是旧 token，与当前行的新 token
+  不符 → 返回 null → A 的 finalize **被丢弃**，不会覆盖 B。*如果* 不校验 token，A 可能把 B 正在处理
   （甚至已失败重试）的投递错误标成 SENT。
+- **lease token 为什么用独立 UUID，而不是 `nextAttemptAt` 时间戳**（一个真实踩过的坑）：`nextAttemptAt` 是
+  `Instant.now(clock)`（`Clock.systemUTC()`，Linux 上**纳秒**精度），但 `next_attempt_at` 是 `TIMESTAMP(6)`
+  **微秒**列。claim 返回的是**内存**对象（纳秒），worker finalize 时**回读 DB**（微秒截断），两者 `equals` 会
+  **确定性地为 false**。后果：provider 已成功、worker 却误判 "lease changed" 不写 SENT → recoverer 反复重试 →
+  最终 **DEAD**（一条其实已送达的通知）。独立 `lease_token`（CHAR(36) UUID 精确比较）既不受时间戳精度影响，
+  也避免"同一微秒两次 claim 撞同一时间戳令牌"。注：`outbox`/`delayjob` 仍用 `nextAttemptAt` 当 token，存在同一
+  潜在隐患（被固定时钟测试 + 下游去重掩盖），应同样改成独立 token。
 - **worker 池满**：poller 提交时抛 `TaskRejectedException` → `markRejectedForRetry` 立刻把投递放回退避重试，
   而不是让它干等到 lease 超时才被 Recoverer 捡回（更快回到队列）。
 - **provider 去重表与并发**：`computeIfAbsent` 保证同一 idemKey 并发只生成一个 receipt（模拟 provider 的幂等）。

@@ -16,6 +16,7 @@
             <arg column="status" javaType="java.lang.String"/>
             <arg column="attempts" javaType="int"/>
             <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="lease_token" javaType="java.lang.String"/>
             <arg column="last_error" javaType="java.lang.String"/>
             <arg column="provider_message_id" javaType="java.lang.String"/>
             <arg column="sent_at" javaType="java.time.Instant"/>
@@ -26,7 +27,7 @@
 
     <sql id="deliveryColumns">
         id, notification_id, channel, notification_type, subject_id, recipient_key,
-        status, attempts, next_attempt_at, last_error, provider_message_id,
+        status, attempts, next_attempt_at, lease_token, last_error, provider_message_id,
         sent_at, created_at, updated_at
     </sql>
 
@@ -41,7 +42,8 @@
         <foreach collection="deliveries" item="d" separator=",">
             (#{d.id}, #{d.notificationId}, #{d.channel}, #{d.notificationType}, #{d.subjectId},
              #{d.recipientKey}, #{d.status}, #{d.attempts}, #{d.nextAttemptAt},
-             #{d.lastError,jdbcType=VARCHAR}, #{d.providerMessageId,jdbcType=VARCHAR},
+             #{d.leaseToken,jdbcType=CHAR}, #{d.lastError,jdbcType=VARCHAR},
+             #{d.providerMessageId,jdbcType=VARCHAR},
              #{d.sentAt,jdbcType=TIMESTAMP}, #{d.createdAt}, #{d.updatedAt})
         </foreach>
     </insert>
@@ -85,6 +87,7 @@
         SET status = #{status},
             attempts = #{attempts},
             next_attempt_at = #{nextAttemptAt},
+            lease_token = #{leaseToken,jdbcType=CHAR},
             last_error = #{lastError,jdbcType=VARCHAR},
             provider_message_id = #{providerMessageId,jdbcType=VARCHAR},
             sent_at = #{sentAt,jdbcType=TIMESTAMP},

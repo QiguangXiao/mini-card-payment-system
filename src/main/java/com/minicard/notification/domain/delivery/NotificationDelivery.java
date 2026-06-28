@@ -12,13 +12,19 @@ import lombok.experimental.Accessors;
 /**
  * 单条 per-channel 投递记录，拥有自己的投递生命周期(lifecycle)。
  *
- * <p>关键词：投递记录, 处理租约, 指数退避, notification delivery,
- * processing lease, exponential backoff, idempotency key, 配信レコード(はいしんレコード)。</p>
+ * <p>关键词：投递记录, 处理租约, 租约令牌, 指数退避, notification delivery,
+ * processing lease, lease token, exponential backoff, idempotency key, 配信レコード(はいしんレコード)。</p>
  *
  * <p>它和 {@link com.minicard.messaging.outbox.OutboxEvent} 是同一套可靠投递状态机：
  * PENDING → PROCESSING(lease) → SENT / 退避回 PENDING / DEAD。区别只在副作用是"调 push/email provider"
  * 而非"发 Kafka"。notificationType/subjectId/recipientKey 是 Notification 的快照，使一条投递自洽，
  * worker 无需回查 notifications 即可渲染并发送。</p>
+ *
+ * <p><b>lease 的两个维度分开表达</b>：{@code nextAttemptAt} 是 lease <i>deadline</i>(WHEN 到期，供 recoverer
+ * 扫描)；{@code leaseToken} 是 lease <i>identity</i>(WHO 持有，供 worker finalize 校验)。
+ * 不能用 nextAttemptAt 兼任 token：它是 {@code Instant.now()}，纳秒精度经 TIMESTAMP(6) 微秒列 round-trip
+ * 后会被截断，内存值与回读值不再 equals，导致已成功的投递被误判"lease changed"而最终 DEAD；
+ * 同一微秒的两次 claim 也会产生相同时间戳令牌。独立 UUID token 同时避开这两个坑。</p>
  */
 // 只读 getter + 私有构造：状态只能经 markProcessing/markSent/markFailed 流转，杜绝外部直接改 status。
 @Getter
@@ -37,6 +43,7 @@ public final class NotificationDelivery {
     private NotificationDeliveryStatus status;
     private int attempts;
     private Instant nextAttemptAt;
+    private String leaseToken;
     private String lastError;
     private String providerMessageId;
     private Instant sentAt;
@@ -53,6 +60,7 @@ public final class NotificationDelivery {
             NotificationDeliveryStatus status,
             int attempts,
             Instant nextAttemptAt,
+            String leaseToken,
             String lastError,
             String providerMessageId,
             Instant sentAt,
@@ -71,6 +79,7 @@ public final class NotificationDelivery {
         }
         this.attempts = attempts;
         this.nextAttemptAt = Objects.requireNonNull(nextAttemptAt);
+        this.leaseToken = leaseToken;
         this.lastError = lastError;
         this.providerMessageId = providerMessageId;
         this.sentAt = sentAt;
@@ -81,7 +90,8 @@ public final class NotificationDelivery {
     /**
      * 为某条通知的某个渠道创建待投递记录。
      *
-     * <p>nextAttemptAt 设为 now，表示创建即可被 poller 立刻领取；快照通知的 type/subjectId/recipientKey。</p>
+     * <p>nextAttemptAt 设为 now，表示创建即可被 poller 立刻领取；快照通知的 type/subjectId/recipientKey。
+     * leaseToken 为 null：尚未被任何 worker 领取。</p>
      */
     public static NotificationDelivery pendingFor(
             Notification notification,
@@ -101,6 +111,7 @@ public final class NotificationDelivery {
                 null,
                 null,
                 null,
+                null,
                 now,
                 now
         );
@@ -116,6 +127,7 @@ public final class NotificationDelivery {
             NotificationDeliveryStatus status,
             int attempts,
             Instant nextAttemptAt,
+            String leaseToken,
             String lastError,
             String providerMessageId,
             Instant sentAt,
@@ -132,6 +144,7 @@ public final class NotificationDelivery {
                 status,
                 attempts,
                 nextAttemptAt,
+                leaseToken,
                 lastError,
                 providerMessageId,
                 sentAt,
@@ -144,29 +157,34 @@ public final class NotificationDelivery {
      * provider 幂等键：稳定且每个 (notification, channel) 唯一。
      *
      * <p>worker 把它透传给 push/email provider；外部接口若按此键去重，"至少一次投递 + 下游去重"
-     * 就能逼近"有效恰好一次(effectively-once)"。它必须在多次重试间保持不变，所以直接用 delivery id。</p>
+     * 就能逼近"有效恰好一次(effectively-once)"。它必须在多次重试间保持不变，所以直接用 delivery id。
+     * 注意它与 leaseToken 不同：idempotencyKey 跨重试不变(对 provider 去重)，leaseToken 每次 claim 都换
+     * (标识本轮租约持有者)。</p>
      */
     public String idempotencyKey() {
         return id.toString();
     }
 
-    public void markProcessing(Instant startedAt, long processingTimeoutSeconds) {
+    public void markProcessing(Instant startedAt, long processingTimeoutSeconds, String leaseToken) {
         Instant actualStartedAt = Objects.requireNonNull(startedAt);
         if (processingTimeoutSeconds <= 0) {
             throw new IllegalArgumentException("processingTimeoutSeconds must be positive");
         }
-        // PROCESSING 是短租约：worker 宕机后 nextAttemptAt(=lease deadline)到期，recoverer 可重新放回队列。
+        // PROCESSING 是短租约：nextAttemptAt 复用为 lease deadline(供 recoverer 扫描)，
+        // leaseToken 标识本轮持有者(供 worker finalize 校验，避免迟到 worker 覆盖)。
         status = NotificationDeliveryStatus.PROCESSING;
         nextAttemptAt = actualStartedAt.plusSeconds(processingTimeoutSeconds);
+        this.leaseToken = requireText(leaseToken, "leaseToken");
         updatedAt = actualStartedAt;
     }
 
     public void markSent(Instant sentAt, String providerMessageId) {
-        // SENT 是终态：provider 已确认。记录 providerMessageId 作为成功证据与对账线索。
+        // SENT 是终态：provider 已确认。记录 providerMessageId 作为成功证据与对账线索；释放 lease。
         status = NotificationDeliveryStatus.SENT;
         this.sentAt = Objects.requireNonNull(sentAt);
         this.providerMessageId = requireText(providerMessageId, "providerMessageId");
         this.lastError = null;
+        this.leaseToken = null;
         updatedAt = sentAt;
     }
 
@@ -178,6 +196,8 @@ public final class NotificationDelivery {
         // 先在 domain 内截断错误信息，避免超过 DB varchar(500) 反而把真正的失败原因丢掉。
         lastError = truncate(requireText(error, "error"));
         updatedAt = Objects.requireNonNull(failedAt);
+        // 释放 lease：回到 PENDING/DEAD 后本轮 leaseToken 不再有效，迟到 worker 的 finalize 会因 token 不符被丢弃。
+        leaseToken = null;
         if (attempts >= maxAttempts) {
             // DEAD 终态：停止自动重试，避免 poison delivery 无限打 provider 并掩盖真实故障，等待人工/admin 重放。
             status = NotificationDeliveryStatus.DEAD;

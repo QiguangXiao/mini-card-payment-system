@@ -21,6 +21,7 @@ public record NotificationDeliveryRow(
         String status,
         int attempts,
         Instant nextAttemptAt,
+        String leaseToken,
         String lastError,
         String providerMessageId,
         Instant sentAt,

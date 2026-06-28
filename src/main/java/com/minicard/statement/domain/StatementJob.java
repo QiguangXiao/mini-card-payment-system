@@ -40,8 +40,10 @@ public final class StatementJob {
     private StatementJobStatus status;
     private String claimedBy;
     private Instant claimedAt;
-    // claim_until 是 lease 截止时间，也是迟到 worker finalize 时的 lease token。
+    // claim_until 只表达 lease 截止时间；真正的 owner identity 由 claim_token 承担。
     private Instant claimUntil;
+    // claim_token 是每次 claim 生成的随机 token，finalize 只认这个 token，避免用 timestamp 当 ownership。
+    private String claimToken;
     private int attemptCount;
     private int processedAccountCount;
     private int generatedStatementCount;
@@ -62,6 +64,7 @@ public final class StatementJob {
             String claimedBy,
             Instant claimedAt,
             Instant claimUntil,
+            String claimToken,
             int attemptCount,
             int processedAccountCount,
             int generatedStatementCount,
@@ -81,6 +84,7 @@ public final class StatementJob {
         this.claimedBy = claimedBy;
         this.claimedAt = claimedAt;
         this.claimUntil = claimUntil;
+        this.claimToken = claimToken;
         this.attemptCount = attemptCount;
         this.processedAccountCount = processedAccountCount;
         this.generatedStatementCount = generatedStatementCount;
@@ -111,6 +115,7 @@ public final class StatementJob {
                 null,
                 null,
                 null,
+                null,
                 0,
                 0,
                 0,
@@ -133,6 +138,7 @@ public final class StatementJob {
             String claimedBy,
             Instant claimedAt,
             Instant claimUntil,
+            String claimToken,
             int attemptCount,
             int processedAccountCount,
             int generatedStatementCount,
@@ -153,6 +159,7 @@ public final class StatementJob {
                 claimedBy,
                 claimedAt,
                 claimUntil,
+                claimToken,
                 attemptCount,
                 processedAccountCount,
                 generatedStatementCount,
@@ -173,6 +180,9 @@ public final class StatementJob {
         claimedBy = requireText(workerId, "workerId");
         claimedAt = Objects.requireNonNull(now);
         claimUntil = now.plusSeconds(leaseSeconds);
+        // 每次 claim 都生成新的随机 owner token。只比较 claim_until 会受 DB timestamp 精度影响；
+        // 只比较 claimed_by 又挡不住同一个 worker 过期后重新 claim 的情况。
+        claimToken = UUID.randomUUID().toString();
         attemptCount++;
         updatedAt = now;
         lastError = null;
@@ -221,6 +231,7 @@ public final class StatementJob {
         claimedBy = null;
         claimedAt = null;
         claimUntil = null;
+        claimToken = null;
     }
 
     private void validateState() {
@@ -237,13 +248,18 @@ public final class StatementJob {
                 || failedAccountCount < 0) {
             throw new IllegalArgumentException("statement job counters must be non-negative");
         }
-        // PROCESSING 必须持有完整 lease；非 PROCESSING 不能残留 lease，
-        // 否则 recover 或 lease-token 校验会因为脏状态做出错误判断。
-        boolean hasClaim = claimedBy != null || claimedAt != null || claimUntil != null;
-        if (status == StatementJobStatus.PROCESSING && !hasClaim) {
+        if (claimToken != null && claimToken.isBlank()) {
+            throw new IllegalArgumentException("claim token must not be blank");
+        }
+        // PROCESSING 必须持有完整 lease；非 PROCESSING 不能残留 lease。
+        // 如果允许 partial claim（例如只有 claim_until、没有 claim_token），recover 还能扫到，
+        // 但迟到 worker finalize 时就无法可靠判断这次 PROCESSING 是否仍属于自己。
+        boolean hasAnyClaim = claimedBy != null || claimedAt != null || claimUntil != null || claimToken != null;
+        boolean hasFullClaim = claimedBy != null && claimedAt != null && claimUntil != null && claimToken != null;
+        if (status == StatementJobStatus.PROCESSING && !hasFullClaim) {
             throw new IllegalArgumentException("processing statement job requires claim lease");
         }
-        if (status != StatementJobStatus.PROCESSING && hasClaim) {
+        if (status != StatementJobStatus.PROCESSING && hasAnyClaim) {
             throw new IllegalArgumentException("non-processing statement job cannot keep claim lease");
         }
     }

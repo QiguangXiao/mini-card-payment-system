@@ -3,6 +3,7 @@ package com.minicard.notification.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
@@ -35,8 +36,11 @@ public class NotificationDeliveryClaimer {
                 properties.batchSize()
         );
         for (NotificationDelivery delivery : deliveries) {
+            // 每次 claim 生成新的 lease token：它是本轮租约的身份证，worker finalize 时据此确认"还是我持有"。
+            // 用 UUID 而非 nextAttemptAt 时间戳，避免 TIMESTAMP(6) 微秒截断导致的内存/回读不相等误判。
+            String leaseToken = UUID.randomUUID().toString();
             // lease 先 commit，worker 才开始调 provider；worker 宕机时 recoverer 在 lease 到期后放回。
-            delivery.markProcessing(now, properties.processingTimeoutSeconds());
+            delivery.markProcessing(now, properties.processingTimeoutSeconds(), leaseToken);
             deliveryRepository.updateDeliveryState(delivery);
         }
         return deliveries;

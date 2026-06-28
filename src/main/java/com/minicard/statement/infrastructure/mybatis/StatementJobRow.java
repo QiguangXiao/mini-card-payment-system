@@ -17,6 +17,7 @@ public record StatementJobRow(
         String claimedBy,
         Instant claimedAt,
         Instant claimUntil,
+        String claimToken,
         int attemptCount,
         int processedAccountCount,
         int generatedStatementCount,

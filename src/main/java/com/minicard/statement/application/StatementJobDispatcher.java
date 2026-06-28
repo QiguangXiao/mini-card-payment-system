@@ -185,14 +185,16 @@ public class StatementJobDispatcher {
                         "claimed statement job disappeared " + claimedJob.id()
                 ));
         if (job.status() != StatementJobStatus.PROCESSING
-                || !Objects.equals(job.claimUntil(), claimedJob.claimUntil())) {
+                || !Objects.equals(job.claimToken(), claimedJob.claimToken())) {
             // 旧 worker 可能在 lease 过期后才回来；不能覆盖新 worker/recoverer 已经推进的状态。
-            // 如果不校验 lease token，迟到 worker 会把别人处理中的 job 错误标 DONE。
+            // 如果只比较 claim_until 这类 timestamp，DB/Java 精度差异或同 worker 重领都会让判断不稳；
+            // claim_token 是每次 claim 的随机 owner token，迟到 worker 不能靠旧 token 覆盖新状态。
             log.warn(
-                    "statement_job_lease_changed jobId={} claimedLease={} currentStatus={} currentLease={}",
+                    "statement_job_lease_changed jobId={} claimedToken={} currentStatus={} currentToken={} currentLease={}",
                     claimedJob.id(),
-                    claimedJob.claimUntil(),
+                    claimedJob.claimToken(),
                     job.status(),
+                    job.claimToken(),
                     job.claimUntil()
             );
             return null;

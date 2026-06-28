@@ -9,7 +9,7 @@ package com.minicard.statement.domain;
 public enum StatementJobStatus {
     /** 等待 worker claim。 */
     PENDING,
-    /** 已被某个 worker claim，claim_until 到期前由该 worker 拥有。 */
+    /** 已被某个 worker claim，claim_until 到期前由 claim_token 对应的 worker 尝试拥有。 */
     PROCESSING,
     /** 分片处理成功完成。 */
     DONE,

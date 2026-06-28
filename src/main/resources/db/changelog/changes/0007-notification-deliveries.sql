@@ -15,8 +15,12 @@ CREATE TABLE notification_deliveries (
     recipient_key VARCHAR(100) NOT NULL,
     status VARCHAR(20) NOT NULL,
     attempts INT NOT NULL DEFAULT 0,
-    -- PENDING 时是"下次可投递时间"，PROCESSING 时复用为 lease deadline，与 outbox_events 同构。
+    -- PENDING 时是"下次可投递时间"，PROCESSING 时复用为 lease deadline(WHEN 到期，供 recoverer 扫描)。
     next_attempt_at TIMESTAMP(6) NOT NULL,
+    -- lease identity(WHO 持有)：claim 时生成 UUID，finalize 时校验 status + lease_token。
+    -- 不能用 next_attempt_at 兼任 token：Instant 纳秒精度经 TIMESTAMP(6) 微秒列 round-trip 后会被截断，
+    -- 内存值与回读值不再相等，已成功的投递会被误判 lease changed 而最终 DEAD。CHAR(36) 精确比较不受此影响。
+    lease_token CHAR(36) NULL,
     last_error VARCHAR(500) NULL,
     -- provider 返回的消息 id；同时也是"已成功"证据，便于对账与排查重复投递。
     provider_message_id VARCHAR(100) NULL,

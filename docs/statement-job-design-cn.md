@@ -81,13 +81,13 @@
 4. 原子创建 3 个 `StatementJob`（shard 0/1/2），`INSERT IGNORE`：
    重复触发同一关账日，靠 `uk_statement_jobs_cycle_shard` 幂等跳过。
 5. **每 1 秒** `StatementJobDispatcher.dispatch()`：短事务 `FOR UPDATE SKIP LOCKED`
-   领取 PENDING job，改 PROCESSING（写 `claimed_by / claim_until`），提交，
+   领取 PENDING job，改 PROCESSING（写 `claimed_by / claimed_at / claim_until / claim_token`），提交，
    把 job 交给 `statementJobWorkerExecutor` 线程池。
 6. worker 里 `StatementJobHandler.handle(job)`：用 `job.shardNo / shardCount`
    把账户哈希分片，`findAccountIdsForJob(...)` 拿本片账户，逐个
    `generate(...)`。单账户失败被隔离（见 2.4）。
 7. handler 返回计数后 `dispatch` 在新短事务里 finalize：先 `findByIdForUpdate`
-   重新锁 job 并**校验 lease token**（`claimUntil` 是否仍是自己 claim 时的值），
+   重新锁 job 并**校验 lease token**（`claim_token` 是否仍是自己 claim 时的值），
    再标 `DONE` 或 `PENDING/DEAD`。
 8. **每 10 秒** `recoverStuckJobs()`：`status=PROCESSING AND claim_until <= now`
    的 job 视为 worker 宕机，按一次失败处理放回 PENDING / DEAD。
@@ -125,7 +125,7 @@
 id            cycle 身份：period_start / period_end / due_date     ← 直接落在 job 上
 shard_no / shard_count                                            ← 分片
 status        PENDING / PROCESSING / DONE / DEAD
-claimed_by / claimed_at / claim_until                             ← lease（含 lease token）
+claimed_by / claimed_at / claim_until / claim_token               ← lease metadata + owner token
 attempt_count
 processed_/generated_/skipped_/failed_account_count              ← 分片级计数
 created_at / updated_at / last_error
@@ -134,7 +134,8 @@ created_at / updated_at / last_error
 关键约束：
 - `uk_statement_jobs_cycle_shard (period_start, period_end, shard_no)` —— 创建幂等。
 - `idx_statement_jobs_claimable (status, claim_until, created_at)` —— claim / recover 扫描。
-- `chk_statement_jobs_claim_state` —— PROCESSING 必须有完整 lease，非 PROCESSING 不能残留 lease。
+- `chk_statement_jobs_claim_state` —— PROCESSING 必须有完整 lease metadata + token，
+  非 PROCESSING 不能残留 lease。
 - `chk_statement_jobs_period` —— `period_end >= period_start AND due_date > period_end`。
 
 > 没有 `statement_batches` 表。“本期是否全部出账完成 / 有没有 DEAD 分片”
@@ -217,12 +218,13 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 > （`DelayJobWorker.lockCurrentLease` 比较 `nextAttemptAt`）。
 > 区别不在“有没有 lease 校验”，而在下面这些点。
 
-### 家族 B：`statement` job（1 类 dispatcher + 双列 lease + fan-out）
+### 家族 B：`statement` job（1 类 dispatcher + 显式 owner token + fan-out）
 
 - 一个 `StatementJobDispatcher` 合并了 poll / claim / 派发 / finalize / recover，
   比 4 类拆分更紧凑、更易读。
-- **双列 lease 模型**：`claimed_by / claimed_at / claim_until` 显式表达
-  “谁持有、何时持有、租约何时到期”，observability 更强；lease token 用 `claim_until`。
+- **显式 claim metadata + owner token**：`claimed_by / claimed_at / claim_until`
+  表达“谁持有、何时持有、租约何时到期”，`claim_token` 表达“这次 claim 的真正 owner”。
+  finalize 比较 token，而不是比较 timestamp。
 - **没有 backoff**：失败回 PENDING 立即可再 claim，靠 `max_attempts` 兜底
   （见第 6 节的取舍说明）。
 - **fan-out / sharding + 单项故障隔离 + 分片计数**：这是 batch 出账特有的，
@@ -233,8 +235,8 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 | 维度 | delayjob / outbox（家族 A） | statement job（家族 B，新） |
 | --- | --- | --- |
 | 调度类数量 | 4（Poller/Claimer/Worker/Recoverer） | 1（Dispatcher） |
-| lease 列 | 单列 `next_attempt_at`（兼 backoff + lease） | 双列 `claim_until` + `claimed_by/at` |
-| lease token 校验 | 有（比较 `next_attempt_at`） | 有（比较 `claim_until`） |
+| lease 列 | 单列 `next_attempt_at`（兼 backoff + lease） | `claimed_by/at/until` + `claim_token` |
+| lease token 校验 | 有（比较 `next_attempt_at`） | 有（比较随机 `claim_token`） |
 | 重试 backoff | 有（指数退避 + 上限） | 无（立即可重试，max_attempts 兜底） |
 | 一个 job 干什么 | 一个聚合的未来动作 / 一条消息 | 一个分片（上千账户）的 fan-out |
 | 故障粒度 | 整个 job 成功/失败 | 单账户隔离，分片级计数 |
@@ -263,8 +265,24 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
    改成 `status='PENDING' AND next_attempt_at <= now` 即可，约十行改动。
 2. **不保留 batch 状态表**：用查询回答“整批是否完成”。
    原因：避免为低频的批级看板长期维护一张父表 + 生命周期。
-3. **双列 lease 而非单列**：牺牲一列，换 `claimed_by/at` 的强 observability，
-   并让 `claim_until` 专职 lease、不与“下次重试时间”混用。
+3. **显式 owner token 而非 timestamp token**：旧设计用 `claim_until` 兼任 lease deadline
+   和 finalize token。新设计保留 `claimed_by/at/until` 的 observability，但新增
+   `claim_token` 作为随机 owner token。这样 `claim_until` 只负责 recover 判断，
+   不再承担“证明这次 PROCESSING 属于我”的职责。
+
+### 6.1 改前 / 改后：为什么加 `claim_token`
+
+| 维度 | 改前 | 改后 |
+| --- | --- | --- |
+| lease deadline | `claim_until` | `claim_until` |
+| finalize owner check | 比较 `claim_until` | 比较随机 `claim_token` |
+| 可观测性 | `claimed_by / claimed_at / claim_until` | 保持不变，并多一个 token 排查字段 |
+| 主要风险 | Java `Instant` 与 MySQL `TIMESTAMP(6)` 精度不一致时，可能误判 lease changed；同一 worker 过期后重领也不能只靠 worker id 区分 | token 每次 claim 重新生成，不依赖 timestamp 精度，也不依赖 worker id |
+
+反事实：如果没有 `claim_token`，一个慢 worker 可能在 lease 过期后才回来 finalize。
+旧代码只能靠 `claim_until` 判断它是不是当前 owner；这会把“租约到期时间”和“owner 身份”
+混在一起。现在 `claim_until` 只回答“什么时候可 recover”，`claim_token` 才回答
+“当前 finalize 是否仍属于这次 claim”。
 
 ---
 
@@ -276,7 +294,8 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
    `DelayJobDispatcher`（poll / claim / 派发 / finalize / recover），保留
    `EnumMap` handler 分发。
 2. **决定 lease 列模型**：要么保留单列 `next_attempt_at`（简，但身兼两职），
-   要么升级成 `claimed_by/at/until` 双列（observability 强）。两者择一并统一。
+   要么升级成 `claimed_by/at/until + claim_token`（observability 强，owner check 更稳）。
+   两者择一并统一。
 3. **保留各自不可合并的差异**：delayjob 的 backoff、泛型 handler；
    statement 的 sharding、单项隔离。**不要**为了“统一”强行抽象成一个泛型框架——
    它们用例不同（单聚合动作 vs 批量 fan-out），共享的是模式，不是同一段代码。

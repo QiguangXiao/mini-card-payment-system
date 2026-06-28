@@ -22,14 +22,18 @@ class StatementJobTest {
 
         assertThat(job.status()).isEqualTo(StatementJobStatus.PROCESSING);
         assertThat(job.claimedBy()).isEqualTo("worker-1");
+        assertThat(job.claimedAt()).isEqualTo(NOW.plusSeconds(1));
         assertThat(job.claimUntil()).isEqualTo(NOW.plusSeconds(301));
+        assertThat(job.claimToken()).isNotBlank();
         assertThat(job.attemptCount()).isEqualTo(1);
 
         job.markDone(new StatementJobExecutionResult(10, 8, 2, 0), NOW.plusSeconds(2));
 
         assertThat(job.status()).isEqualTo(StatementJobStatus.DONE);
         assertThat(job.claimedBy()).isNull();
+        assertThat(job.claimedAt()).isNull();
         assertThat(job.claimUntil()).isNull();
+        assertThat(job.claimToken()).isNull();
         assertThat(job.generatedStatementCount()).isEqualTo(8);
     }
 
@@ -38,16 +42,21 @@ class StatementJobTest {
         StatementJob job = pendingShard(0, 1);
 
         job.markProcessing("worker-1", NOW.plusSeconds(1), 300);
+        String firstClaimToken = job.claimToken();
         job.markFailed(new StatementJobExecutionResult(10, 9, 0, 1), "temporary", NOW.plusSeconds(2), 2);
 
         assertThat(job.status()).isEqualTo(StatementJobStatus.PENDING);
+        assertThat(job.claimToken()).isNull();
         assertThat(job.failedAccountCount()).isEqualTo(1);
 
         job.markProcessing("worker-2", NOW.plusSeconds(3), 300);
+        assertThat(job.claimToken()).isNotBlank();
+        assertThat(job.claimToken()).isNotEqualTo(firstClaimToken);
         job.markFailed(new StatementJobExecutionResult(10, 9, 0, 1), "still broken", NOW.plusSeconds(4), 2);
 
         assertThat(job.status()).isEqualTo(StatementJobStatus.DEAD);
         assertThat(job.claimedBy()).isNull();
+        assertThat(job.claimToken()).isNull();
         assertThat(job.lastError()).isEqualTo("still broken");
     }
 

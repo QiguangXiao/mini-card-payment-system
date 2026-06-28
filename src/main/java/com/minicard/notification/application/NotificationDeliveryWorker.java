@@ -128,12 +128,15 @@ public class NotificationDeliveryWorker {
         NotificationDelivery delivery = deliveryRepository.findByIdForUpdate(claimed.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed notification delivery disappeared " + claimed.id()));
+        // 用 lease_token(UUID, CHAR(36) 精确比较) 判定"还是本 worker 持有"，不用 nextAttemptAt：
+        // 后者是 Instant，纳秒精度经 TIMESTAMP(6) round-trip 后被截断，会把已成功投递误判为 lease changed。
         if (delivery.status() != NotificationDeliveryStatus.PROCESSING
-                || !delivery.nextAttemptAt().equals(claimed.nextAttemptAt())) {
+                || claimed.leaseToken() == null
+                || !claimed.leaseToken().equals(delivery.leaseToken())) {
             // lease 已变：recoverer 或新 worker 接管过。迟到 worker 不能覆盖它们的结果。
             log.warn(
-                    "notification_delivery_lease_changed deliveryId={} claimedLease={} currentStatus={} currentLease={}",
-                    claimed.id(), claimed.nextAttemptAt(), delivery.status(), delivery.nextAttemptAt()
+                    "notification_delivery_lease_changed deliveryId={} claimedToken={} currentStatus={} currentToken={}",
+                    claimed.id(), claimed.leaseToken(), delivery.status(), delivery.leaseToken()
             );
             return null;
         }

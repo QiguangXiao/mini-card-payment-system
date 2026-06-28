@@ -19,6 +19,7 @@
             <arg column="claimed_by" javaType="java.lang.String"/>
             <arg column="claimed_at" javaType="java.time.Instant"/>
             <arg column="claim_until" javaType="java.time.Instant"/>
+            <arg column="claim_token" javaType="java.lang.String"/>
             <arg column="attempt_count" javaType="_int"/>
             <arg column="processed_account_count" javaType="_int"/>
             <arg column="generated_statement_count" javaType="_int"/>
@@ -32,7 +33,7 @@
 
     <sql id="statementJobColumns">
         id, period_start, period_end, due_date, shard_no, shard_count, status,
-        claimed_by, claimed_at, claim_until, attempt_count, processed_account_count,
+        claimed_by, claimed_at, claim_until, claim_token, attempt_count, processed_account_count,
         generated_statement_count, skipped_account_count, failed_account_count,
         created_at, updated_at, last_error
     </sql>
@@ -53,6 +54,7 @@
             #{claimedBy,jdbcType=VARCHAR},
             #{claimedAt,jdbcType=TIMESTAMP},
             #{claimUntil,jdbcType=TIMESTAMP},
+            #{claimToken,jdbcType=VARCHAR},
             #{attemptCount},
             #{processedAccountCount},
             #{generatedStatementCount},
@@ -98,6 +100,7 @@
             claimed_by = #{claimedBy,jdbcType=VARCHAR},
             claimed_at = #{claimedAt,jdbcType=TIMESTAMP},
             claim_until = #{claimUntil,jdbcType=TIMESTAMP},
+            claim_token = #{claimToken,jdbcType=VARCHAR},
             attempt_count = #{attemptCount},
             processed_account_count = #{processedAccountCount},
             generated_statement_count = #{generatedStatementCount},

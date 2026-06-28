@@ -21,6 +21,8 @@ class NotificationDeliveryTest {
         assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.PENDING);
         assertThat(delivery.attempts()).isZero();
         assertThat(delivery.nextAttemptAt()).isEqualTo(NOW);
+        // 尚未被领取：无 lease token。
+        assertThat(delivery.leaseToken()).isNull();
         assertThat(delivery.channel()).isEqualTo(NotificationChannel.APP_PUSH);
         assertThat(delivery.notificationType()).isEqualTo(NotificationType.CARD_TRANSACTION_POSTED);
         assertThat(delivery.subjectId()).isEqualTo("txn-1");
@@ -33,16 +35,31 @@ class NotificationDeliveryTest {
     void leaseThenSentReachesTerminalSuccess() {
         NotificationDelivery delivery = pushDelivery();
 
-        delivery.markProcessing(NOW, 30);
+        delivery.markProcessing(NOW, 30, "lease-token-1");
         assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.PROCESSING);
-        // PROCESSING 复用 nextAttemptAt 作为 lease deadline。
+        // PROCESSING 复用 nextAttemptAt 作为 lease deadline；lease_token 作为持有者身份。
         assertThat(delivery.nextAttemptAt()).isEqualTo(NOW.plusSeconds(30));
+        assertThat(delivery.leaseToken()).isEqualTo("lease-token-1");
 
         delivery.markSent(NOW.plusSeconds(1), "push-abc");
         assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.SENT);
         assertThat(delivery.sentAt()).isEqualTo(NOW.plusSeconds(1));
         assertThat(delivery.providerMessageId()).isEqualTo("push-abc");
         assertThat(delivery.lastError()).isNull();
+        // 终态释放 lease：token 清空，迟到 worker 不可能再"匹配上"。
+        assertThat(delivery.leaseToken()).isNull();
+    }
+
+    @Test
+    void failureReleasesLeaseToken() {
+        NotificationDelivery delivery = pushDelivery();
+        delivery.markProcessing(NOW, 30, "lease-token-1");
+
+        delivery.markFailed("boom", NOW.plusSeconds(1), 5);
+
+        // 回到 PENDING 后 token 清空：下一轮 claim 会换新 token，旧 worker 的 finalize 不再匹配。
+        assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.PENDING);
+        assertThat(delivery.leaseToken()).isNull();
     }
 
     @Test
@@ -64,7 +81,7 @@ class NotificationDeliveryTest {
     @Test
     void processingTimeoutCountsAsOneFailure() {
         NotificationDelivery delivery = pushDelivery();
-        delivery.markProcessing(NOW, 30);
+        delivery.markProcessing(NOW, 30, "lease-token-1");
 
         delivery.markProcessingTimedOut(NOW.plusSeconds(31), 5);
 

@@ -103,8 +103,9 @@
   `period_start/period_end/due_date` + `shard_no/shard_count` + 结果计数器。
 - **daily cron 触发创建**，执行靠 claimable job 并发跑。
 - **创建幂等**：`uk_statement_jobs_cycle_shard UNIQUE (period_start, period_end, shard_no)`。
-- **lease 多列（更丰富）**：`claimed_by / claimed_at / claim_until`；`claim_until` 作 lease
-  deadline + finalize token。比 delay/outbox 多了“谁在处理、何时开始”的运维可见性。
+- **lease 多列（更丰富）**：`claimed_by / claimed_at / claim_until / claim_token`；
+  `claim_until` 作 lease deadline，`claim_token` 作 finalize owner token。比 delay/outbox
+  多了“谁在处理、何时开始”的运维可见性，也避免把 timestamp 当 ownership。
 - **无退避列**：`markFailed` 直接回 PENDING（下个 ~1s poll 立即重领）或 DEAD。
 - **故障隔离在账户级**：单账户失败不回滚整个 shard（每账户独立小事务）。
 
@@ -118,7 +119,7 @@
 | **谁创建** | 业务方 `insertIfAbsent` | 业务方同事务 insert | daily cron → planner `INSERT IGNORE` |
 | **触发时机** | `scheduledAt`（未来时刻） | 立即 | 关账日（日历） |
 | **创建幂等键** | uk(job_type,agg_type,agg_id) | eventId（消费侧去重） | uk(period_start,period_end,shard_no) |
-| **lease 列** | 单列复用 `next_attempt_at` | 单列复用 `next_attempt_at` | **多列** `claimed_by/at/until` |
+| **lease 列** | 单列复用 `next_attempt_at` | 单列复用 `next_attempt_at` | **多列** `claimed_by/at/until` + `claim_token` |
 | **退避** | 指数 min(2^(n-1),60s) | 指数（对称） | **无退避**，立即回 PENDING |
 | **终态** | DONE / DEAD | PUBLISHED / DEAD | DONE / DEAD |
 | **有业务 handler** | 有（按 jobType 派发） | 无（只 publish） | 有（账户级循环） |
@@ -185,8 +186,8 @@
   无需额外 MQ 中间件。MySQL 8.0+ / PostgreSQL 都支持 SKIP LOCKED。
 - **Lease / Visibility Timeout（租约 / 可见性超时）**：领取者只拿一段时间的处理权；超时被回收。
   等价于 SQS 的 visibility timeout、Kafka 的 max.poll.interval。
-- **Optimistic lease token（乐观租约令牌）**：finalize 前比对令牌（这里复用 `next_attempt_at` /
-  `claim_until`），防止迟到 worker 覆盖新状态——是乐观并发控制的一种。
+- **Optimistic lease token（乐观租约令牌）**：finalize 前比对令牌。delay/outbox 仍复用
+  `next_attempt_at`；statement 已升级为随机 `claim_token`，防止迟到 worker 覆盖新状态。
 - **Claim-then-execute（先领取再执行）**：claim 短事务提交后才干活，避免持 row lock 跑长业务/等外部。
 - **At-least-once execution + Idempotent handler = Effectively-once**：lease 到期但老 worker 仍活会
   导致重复执行，所以 handler 必须幂等（`AUTO_REPAYMENT` 用确定性幂等键 + 银行侧去重；
@@ -220,13 +221,14 @@ DB 表 + `SKIP LOCKED` 直接得到竞争消费、重试、恢复，运维也简
 - **强补充**：本项目这种万级/十万级 jobs/day、秒级延迟可接受的场景，DB 队列是**最优性价比**；
   真要扩，发布器可换成 CDC 拖 outbox 表，消费侧不动。
 
-### Q2. PROCESSING lease 是什么？为什么 delay/outbox 用 `next_attempt_at` 一列两用，statement 却单列 `claim_until`？
+### Q2. PROCESSING lease 是什么？为什么 delay/outbox 用 `next_attempt_at` 一列两用，statement 用多列 claim？
 **答**：lease 是“限时处理权”。delay/outbox 一个 job 是**单一工作单元**，复用 `next_attempt_at`
-（PENDING 时=下次执行时间，PROCESSING 时=租约截止+令牌）足够省。statement 是**分片 fan-out**，
-需要 `claimed_by/claimed_at` 这种“谁在处理、何时开始”的运维可见性，所以用更丰富的多列 lease。
-- **硬核追问：lease token 用时间戳，两个 worker 同一 `now` claim 同一行会撞令牌吗？**
-  不会。claim 在短事务里 `FOR UPDATE SKIP LOCKED`，对同一行串行化，只有一个 winner 写 lease；
-  且令牌是**按行**比较，不同行互不影响。
+（PENDING 时=下次执行时间，PROCESSING 时=租约截止+轻量令牌）足够省。statement 是**分片 fan-out**，
+需要 `claimed_by/claimed_at/claim_until` 这种“谁在处理、何时开始、何时超时”的运维可见性，
+并新增 `claim_token` 作为真正 owner token。
+- **硬核追问：为什么 statement 不继续用时间戳当 token？**
+  因为 Java `Instant` 和 MySQL `TIMESTAMP(6)` 有精度边界，timestamp 更适合作为 deadline；
+  随机 `claim_token` 更适合回答“这次 finalize 是否仍属于我”。
 
 ### Q3. 为什么 claim 和 execute 要分成两段事务？
 **答**：claim 短事务把 `PENDING->PROCESSING` 提交后**立刻放锁**，再交 worker 干活。
