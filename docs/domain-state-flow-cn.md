@@ -923,7 +923,7 @@ minimum_payment_amount = 1000.00
 - `CreditAccount.posted_balance` 不变，因为账单生成不是还款。
 - `CardTransaction` 不再是未出账候选。
 - `DelayJob` 后续到 `dueDate` 会触发 `AUTO_REPAYMENT`。
-- Notification 异步消费 `statement.closed` 创建 `STATEMENT_READY` 通知。
+- Notification 异步消费 `statement.closed` 创建 `STATEMENT_CLOSED` 通知。
 - 现在 `Repayment` 可以针对这张 statement 入账。
 
 ## 8. 请求四：客户提前主动部分还款 500 JPY

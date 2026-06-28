@@ -325,7 +325,7 @@ dueDate = 7 月 27 日
 - `statements` 保存账单汇总，`statement_items` 保存交易快照。
 - `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
 - `StatementService` 在同一事务里写 `AUTO_REPAYMENT` DelayJob，计划 dueDate 自动扣款。
-- `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_READY` 通知，未来 PDF 生成、还款提醒也可以消费。
+- `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_CLOSED` 通知，未来 PDF 生成、还款提醒也可以消费。
 
 账单生成只固定金额，不恢复信用额度；当前项目已经通过简化的 `Repayment` 领域处理还款入账。
 

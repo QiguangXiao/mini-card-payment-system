@@ -247,7 +247,7 @@ credit_account_id + period_start + period_end
 - `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等。
 - `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`、`REPAYMENT`。
 - `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
-- `template`：通知模板类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_READY`、`REPAYMENT_RECEIVED`。
+- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_CLOSED`、`REPAYMENT_RECEIVED`。
 - `status`：`PENDING`、`SENT`、`FAILED`。
 
 提醒：
@@ -966,7 +966,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 
    - 主 statement transaction 不直接调用 Notification，也不等待短信/邮件/Push provider。
    - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
-   - Listener 把内部事件映射成用户侧 `NotificationType.STATEMENT_READY`。
+   - Listener 把 `statement.closed` 映射成 `NotificationType.STATEMENT_CLOSED`（与事件同名，和其它三类通知 1:1 同构）。
    - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
    - claim 成功后创建一条 `notifications/PENDING` 请求。
    - duplicate delivery claim 失败后直接返回，避免重复提醒用户。
@@ -1007,7 +1007,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
 - `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；`statement.closed` 使用 Outbox，因为它是 integration event。
-- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_READY` 通知；未来 PDF 生成、还款提醒也可以独立消费。
+- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_CLOSED` 通知；未来 PDF 生成、还款提醒也可以独立消费。
 - 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
 
 ## 6. 核心流程四：Repayment 还款入账
@@ -1809,18 +1809,21 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - statementId：账单 aggregate id。
 - creditAccountId：Kafka partition key，用来保证同一账户账单事件有序。
 
-### 为什么 statement.closed 映射成 STATEMENT_READY？
+### 为什么 statement.closed 映射成 STATEMENT_CLOSED？
 
 `statement.closed` 是系统内部业务事实，意思是 billing cycle 已关闭、账单金额固定。
-用户侧通知不应该直接说 “closed”，而应该表达“本期账单已生成，可以查看并还款”。
-
-所以 Notification 侧使用：
+通知类型与事件类型保持 1:1 同名，和其它三类通知完全一致：
 
 ```text
-statement.closed -> NotificationType.STATEMENT_READY
+authorization.approved   -> NotificationType.AUTHORIZATION_APPROVED
+card_transaction.posted  -> NotificationType.CARD_TRANSACTION_POSTED
+statement.closed         -> NotificationType.STATEMENT_CLOSED
+repayment.received       -> NotificationType.REPAYMENT_RECEIVED
 ```
 
-这个区分能体现 event contract 和 customer-facing template 的边界。
+这样四个 listener 的结构和命名完全同构，新增事件类型时不必再为“事件名 vs 通知名”单独做命名决策。
+面向用户的友好文案（例如“本期账单已生成，可查看并还款”）属于 delivery 阶段按 `NotificationType`
+选择渲染模板的事，不需要把内部 `NotificationType` 改名来表达。
 
 ### 为什么 notifications 不再只存 authorizationId？
 

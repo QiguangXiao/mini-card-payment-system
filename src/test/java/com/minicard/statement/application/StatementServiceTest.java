@@ -18,8 +18,10 @@ import com.minicard.creditaccount.domain.CreditAccountStatus;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;
 import com.minicard.statement.domain.StatementRepository;
+import com.minicard.statement.domain.event.StatementClosedDomainEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,6 +42,7 @@ class StatementGenerationServiceTest {
     private StatementBillingRepository billingRepository;
     private CreditAccountRepository creditAccountRepository;
     private StatementDueJobScheduler dueJobScheduler;
+    private StatementDomainEventPublisher eventPublisher;
     private StatementGenerationService service;
 
     @BeforeEach
@@ -48,11 +51,13 @@ class StatementGenerationServiceTest {
         billingRepository = mock(StatementBillingRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         dueJobScheduler = mock(StatementDueJobScheduler.class);
+        eventPublisher = mock(StatementDomainEventPublisher.class);
         service = new StatementGenerationService(
                 statementRepository,
                 billingRepository,
                 creditAccountRepository,
                 dueJobScheduler,
+                eventPublisher,
                 statementProperties(),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
@@ -92,6 +97,17 @@ class StatementGenerationServiceTest {
         verify(statementRepository).insert(statement);
         verify(billingRepository).markCardTransactionsBilled(statement.id(), List.of(first, second), NOW);
         verify(dueJobScheduler).scheduleAutoRepayment(statement);
+        // statement.closed 在同一事务内 append 到 Outbox；事件快照字段必须等于刚生成的账单。
+        ArgumentCaptor<StatementClosedDomainEvent> event =
+                ArgumentCaptor.forClass(StatementClosedDomainEvent.class);
+        verify(eventPublisher).append(event.capture());
+        assertThat(event.getValue().statementId()).isEqualTo(statement.id());
+        assertThat(event.getValue().creditAccountId()).isEqualTo(ACCOUNT_ID);
+        assertThat(event.getValue().totalAmount().amount()).isEqualByComparingTo("1500.00");
+        assertThat(event.getValue().minimumPaymentAmount().amount()).isEqualByComparingTo("1000.00");
+        assertThat(event.getValue().transactionCount()).isEqualTo(2);
+        assertThat(event.getValue().dueDate()).isEqualTo(LocalDate.parse("2026-07-25"));
+        assertThat(event.getValue().occurredAt()).isEqualTo(NOW);
     }
 
     @Test
@@ -112,6 +128,8 @@ class StatementGenerationServiceTest {
                 .findBillableLineSourcesForUpdate(any(), any(), any());
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
+        // 幂等命中已有账单：不能重发 statement.closed，否则同一期账单会触发重复通知。
+        verify(eventPublisher, never()).append(any());
     }
 
     @Test
@@ -139,6 +157,7 @@ class StatementGenerationServiceTest {
                 .hasMessageContaining("no unbilled posted transactions");
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
+        verify(eventPublisher, never()).append(any());
     }
 
     @Test
@@ -161,6 +180,7 @@ class StatementGenerationServiceTest {
                 .hasMessageContaining("waiting for ledger entries");
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
+        verify(eventPublisher, never()).append(any());
     }
 
     private GenerateStatementCommand command() {
