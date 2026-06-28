@@ -135,6 +135,24 @@ delay-jobs:
     worker-pool-size: 4
     worker-queue-capacity: 100
 
+notification:
+  delivery:
+    # 关掉后只创建 PENDING delivery、不实际外发，便于迁移/排查时隔离副作用。
+    enabled: true
+    fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 5000
+    batch-size: 50
+    # PROCESSING lease 超时秒数：必须 > 一次"provider 调用(含 Resilience4j 重试) + finalize"的正常耗时，
+    # 否则正常投递还没结束 lease 就过期，recoverer 会重复领取。
+    processing-timeout-seconds: 30
+    max-attempts: 8
+    worker-pool-size: 4
+    worker-queue-capacity: 100
+    sender-threads: 4
+    # 模拟 provider 的延迟/失败注入：默认 0 失败，改大可演示 TimeLimiter 超时与重试/断路/DEAD。
+    simulated-latency-millis: 20
+    simulated-failure-rate-percent: 0
+
 authorization:
   policy:
     single-transaction-limits:
@@ -243,6 +261,40 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 2
+      # 每渠道独立断路器：push provider 故障不会连带把 email 熔断。slow-call 阈值让"慢调用"也算失败，
+      # 配合 TimeLimiter 一起把"又慢又错"的 provider 快速隔离。
+      notificationPush:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        slow-call-rate-threshold: 100
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+      notificationEmail:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        slow-call-rate-threshold: 100
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+  retry:
+    instances:
+      # intra-attempt 快速重试：对 provider 抖动做几次内存级退避重试；跨重启的 durable 重试由投递状态机负责。
+      notificationDelivery:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+  timelimiter:
+    instances:
+      # 单次 provider 调用的硬超时；超时计为失败，进入 Retry/CircuitBreaker。
+      notificationDelivery:
+        timeout-duration: 2s
+        cancel-running-future: true
   bulkhead:
     instances:
       externalRisk:

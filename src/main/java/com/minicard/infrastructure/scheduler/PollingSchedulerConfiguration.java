@@ -61,6 +61,15 @@ public class PollingSchedulerConfiguration {
     }
 
     /**
+     * 通知投递 poller/recoverer 使用的 scheduler。
+     */
+    @Bean(name = "notificationDeliveryTaskScheduler")
+    public ThreadPoolTaskScheduler notificationDeliveryTaskScheduler() {
+        // poller + recoverer 共用；真正调 provider 的动作在 notificationDeliveryWorkerExecutor，scheduler 只负责定时领取。
+        return taskScheduler("notif-delivery-scheduler-", 2);
+    }
+
+    /**
      * 创建 Spring ThreadPoolTaskScheduler。
      *
      * <p>这是基础设施 helper，不包含业务规则；不同机制用不同 threadNamePrefix 方便日志排查。</p>

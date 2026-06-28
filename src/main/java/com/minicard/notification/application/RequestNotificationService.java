@@ -2,24 +2,29 @@ package com.minicard.notification.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 
 import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import com.minicard.notification.domain.Notification;
 import com.minicard.notification.domain.NotificationRepository;
+import com.minicard.notification.domain.delivery.NotificationDelivery;
+import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
+import com.minicard.notification.domain.delivery.NotificationRecipient;
+import com.minicard.notification.domain.delivery.NotificationRecipientResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 从 integration event 创建通知请求的 application use case。
+ * 从 integration event 创建通知意图、并按收件人渠道扇出投递记录的 application use case。
  *
- * <p>关键词：通知请求, Inbox 幂等, 事件消费, notification request,
- * consumer idempotency, integration event, 通知依頼(つうちいらい),
- * 重複配信(じゅうふくはいしん)。</p>
+ * <p>关键词：通知请求, Inbox 幂等, 渠道扇出, notification request,
+ * consumer idempotency, delivery fan-out, 通知依頼(つうちいらい)。</p>
  *
- * <p>类名按业务动作命名，而不是按 Kafka consumption 命名。
- * 这样 authorization、card transaction、statement listener 都可以复用同一个 use case。</p>
+ * <p>类名按业务动作命名，不按 Kafka consumption 命名，让 authorization/transaction/repayment listener
+ * 都复用同一 use case。意图(notifications)与投递(notification_deliveries)在<b>同一事务</b>内写入，
+ * 保证"一旦记录了要通知，就一定有对应的 PENDING 投递"，不会出现意图无投递的断裂。</p>
  */
 @Service
 @Slf4j
@@ -30,23 +35,21 @@ public class RequestNotificationService {
 
     private final ConsumerInboxRepository inboxRepository;
     private final NotificationRepository notificationRepository;
+    private final NotificationDeliveryRepository deliveryRepository;
+    private final NotificationRecipientResolver recipientResolver;
     private final Clock clock;
 
     @Transactional
     public void request(RequestNotificationCommand command) {
         Instant now = Instant.now(clock);
-        // CONSUMER_NAME 是逻辑消费者身份，不是 Java class name。
-        // 如果重构类名就顺手改它，Inbox 会认为是新消费者，历史 event 会被重新处理。
-        // Inbox claim 是 consumer-side idempotency 的第一道门：
-        // Kafka at-least-once 可能重复投递，同一个 eventId 对 notification-v1 只处理一次。
-        // 如果没有 Inbox，Outbox 重发或 Kafka offset 重放会创建多条相同客户通知。
+        // Inbox claim 是 consumer-side idempotency 的第一道门：Kafka at-least-once 可能重复投递，
+        // 同一 eventId 对 notification-v1 只处理一次。没有它，Outbox 重发/offset 重放会重复创建通知与投递。
+        // CONSUMER_NAME 是逻辑消费者身份，不是 Java class name；重构类名不要顺手改它。
         if (!inboxRepository.claim(CONSUMER_NAME, command.sourceEventId(), now)) {
             log.info("notification_event_duplicate eventId={}", command.sourceEventId());
             return;
         }
 
-        // 警示：通知创建失败不应该影响 statement/authorization/posting 的主业务事务。
-        // 主事务早已通过 Outbox 提交；这里失败时让 Kafka listener/DLT 和人工重放处理。
         Notification notification = Notification.requestFromEvent(
                 command.sourceEventId(),
                 command.subjectType(),
@@ -56,18 +59,34 @@ public class RequestNotificationService {
                 now
         );
         if (!notificationRepository.insertIfAbsent(notification)) {
-            // notifications.source_event_id 是第二道保护，防止历史数据修复或并发边界变化造成重复通知。
-            // 如果未来 Inbox 数据迁移/清理出错，这个 unique guard 还能挡住 duplicate side effect。
+            // source_event_id 唯一键是 Inbox 之外的第二道幂等保护：即使历史数据修复或并发边界变化，
+            // 也不会创建两条通知。命中重复就跳过，连带不创建第二批投递。
             log.info("notification_request_duplicate eventId={}", command.sourceEventId());
             return;
         }
+
+        // 解析收件人并按其启用渠道扇出投递。当前 resolver 是 stub（无 User 域），默认 push + email。
+        // sorted() 让扇出顺序确定(按 enum ordinal)，便于测试与日志稳定。
+        NotificationRecipient recipient = recipientResolver.resolve(notification.recipientKey());
+        List<NotificationDelivery> deliveries = recipient.channels().stream()
+                .sorted()
+                .map(channel -> NotificationDelivery.pendingFor(notification, channel, now))
+                .toList();
+        if (deliveries.isEmpty()) {
+            // 没有任何渠道：通知意图已落库但无人投递。记一条 warn，便于发现 resolver/偏好配置问题。
+            log.warn("notification_no_delivery_channels eventId={} recipientKey={}",
+                    command.sourceEventId(), notification.recipientKey());
+        }
+        deliveryRepository.insertAll(deliveries);
+
         log.info(
-                "notification_requested eventId={} notificationId={} type={} subjectType={} subjectId={}",
+                "notification_requested eventId={} notificationId={} type={} subjectType={} subjectId={} deliveries={}",
                 command.sourceEventId(),
                 notification.id(),
                 notification.type(),
                 notification.subjectType(),
-                notification.subjectId()
+                notification.subjectId(),
+                deliveries.size()
         );
     }
 }

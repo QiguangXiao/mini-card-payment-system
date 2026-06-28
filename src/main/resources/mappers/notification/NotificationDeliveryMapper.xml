@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.minicard.notification.infrastructure.mybatis.NotificationDeliveryMapper">
+
+    <resultMap id="notificationDeliveryRowMap"
+               type="com.minicard.notification.infrastructure.mybatis.NotificationDeliveryRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="notification_id" javaType="java.lang.String"/>
+            <arg column="channel" javaType="java.lang.String"/>
+            <arg column="notification_type" javaType="java.lang.String"/>
+            <arg column="subject_id" javaType="java.lang.String"/>
+            <arg column="recipient_key" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="attempts" javaType="int"/>
+            <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="last_error" javaType="java.lang.String"/>
+            <arg column="provider_message_id" javaType="java.lang.String"/>
+            <arg column="sent_at" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="deliveryColumns">
+        id, notification_id, channel, notification_type, subject_id, recipient_key,
+        status, attempts, next_attempt_at, last_error, provider_message_id,
+        sent_at, created_at, updated_at
+    </sql>
+
+    <insert id="insertBatch">
+        INSERT INTO notification_deliveries (
+            <include refid="deliveryColumns"/>
+        ) VALUES
+        <!--
+          一条 SQL 批量插入所有渠道的 delivery；逐条插入会增加 round trip。
+          (notification_id, channel) 唯一键兜底防重复（创建路径已在 inbox+source_event_id 事务内保护）。
+        -->
+        <foreach collection="deliveries" item="d" separator=",">
+            (#{d.id}, #{d.notificationId}, #{d.channel}, #{d.notificationType}, #{d.subjectId},
+             #{d.recipientKey}, #{d.status}, #{d.attempts}, #{d.nextAttemptAt},
+             #{d.lastError,jdbcType=VARCHAR}, #{d.providerMessageId,jdbcType=VARCHAR},
+             #{d.sentAt,jdbcType=TIMESTAMP}, #{d.createdAt}, #{d.updatedAt})
+        </foreach>
+    </insert>
+
+    <!--
+      poller 领取 PENDING 到期投递；SKIP LOCKED 让多 pod 并发领取不同 row，不互相阻塞。
+    -->
+    <select id="findDispatchableBatchForUpdate" resultMap="notificationDeliveryRowMap">
+        SELECT <include refid="deliveryColumns"/>
+        FROM notification_deliveries
+        WHERE status = 'PENDING'
+          <!-- XML 中不能直接写 <=，必须转义成 &lt;=。 -->
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY created_at, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <!--
+      recovery 独立扫描 lease 超时的 PROCESSING 投递，与正常领取路径边界分清。
+    -->
+    <select id="findStuckProcessingBatchForUpdate" resultMap="notificationDeliveryRowMap">
+        SELECT <include refid="deliveryColumns"/>
+        FROM notification_deliveries
+        WHERE status = 'PROCESSING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY created_at, id
+        LIMIT #{limit}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="notificationDeliveryRowMap">
+        SELECT <include refid="deliveryColumns"/>
+        FROM notification_deliveries
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="updateDeliveryState">
+        UPDATE notification_deliveries
+        SET status = #{status},
+            attempts = #{attempts},
+            next_attempt_at = #{nextAttemptAt},
+            last_error = #{lastError,jdbcType=VARCHAR},
+            provider_message_id = #{providerMessageId,jdbcType=VARCHAR},
+            sent_at = #{sentAt,jdbcType=TIMESTAMP},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

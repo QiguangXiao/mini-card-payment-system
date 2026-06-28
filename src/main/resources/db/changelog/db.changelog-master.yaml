@@ -11,3 +11,5 @@ databaseChangeLog:
       file: db/changelog/changes/0005-flatten-statement-jobs.sql
   - include:
       file: db/changelog/changes/0006-notification-type-column-rename.sql
+  - include:
+      file: db/changelog/changes/0007-notification-deliveries.sql

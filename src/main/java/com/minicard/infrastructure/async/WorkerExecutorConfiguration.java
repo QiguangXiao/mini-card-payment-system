@@ -2,6 +2,7 @@ package com.minicard.infrastructure.async;
 
 import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.outbox.OutboxProperties;
+import com.minicard.notification.application.NotificationDeliveryProperties;
 import com.minicard.statement.application.StatementProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -76,6 +77,25 @@ public class WorkerExecutorConfiguration {
         executor.setCorePoolSize(jobs.workerPoolSize());
         executor.setMaxPoolSize(jobs.workerPoolSize());
         executor.setQueueCapacity(jobs.workerQueueCapacity());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
+
+    /**
+     * 通知投递 worker pool。
+     */
+    // 投递 worker 会调外部 provider 并在短事务里 finalize；线程数有界，避免一种机制 backlog 占满其他池。
+    @Bean(name = "notificationDeliveryWorkerExecutor")
+    public ThreadPoolTaskExecutor notificationDeliveryWorkerExecutor(
+            NotificationDeliveryProperties properties
+    ) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("notif-delivery-worker-");
+        executor.setCorePoolSize(properties.workerPoolSize());
+        executor.setMaxPoolSize(properties.workerPoolSize());
+        // queue 满会让 poller 捕获 TaskRejectedException，并把投递放回 retry。
+        executor.setQueueCapacity(properties.workerQueueCapacity());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(10);
         return executor;

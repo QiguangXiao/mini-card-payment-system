@@ -99,6 +99,8 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
         // 共享容器里可能残留其它测试类的投影/消息行，先清空与本测试断言相关的投影与消息表，保证计数干净。
         jdbc.update("DELETE FROM consumer_inbox");
         jdbc.update("DELETE FROM card_risk_features");
+        // notification_deliveries 有外键指向 notifications，必须先删子表再删父表。
+        jdbc.update("DELETE FROM notification_deliveries");
         jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM outbox_events");
 
