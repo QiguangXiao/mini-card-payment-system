@@ -11,10 +11,8 @@
 如何承担 timeout / 重试 / 断路，以及“还没有 User 聚合时收件人怎么 stub”。
 
 相关文档：
-- 可靠投递（Outbox→Kafka）细节见 [kafka-outbox-design.md](kafka-outbox-design.md)。
-- claimable job 家族对比见 [claimable-job-families-comparison-claude-cn.md](claimable-job-families-comparison-claude-cn.md)
-  与 [async-workflows-comparison-cn.md](async-workflows-comparison-cn.md)。
-- 事件/Outbox 总览见 [event-outbox-messaging-design-claude-cn.md](event-outbox-messaging-design-claude-cn.md)。
+- 事件 / Outbox / Inbox / Kafka 可靠投递与消费幂等细节见 [events-outbox-inbox-kafka-cn.md](events-outbox-inbox-kafka-cn.md)。
+- claimable job 家族对比（DelayJob / Outbox / StatementJob，本投递是它的第三个实例）见 [claimable-jobs-cn.md](claimable-jobs-cn.md)。
 
 ---
 
@@ -38,7 +36,7 @@ sender 调用（当前是模拟的）外部 push/email provider，成功标 `SEN
 ## 2. 机制对齐与评价：直接复用 claimable job，不另起炉灶
 
 项目里已经有**两套**成熟的“数据库工作队列”：`messaging/outbox`（Outbox→Kafka 可靠发布）和 `delayjob`
-（延迟任务）。两者形状完全一致，`docs/statement-job-design-cn.md` 把它统称 **claimable job**：
+（延迟任务）。两者形状完全一致，`docs/claimable-jobs-cn.md` 把它统称 **claimable job**：
 
 ```
 状态机：PENDING ──claim──▶ PROCESSING(lease) ──成功──▶ 终态(PUBLISHED/DONE)

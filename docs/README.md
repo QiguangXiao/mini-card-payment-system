@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐代码（3 个 gap 仍存在、新增 StatementNotificationListener），保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
 | [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
-| `notification-delivery-design-cn.md` | ⏳ | 通知真实投递（保留独立，对齐代码） |
+| [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、迁移 0006/0007 一致）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
 
 ### 4. 数据（Data：MyBatis / SQL / Migration）
 
