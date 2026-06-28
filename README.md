@@ -30,13 +30,14 @@ Caffeine L1 + Redis L2 cache-aside for statement GET read models.
 
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
-ID-generation points, and Outbox/DelayJob reliability flow.
+ID-generation points, the authorization/posting/statement/repayment flows, and
+the authorization & credit-account aggregate design decisions (boundary,
+invariants, idempotency/concurrency, persistence defense — merged from the former
+authorization-design note, now archived under docs/archive/).
 See [Spring, Java, and Library Usage Notes](docs/spring-java-technical-learning-cn.md)
 for a technical walkthrough of annotations, constructor injection, validation,
 configuration binding, transactions, schedulers, MyBatis, Kafka, cache,
 Feign/Resilience4j, and Java language habits used in this project.
-See [Authorization Design](docs/authorization-design.md) for the aggregate,
-transaction, idempotency, and concurrency decisions.
 See [Events, Outbox, Inbox & Kafka](docs/events-outbox-inbox-kafka-cn.md) for the
 transactional outbox (dual-write, claim/publish/finalize/recover), at-least-once
 delivery, consumer double-idempotency (Inbox + business key), the Kafka config

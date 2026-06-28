@@ -30,8 +30,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `implementation-walkthrough-cn.md` | ⏳ | request-to-table 核心流程走读（拟并入 `authorization-design.md`） |
-| `authorization-design.md` | ⏳ | 授权聚合/事务/幂等设计（英文），拟并入 walkthrough |
+| [`implementation-walkthrough-cn.md`](implementation-walkthrough-cn.md) | ✅ | **保留**主走读；对齐 statement 到 claimable job、§7/§8 加机制文档指针、裁 §10/§12 重复、文末融入 `authorization-design` 设计决策（§14）；并修正 `StatementService`/`BankDebitStatus` 等过时类名 |
 
 ### 3. 消息与异步（Messaging & Async）
 
@@ -103,3 +102,4 @@
 - `thread-runtime-learning-cn.md` → 合并进 `jvm-threads-runtime-cn.md`
 - `credit-card-lifecycle-cn.md` → 合并进 `credit-card-domain-cn.md`
 - `ToDo.md` → 合并进 `credit-card-domain-cn.md`（剩余领域路线图）
+- `authorization-design.md` → 合并进 `implementation-walkthrough-cn.md`（§14 设计决策）

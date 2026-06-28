@@ -7,7 +7,7 @@
 > 但 PR #1 已把它**扁平化**成真正的 claimable job（`statement_jobs` 表 + `StatementJobDispatcher`，
 > 带 claim/lease/recover），旧的 `StatementBatch*` 类已删除。原三份已归档在 `docs/archive/`。
 > 消息发布细节（Outbox→Kafka→消费者）见 `events-outbox-inbox-kafka-cn.md`；端到端业务流程见
-> `implementation-walkthrough`（待整理）。
+> `implementation-walkthrough-cn.md`。
 
 > 关键词：可领取任务, 数据库队列, 租约, 竞争消费者, 退避重试, 死信, 分片扇出, claimable job,
 > database-backed queue, lease, competing consumers, exponential backoff, sharding,
