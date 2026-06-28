@@ -24,7 +24,7 @@
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
 | [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `ToDo` 路线图；对齐 statement claimable job 类名（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobHandler`/`StatementGenerationService`） |
-| `domain-state-flow-cn.md` | ⏳ 待对齐 | 保留为锁/状态深度文档（逐请求示例 + 锁顺序），下一步对齐代码 |
+| [`domain-state-flow-cn.md`](domain-state-flow-cn.md) | ✅ | **保留不归档**；已把 statement 批处理类名对齐到 claimable job（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobDispatcher`/`StatementGenerationService`），账户级出账锁逻辑未变 |
 
 ### 2. 项目实现（Implementation）
 
