@@ -42,7 +42,27 @@ public record StatementReadCacheProperties(
          * 必须 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞，否则地板先过期、迟到写又能落在空 key 上。
          * 它只需活到第一个新鲜 reader 用真实值替换掉地板为止，所以通常远短于 remoteTtl。
          */
-        Duration tombstoneTtl
+        Duration tombstoneTtl,
+        /*
+         * 是否启用"热点 key 重建锁"防缓存击穿(cache breakdown / stampede)。
+         * 关闭时退回最朴素行为：每个 pod 在 L2 miss 时各自回源 DB 重建。
+         */
+        Boolean rebuildLockEnabled,
+        /*
+         * 重建锁(Redis SET NX PX)的持有时间。它必须 >= "回源 DB + 写回 L2"的正常耗时，否则锁会在 winner
+         * 还没写完 L2 时就过期，放第二个重建者进来，single-flight 形同虚设。
+         * 同时它又是持锁者崩溃后的自动释放上限：取一个"足够覆盖一次慢重建、又不会把热点 key 锁太久"的值。
+         */
+        Duration rebuildLockTtl,
+        /*
+         * loser(没抢到锁的请求)等待 winner 把 L2 填好的最大自旋次数。次数 × 间隔 = 用户请求最多被这把锁
+         * 阻塞多久；超过后 fail-open 自己回源，绝不让请求无限等在锁上。
+         */
+        Integer rebuildLockWaitAttempts,
+        /*
+         * loser 每次自旋之间的等待间隔。太小=空转浪费 CPU 且狂查 Redis；太大=命中 L2 前的额外延迟变高。
+         */
+        Duration rebuildLockWaitInterval
 ) {
 
     public StatementReadCacheProperties {
@@ -51,5 +71,10 @@ public record StatementReadCacheProperties(
         remoteTtl = remoteTtl == null ? Duration.ofMinutes(5) : remoteTtl;
         remoteTtlJitter = remoteTtlJitter == null ? Duration.ofSeconds(30) : remoteTtlJitter;
         tombstoneTtl = tombstoneTtl == null ? Duration.ofSeconds(10) : tombstoneTtl;
+        rebuildLockEnabled = rebuildLockEnabled == null ? Boolean.TRUE : rebuildLockEnabled;
+        rebuildLockTtl = rebuildLockTtl == null ? Duration.ofSeconds(2) : rebuildLockTtl;
+        rebuildLockWaitAttempts = rebuildLockWaitAttempts == null ? 5 : rebuildLockWaitAttempts;
+        rebuildLockWaitInterval = rebuildLockWaitInterval == null
+                ? Duration.ofMillis(20) : rebuildLockWaitInterval;
     }
 }

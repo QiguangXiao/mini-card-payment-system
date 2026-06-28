@@ -12,10 +12,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -53,6 +55,9 @@ class StatementReadServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         objectMapper = new ObjectMapper().findAndRegisterModules();
         broadcaster = mock(StatementReadCacheBroadcaster.class);
+        // 默认让请求成为重建锁 winner（抢锁成功），走"回源 DB + 写回 L2"主路径；
+        // loser/fail-open 路径由各自的用例显式覆盖这个 stub。
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
         service = new StatementReadService(
                 statementGenerationService,
                 redisTemplate,
@@ -62,8 +67,13 @@ class StatementReadServiceTest {
                         1000L,
                         REMOTE_TTL,
                         REMOTE_TTL_JITTER,
-                        Duration.ofSeconds(10)
+                        Duration.ofSeconds(10),
+                        true,
+                        Duration.ofSeconds(2),
+                        3,
+                        Duration.ofMillis(5)
                 ),
+                new SimpleMeterRegistry(),
                 broadcaster
         );
     }
@@ -163,6 +173,67 @@ class StatementReadServiceTest {
         verify(broadcaster, never()).broadcastEvict(statementId);
     }
 
+    @Test
+    void rebuildLockWinnerReleasesLockAfterRebuild() {
+        // 抢到锁的 winner 回源 DB 后必须释放锁：execute(RELEASE_SCRIPT, [lockKey], token)。
+        Statement statement = statement();
+        when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);   // L2 miss
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+
+        service.get(statement.id());
+
+        // 释放锁的 keys 是 rebuild-lock key、只有一个 ARGV(token)，与 3-arg 的 CAS 写互不混淆。
+        verify(redisTemplate).execute(
+                any(RedisScript.class), eq(List.of(rebuildLockKey(statement.id()))), anyString());
+        verify(statementGenerationService, times(1)).get(statement.id());
+    }
+
+    @Test
+    void rebuildLockLoserWaitsThenReusesL2WithoutHittingDb() throws Exception {
+        // loser 没抢到锁：自旋等待期间 winner 把 L2 填好，loser 直接复用，不回源 DB（防击穿核心收益）。
+        Statement statement = statement();
+        String redisKey = redisKey(statement.id());
+        StatementReadModel model = StatementReadModel.from(statement);
+        String envelope = model.version() + "|" + objectMapper.writeValueAsString(model);
+        // 第一次读 L2 仍空，自旋一次后 winner 已写入。
+        when(valueOperations.get(redisKey)).thenReturn(null, envelope);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(false);
+
+        StatementReadModel readModel = service.get(statement.id());
+
+        assertThat(readModel.id()).isEqualTo(statement.id());
+        verify(statementGenerationService, never()).get(statement.id());
+    }
+
+    @Test
+    void rebuildLockLoserFailsOpenToDbWhenWinnerNeverPopulatesL2() {
+        // winner 太慢/已死：loser 自旋耗尽后 fail-open 自己回源，绝不无限等在锁上。
+        Statement statement = statement();
+        when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);   // L2 始终空
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(false);
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+
+        StatementReadModel readModel = service.get(statement.id());
+
+        assertThat(readModel.id()).isEqualTo(statement.id());
+        verify(statementGenerationService, times(1)).get(statement.id());
+    }
+
+    @Test
+    void rebuildLockAcquireFailureFailsOpenToDb() {
+        // 抢锁时 Redis 不可用：fail-open 回源，不让"击穿保护"本身变成 GET 的硬依赖。
+        Statement statement = statement();
+        when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenThrow(new RedisConnectionFailureException("redis down"));
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+
+        StatementReadModel readModel = service.get(statement.id());
+
+        assertThat(readModel.id()).isEqualTo(statement.id());
+        verify(statementGenerationService, times(1)).get(statement.id());
+    }
+
     private Statement statement() {
         return Statement.close(
                 UUID.fromString("11111111-1111-1111-1111-111111111111"),
@@ -185,5 +256,9 @@ class StatementReadServiceTest {
 
     private String redisKey(UUID statementId) {
         return "mini-card:cache:statement-read-model-v2:" + statementId;
+    }
+
+    private String rebuildLockKey(UUID statementId) {
+        return "mini-card:cache:statement-read-model-v2:rebuild-lock:" + statementId;
     }
 }

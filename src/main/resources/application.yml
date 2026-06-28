@@ -184,6 +184,17 @@ statement:
     # 只需活到第一个新鲜 reader 用真实值替换墓碑为止，所以远短于 remote-ttl。
     # 取值要 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞。
     tombstone-ttl: 10s
+    # 热点 key 重建锁，防缓存击穿(cache breakdown / stampede)：L2 miss 时用一把跨 pod 的 Redis 锁
+    # (SET NX PX) 做 single-flight，只有 winner 回源 DB，其余 pod 等它填好 L2 后复用，不重复打库。
+    # 它是 best-effort 优化：抢锁失败/超时/Redis 故障一律 fail-open 回源，不是 GET 的硬依赖。
+    rebuild-lock-enabled: true
+    # 锁持有时间，要 >= 一次"回源 DB + 写回 L2"的正常耗时，否则 winner 没写完锁就过期、放第二个进来；
+    # 同时也是持锁者崩溃后的自动释放上限。
+    rebuild-lock-ttl: 2s
+    # loser 等 winner 填好 L2 的最大自旋次数 × 间隔 = 请求最多被这把锁阻塞多久（这里 5×20ms=100ms 封顶）。
+    # 超过后 fail-open 自己回源，绝不让请求无限等在锁上。
+    rebuild-lock-wait-attempts: 5
+    rebuild-lock-wait-interval: 20ms
     broadcast:
       # 跨 pod L1 失效广播（Redis Pub/Sub）。默认关闭：单实例/测试不需要，跨 pod L1 由 local-ttl 兜底。
       # 开启后，还款 after-commit 会 PUBLISH 一条失效消息，所有 pod 的订阅者清各自 Caffeine L1，

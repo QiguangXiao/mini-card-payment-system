@@ -12,6 +12,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -42,6 +43,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * 这里 evict 不再 delete，而是写一个带版本的<strong>墓碑</strong>(版本地板)；读回填和墓碑写都走同一段
  * Lua CAS（仅当 incoming.version >= stored.version 或不存在才写），于是旧版本的迟到写被地板挡下。
  * 版本取 paidAmount 的 minor units（本域单调非减）。详见 docs/cache-invalidation-broadcast-cn.md 第 3 节。</p>
+ *
+ * <p><strong>热点 key 重建锁防缓存击穿(cache breakdown / stampede)</strong>：当一个热点 statement 的 L2
+ * entry 过期，每个 pod 都会有线程同时 miss 并回源 MySQL 重建同一份 read model——Caffeine 的 single-flight
+ * 只能挡住同 JVM 内的并发，挡不住跨 pod。这里在 L2 miss 后用一把跨 pod 的 Redis 重建锁
+ * (`SET key token NX PX`) 做<strong>分布式 single-flight</strong>：只有抢到锁的 pod 回源 DB 并写回 L2，
+ * 其余 pod 短暂自旋等待后直接复用刚写好的 L2，不重复打库。锁是 best-effort 的<strong>优化</strong>而非
+ * 正确性依赖：抢锁失败/超时/Redis 故障一律 fail-open 回源（退化回原始行为，DB 仍是 source of truth）。
+ * 正因为被保护的动作（只读重建 + CAS 写回）本身幂等，这里不需要 fencing token——锁偶尔不互斥最坏只是
+ * 多一次回源，不会破坏数据；fencing token 只在锁保护"对共享可变状态的非幂等副作用"时才必要。</p>
  */
 @Service
 @Slf4j
@@ -51,6 +61,9 @@ public class StatementReadService {
     // 不兼容，所以 bump 到 v2；旧 v1 key 让它自然按 TTL 过期，避免新代码误读旧格式。
     private static final String CACHE_NAME = "statement-read-model-v2";
     private static final String REDIS_KEY_PREFIX = "mini-card:cache:" + CACHE_NAME + ":";
+    // 重建锁 key 与缓存 value 分开命名，避免占用同一个 key、互相覆盖。
+    private static final String REBUILD_LOCK_KEY_PREFIX = "mini-card:cache:" + CACHE_NAME + ":rebuild-lock:";
+    private static final String REBUILD_LOCK_METRIC = "statement.read_cache.rebuild_lock";
 
     // L2 value 信封格式：<version>|<payload>。
     //   - 真实值： "<version>|<read model JSON>"
@@ -76,10 +89,23 @@ public class StatementReadService {
             Long.class
     );
 
+    // 重建锁的安全释放：仅当 key 当前值 == 自己写入的 token 时才 DEL。
+    // counterfactual：直接 DEL 可能误删"我超时后、别人刚抢到"的那把锁（经典误删他人锁 bug）。
+    // GET + DEL 必须原子，所以放进一段 Lua；KEYS[1]=lockKey，ARGV[1]=token，返回删除数(1/0)。
+    private static final RedisScript<Long> RELEASE_REBUILD_LOCK_SCRIPT = RedisScript.of(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
+                    + "  return redis.call('DEL', KEYS[1])\n"
+                    + "else\n"
+                    + "  return 0\n"
+                    + "end\n",
+            Long.class
+    );
+
     private final StatementGenerationService statementGenerationService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final StatementReadCacheProperties properties;
+    private final MeterRegistry meterRegistry;
     // 跨 pod L1 失效广播。默认 no-op；开启后走 Redis Pub/Sub，让其他 pod 也清各自 L1。
     private final StatementReadCacheBroadcaster broadcaster;
     // L1 是每个 JVM 自己的本地内存 cache，速度快但不跨 pod 共享。
@@ -91,12 +117,14 @@ public class StatementReadService {
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
             StatementReadCacheProperties properties,
+            MeterRegistry meterRegistry,
             StatementReadCacheBroadcaster broadcaster
     ) {
         this.statementGenerationService = statementGenerationService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
         this.broadcaster = broadcaster;
         this.localCache = Caffeine.newBuilder()
                 // maximumSize 是生产 cache 的基本护栏：没有上限时，热点或恶意 key 会吃满 JVM heap。
@@ -151,11 +179,97 @@ public class StatementReadService {
         if (remote != null) {
             return remote;
         }
-        // L1/L2 都 miss 才回源 MySQL。这里调用原来的 application service，保持 source of truth 仍在 DB。
+        // L1/L2 都 miss。直接回源会有缓存击穿风险：热点 key 过期瞬间每个 pod 都放线程砸向 DB。
+        // 用跨 pod 重建锁做 single-flight；关闭时退回最朴素的"各自回源"。
+        if (!properties.rebuildLockEnabled()) {
+            return rebuildFromDb(id);
+        }
+        return rebuildWithSingleFlight(id);
+    }
+
+    /**
+     * 回源 MySQL 重建 read model 并写回 L2。是"真正打库"的唯一入口。
+     *
+     * <p>保持 source of truth 仍在 DB；写回 L2 后，本次返回值会由 Caffeine 自动放进 L1。</p>
+     */
+    private StatementReadModel rebuildFromDb(UUID id) {
         StatementReadModel loaded = StatementReadModel.from(statementGenerationService.get(id));
-        // 写回 Redis 后，本次返回值会由 Caffeine 自动放进 L1。
         writeRedis(id, loaded);
         return loaded;
+    }
+
+    /**
+     * 跨 pod single-flight：只有抢到 Redis 重建锁的请求回源 DB，其余请求等它把 L2 填好后复用。
+     *
+     * <p>锁是 best-effort 优化，不是正确性依赖：任何一步失败都 fail-open 回源，绝不让 GET 卡死或失败。</p>
+     */
+    private StatementReadModel rebuildWithSingleFlight(UUID id) {
+        String lockKey = rebuildLockKey(id);
+        // token 唯一，用于"只释放自己持有的那把锁"。
+        String token = UUID.randomUUID().toString();
+        Boolean acquired;
+        try {
+            // SET <lockKey> <token> NX PX <ttl>：NX 保证全局只有一个 winner；PX(TTL) 保证持锁者崩溃时
+            // 锁能自动过期，不会把热点 key 永久锁死——这正是必须带 TTL、不能用裸 SETNX 的原因。
+            acquired = redisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, token, properties.rebuildLockTtl());
+        } catch (RuntimeException exception) {
+            // 抢锁这步 Redis 就不可用：fail-open 直接回源，别让"击穿保护"本身变成 GET 的硬依赖。
+            meterRegistry.counter(REBUILD_LOCK_METRIC, "outcome", "error").increment();
+            log.warn("statement_read_cache_rebuild_lock_error key={} fallback=db", lockKey, exception);
+            return rebuildFromDb(id);
+        }
+
+        if (Boolean.TRUE.equals(acquired)) {
+            // winner：唯一回源者。无论成功失败都要释放锁，否则要等 TTL 才放下一个重建者进来。
+            meterRegistry.counter(REBUILD_LOCK_METRIC, "outcome", "winner").increment();
+            try {
+                return rebuildFromDb(id);
+            } finally {
+                releaseRebuildLock(lockKey, token);
+            }
+        }
+
+        // loser：别人正在重建。短暂自旋等 winner 把 L2 填好再复用，避免自己也打 DB。
+        for (int attempt = 0; attempt < properties.rebuildLockWaitAttempts(); attempt++) {
+            if (!sleepBeforeRebuildRetry()) {
+                break; // 被中断：不吞中断状态，退出去走 fail-open
+            }
+            StatementReadModel populated = readRedis(id);
+            if (populated != null) {
+                meterRegistry.counter(REBUILD_LOCK_METRIC, "outcome", "contended_hit").increment();
+                return populated;
+            }
+        }
+        // winner 太慢/持锁者已死/L2 仍空：fail-open 自己回源，绝不让用户请求无限等在一把锁上。
+        // 此时可能 >1 个 pod 同时回源，但这只是"退化回原始行为"，正确性不受影响。
+        meterRegistry.counter(REBUILD_LOCK_METRIC, "outcome", "fallback_db").increment();
+        log.debug("statement_read_cache_rebuild_wait_exhausted key={} fallback=db", lockKey);
+        return rebuildFromDb(id);
+    }
+
+    private void releaseRebuildLock(String lockKey, String token) {
+        try {
+            redisTemplate.execute(RELEASE_REBUILD_LOCK_SCRIPT, List.of(lockKey), token);
+        } catch (RuntimeException exception) {
+            // 释放失败不影响正确性：锁会在 PX TTL 到点后自动消失，最多让下一个重建者多等一会儿。
+            log.warn("statement_read_cache_rebuild_unlock_failed key={} action=rely_on_ttl", lockKey, exception);
+        }
+    }
+
+    /** @return true 正常睡完；false 被中断（已恢复中断标志，调用方应停止自旋）。 */
+    private boolean sleepBeforeRebuildRetry() {
+        try {
+            Thread.sleep(properties.rebuildLockWaitInterval().toMillis());
+            return true;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private String rebuildLockKey(UUID id) {
+        return REBUILD_LOCK_KEY_PREFIX + Objects.requireNonNull(id, "statement id must not be null");
     }
 
     private StatementReadModel readRedis(UUID id) {
