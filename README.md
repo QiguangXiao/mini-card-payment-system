@@ -60,6 +60,10 @@ questions grounded in this project.
 See [PayPay Card JD Fit Guide](docs/paypay-card-jd-fit-cn.md) for a JD-to-project
 evidence map, prioritized gap analysis, and answer templates tied to this
 project.
+See [PayPay Card JD Alignment Review](docs/paypay-card-jd-alignment-review-cn.md)
+for an opinionated, independent assessment: what is already strong, what is
+over-invested, what to strengthen now versus defer, and an interview-prep plan
+for the work that lives outside this project.
 See [High Traffic System Design Notes](docs/high-traffic-system-design-cn.md)
 for authorization hot-path capacity analysis, bottleneck diagnosis, load-test
 scenarios, rate limiting, backpressure, cache/Kafka degradation, and production
