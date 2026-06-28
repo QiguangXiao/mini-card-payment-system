@@ -37,8 +37,13 @@ configuration binding, transactions, schedulers, MyBatis, Kafka, cache,
 Feign/Resilience4j, and Java language habits used in this project.
 See [Authorization Design](docs/authorization-design.md) for the aggregate,
 transaction, idempotency, and concurrency decisions.
-See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
-consumer idempotency, partition ordering, and failure-recovery decisions.
+See [Events, Outbox, Inbox & Kafka](docs/events-outbox-inbox-kafka-cn.md) for the
+transactional outbox (dual-write, claim/publish/finalize/recover), at-least-once
+delivery, consumer double-idempotency (Inbox + business key), the Kafka config
+reference, partition ordering, per-context DLTs, the real gaps (retention, DEAD
+observability, version negotiation), and hardcore interview Q&A. (Merged from the
+former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
+notes, now archived under docs/archive/.)
 See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
 side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
 producer/consumer contexts, platform execution resources, and why their names
@@ -46,10 +51,6 @@ are similar or intentionally different.
 See [Statement Job Design](docs/statement-job-design-cn.md) for the flattened
 sharded claimable-job design, the before/after of dropping the parent batch,
 and a comparison with the DelayJob and Outbox job implementations.
-See [Event / Outbox / Messaging Design (Claude)](docs/event-outbox-messaging-design-claude-cn.md)
-for the end-to-end producer→outbox→Kafka→consumer→inbox implementation, its real
-strengths and gaps (retention, DEAD observability, version negotiation), and a
-hardcore interview Q&A on delivery semantics, idempotency, and ordering.
 See [Claimable Job Families Comparison (Claude)](docs/claimable-job-families-comparison-claude-cn.md)
 for a side-by-side comparison of the DelayJob, Outbox, and StatementJob queues and
 their executors (claimer/poller/worker/recoverer/dispatcher): the shared

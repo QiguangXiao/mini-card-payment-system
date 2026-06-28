@@ -38,7 +38,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `kafka-outbox-design.md` + `kafka-learning-cn.md` + `event-outbox-messaging-design-claude-cn.md` | ⏳ | 拟合并为一份"事件 / Outbox / Inbox / Kafka"文档 |
+| [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐代码（3 个 gap 仍存在、新增 StatementNotificationListener），保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
 | `async-workflows-comparison-cn.md` + `claimable-job-families-comparison-claude-cn.md` + `statement-job-design-cn.md` | ⏳ | 拟合并为一份"claimable job（DelayJob/Outbox/StatementJob）"文档 |
 | `notification-delivery-design-cn.md` | ⏳ | 通知真实投递（保留独立，对齐代码） |
 
@@ -91,3 +91,6 @@
 - `cache-snapshot-design-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `cache-invalidation-broadcast-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `distributed-cache-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
+- `kafka-outbox-design.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
+- `kafka-learning-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
+- `event-outbox-messaging-design-claude-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
