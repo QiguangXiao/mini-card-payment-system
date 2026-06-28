@@ -65,7 +65,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `jvm-monitoring-learning-cn.md` + `thread-runtime-learning-cn.md` | ⏳ | 拟合并为一份"JVM + 线程模型 + 排查"文档 |
+| [`jvm-threads-runtime-cn.md`](jvm-threads-runtime-cn.md) | ✅ | **已合并** `jvm-monitoring-learning` + `thread-runtime-learning`；去掉两份重复的本地快照/线程状态/Runbook/Q&A（2307→~360 行），保留全部知识点+反向事实；对齐 `statement-batch`→`billing-cycle`+`statement-job` 线程池 |
 | `high-traffic-system-design-cn.md` + `production-runtime-sizing-cn.md` | ⏳ | 拟合并为一份"高流量 + 容量配置"文档 |
 | `aws-ecs-deployment-cn.md` | ⏳ | 保留，对齐现状、裁掉与高流量/容量重复的部分 |
 
@@ -100,3 +100,5 @@
 - `mybatis-sql-learning-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
 - `database-migration-liquibase-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
 - `db-schema-sync-2026-06-21-cn.md` → 一次性日志，直接归档（未并入）
+- `jvm-monitoring-learning-cn.md` → 合并进 `jvm-threads-runtime-cn.md`
+- `thread-runtime-learning-cn.md` → 合并进 `jvm-threads-runtime-cn.md`

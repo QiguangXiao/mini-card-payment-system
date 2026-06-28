@@ -127,14 +127,13 @@ GET /actuator/metrics/jvm.gc.pause
 GET /actuator/metrics/jvm.threads.live
 ```
 
-See [JVM Core, GC, and Monitoring Notes](docs/jvm-monitoring-learning-cn.md) for
-the interview-oriented explanation of JVM memory structure, request-allocation
-growth, GC, threads, liveness/readiness, production troubleshooting, and why JVM
-diagnostics stay outside the public business API.
-See [Thread Runtime Notes](docs/thread-runtime-learning-cn.md) for the
-project-specific runtime thread model covering Tomcat request threads,
-schedulers, worker pools, Kafka listeners, OS thread mapping, thread states, and
-production troubleshooting.
+See [JVM, Threads & Runtime Notes](docs/jvm-threads-runtime-cn.md) for the
+interview-oriented explanation of JVM memory structure, request-allocation
+growth and GC, the full thread model (Tomcat request threads, scheduler/worker
+pools, Kafka listeners, OS thread mapping, thread states, MySQL row-lock vs Java
+BLOCKED), liveness/readiness, the monitoring/diagnostics commands, and a
+production troubleshooting runbook. (Merged from the former jvm-monitoring and
+thread-runtime notes, now archived under docs/archive/.)
 
 Create an authorization:
 
