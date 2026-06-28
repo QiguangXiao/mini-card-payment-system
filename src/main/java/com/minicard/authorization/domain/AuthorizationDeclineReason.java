@@ -20,6 +20,8 @@ public enum AuthorizationDeclineReason {
     CARD_EXPIRED,
     /** 本地 velocity 风控拒绝。 */
     RISK_VELOCITY_EXCEEDED,
+    /** 长期风险画像拒绝。 */
+    RISK_HISTORICAL_PROFILE,
     /** 金额过高触发风控。 */
     RISK_HIGH_AMOUNT,
     /** 地理位置不匹配触发风控。 */

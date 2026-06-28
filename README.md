@@ -12,7 +12,8 @@ Backend Engineer interview.
 - Spring Boot 3.x
 - Gradle with Gradle Wrapper
 - MySQL 8.4 LTS with Docker Compose
-- Redis with Caffeine L1 for low-risk read model caching
+- Redis for risk velocity sliding-window counting and statement GET L2 cache
+- Caffeine L1 for statement GET read-model cache
 - MyBatis for primary repository implementations
 - JdbcTemplate retained for one focused comparison example
 - Apache Kafka with Transactional Outbox event publication
@@ -23,9 +24,9 @@ Backend Engineer interview.
 The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
-checks, minimal Ledger projection, Kafka-based event delivery, Transactional
-Outbox, Consumer Inbox, DelayJob scheduling, and Caffeine L1 + Redis L2 snapshot
-caching for statement and card snapshots.
+checks with Redis velocity counting, minimal Ledger projection, Kafka-based event
+delivery, Transactional Outbox, Consumer Inbox, DelayJob scheduling, and
+Caffeine L1 + Redis L2 cache-aside for statement GET read models.
 
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
@@ -42,6 +43,17 @@ See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
 side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
 producer/consumer contexts, platform execution resources, and why their names
 are similar or intentionally different.
+See [Statement Job Design](docs/statement-job-design-cn.md) for the flattened
+sharded claimable-job design, the before/after of dropping the parent batch,
+and a comparison with the DelayJob and Outbox job implementations.
+See [Event / Outbox / Messaging Design (Claude)](docs/event-outbox-messaging-design-claude-cn.md)
+for the end-to-end producer→outbox→Kafka→consumer→inbox implementation, its real
+strengths and gaps (retention, DEAD observability, version negotiation), and a
+hardcore interview Q&A on delivery semantics, idempotency, and ordering.
+See [Claimable Job Families Comparison (Claude)](docs/claimable-job-families-comparison-claude-cn.md)
+for a side-by-side comparison of the DelayJob, Outbox, and StatementJob queues and
+their executors (claimer/poller/worker/recoverer/dispatcher): the shared
+claim-lease-recover model, the deliberate differences, real gaps, and interview Q&A.
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
@@ -52,6 +64,9 @@ See [High Traffic System Design Notes](docs/high-traffic-system-design-cn.md)
 for authorization hot-path capacity analysis, bottleneck diagnosis, load-test
 scenarios, rate limiting, backpressure, cache/Kafka degradation, and production
 interview answers.
+See [Production Runtime Sizing Notes](docs/production-runtime-sizing-cn.md) for
+Tomcat thread, Hikari pool, JVM heap/GC, worker pool, Kafka concurrency, and
+small/medium/large production configuration trade-offs.
 See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
 beginner-friendly but production-oriented map from this project's Docker Compose
 shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
@@ -65,9 +80,11 @@ scope, and request-by-request examples.
 See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
 issuer-side business concepts such as authorization, presentment, statement,
 payment, refund, dispute, ledger, and reconciliation.
-See [Snapshot Cache Design](docs/cache-snapshot-design-cn.md) for the Caffeine
-L1 + Redis L2 cache design, naming choices, TTL/evict behavior, and why only
-low-risk snapshots are cached.
+See [Distributed Cache, Rate Limiting & Lua](docs/distributed-cache-cn.md) for
+the velocity sliding-window limiter, why card snapshot cache was removed, how
+statement GET uses L1/L2 cache-aside, rate-limiting algorithms, Lua atomicity,
+Redisson build-vs-buy, general cache design rules (cache-aside,
+penetration/breakdown/avalanche), and hardcore interview Q&A.
 See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
 for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
 topics.
@@ -151,21 +168,24 @@ Amounts use a `Money` value object backed by Java `BigDecimal` and MySQL
 approved or declined by a domain policy. Approved authorizations reserve credit
 from a locked `CreditAccount`. Presentment posting later moves money from
 `reserved_amount` to `posted_balance` and creates a posted `CardTransaction`.
-Statement generation snapshots posted transactions into `statement_items`, and
+Statement generation snapshots posted transactions into `statement_lines`, and
 repayment reduces `posted_balance` while advancing statement payment status.
 Minimal Ledger then consumes posted transaction and repayment events to record
 append-only internal accounting entries.
-The cache layer stores only low-risk snapshots: `GET /api/statements/{id}` uses
-a cached statement read model, and authorization/posting/expiry use a cached
-card snapshot. Caffeine handles short-lived in-process hits, Redis shares a
-TTL-based L2 cache across app instances, and repayment evicts the cached
-statement after commit.
+`GET /api/statements/{id}` uses a small statement read-model cache: Caffeine is
+the per-JVM L1 and Redis is the cross-instance L2. Repayment updates the MySQL
+source of truth first, then evicts the statement read cache after transaction
+commit. Card lookup remains direct MyBatis because card snapshot stale data can
+affect authorization decisions and the real hot-path bottleneck is still the
+locked credit account row. Redis is also used for the risk velocity
+sliding-window counter, where every authorization request benefits from avoiding
+a recent-count query on MySQL.
 
 A separate `Card` model validates card lifecycle and maps cards to accounts,
 allowing multiple cards to share one credit limit. The Risk module checks local
 velocity, high amount, merchant, and geolocation rules before calling a
-simulated external risk service protected by timeout, fallback, and a circuit
-breaker. Authorization reversal, refund, dispute/chargeback, production-grade
+simulated external risk service protected by timeout, semaphore bulkhead,
+fallback, and a circuit breaker. Authorization reversal, refund, dispute/chargeback, production-grade
 double-entry ledger, and reconciliation flows are deliberately deferred learning
 topics.
 
@@ -220,8 +240,9 @@ mini-card.statement-events.v1
 mini-card.repayment-events.v1
 ```
 
-Local Redis is available at `localhost:6379`. It is used as the L2 cache for
-statement read models and card snapshots; Caffeine remains the per-JVM L1 cache.
+Local Redis is available at `localhost:6379`. The current application uses it
+for the risk velocity sliding-window counter and as the L2 cache for statement
+GET read models; Caffeine remains the per-JVM L1 for that statement cache.
 
 Describe a topic or inspect events:
 

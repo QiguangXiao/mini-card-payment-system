@@ -13,54 +13,35 @@ class NotificationTest {
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");
 
     @Test
-    void createsPostedNotificationTypeFromAuthorizationEvent() {
+    void createsImmutableIntentFromEvent() {
+        UUID sourceEventId = UUID.randomUUID();
         Notification notification = Notification.requestFromEvent(
-                UUID.randomUUID(),
+                sourceEventId,
                 NotificationSubjectType.CARD_TRANSACTION,
-                UUID.randomUUID().toString(),
+                "txn-1",
                 "card-123",
                 NotificationType.CARD_TRANSACTION_POSTED,
                 NOW
         );
 
+        // 通知退回纯意图：只携带"发给谁、就哪个事实、发哪种通知"，投递状态在 NotificationDelivery。
+        assertThat(notification.sourceEventId()).isEqualTo(sourceEventId);
         assertThat(notification.subjectType()).isEqualTo(NotificationSubjectType.CARD_TRANSACTION);
+        assertThat(notification.subjectId()).isEqualTo("txn-1");
+        assertThat(notification.recipientKey()).isEqualTo("card-123");
         assertThat(notification.type()).isEqualTo(NotificationType.CARD_TRANSACTION_POSTED);
-        assertThat(notification.status()).isEqualTo(NotificationStatus.PENDING);
+        assertThat(notification.createdAt()).isEqualTo(NOW);
     }
 
     @Test
-    void exhaustsDeliveryAttemptsInsideAggregate() {
-        Notification notification = notification();
-
-        notification.recordDeliveryFailure("provider timeout", 2, NOW.plusSeconds(1));
-        notification.recordDeliveryFailure("provider timeout", 2, NOW.plusSeconds(2));
-
-        assertThat(notification.status()).isEqualTo(NotificationStatus.FAILED);
-        assertThat(notification.deliveryAttempts()).isEqualTo(2);
-        assertThatThrownBy(() -> notification.markSent(NOW.plusSeconds(3)))
-                .isInstanceOf(IllegalStateException.class);
-    }
-
-    @Test
-    void successfulDeliveryIsIdempotent() {
-        Notification notification = notification();
-        Instant sentAt = NOW.plusSeconds(1);
-
-        notification.markSent(sentAt);
-        notification.markSent(NOW.plusSeconds(2));
-
-        assertThat(notification.status()).isEqualTo(NotificationStatus.SENT);
-        assertThat(notification.sentAt()).isEqualTo(sentAt);
-    }
-
-    private Notification notification() {
-        return Notification.requestFromEvent(
+    void rejectsBlankRecipientKey() {
+        assertThatThrownBy(() -> Notification.requestFromEvent(
                 UUID.randomUUID(),
                 NotificationSubjectType.AUTHORIZATION,
-                UUID.randomUUID().toString(),
-                "card-123",
+                "auth-1",
+                "  ",
                 NotificationType.AUTHORIZATION_APPROVED,
                 NOW
-        );
+        )).isInstanceOf(IllegalArgumentException.class);
     }
 }

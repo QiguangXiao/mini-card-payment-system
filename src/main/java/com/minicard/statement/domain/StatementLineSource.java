@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 
 /**
  * 生成 statement line 时需要的消费事实。

@@ -8,47 +8,45 @@
                type="com.minicard.statement.infrastructure.mybatis.StatementJobRow">
         <constructor>
             <arg column="id" javaType="java.lang.String"/>
-            <arg column="batch_id" javaType="java.lang.String"/>
-            <arg column="shard_no" javaType="int"/>
-            <arg column="shard_count" javaType="int"/>
+            <arg column="period_start" javaType="java.time.LocalDate"/>
+            <arg column="period_end" javaType="java.time.LocalDate"/>
+            <arg column="due_date" javaType="java.time.LocalDate"/>
+            <!-- "_int" 别名才是基本类型 int；"int" 在 MyBatis 里指向 Integer，
+                 与 StatementJobRow 的基本类型 int 字段不匹配，会在读结果时抛 NoSuchMethodException。 -->
+            <arg column="shard_no" javaType="_int"/>
+            <arg column="shard_count" javaType="_int"/>
             <arg column="status" javaType="java.lang.String"/>
             <arg column="claimed_by" javaType="java.lang.String"/>
             <arg column="claimed_at" javaType="java.time.Instant"/>
             <arg column="claim_until" javaType="java.time.Instant"/>
-            <arg column="attempt_count" javaType="int"/>
-            <arg column="processed_account_count" javaType="int"/>
-            <arg column="generated_statement_count" javaType="int"/>
-            <arg column="skipped_account_count" javaType="int"/>
-            <arg column="failed_account_count" javaType="int"/>
+            <arg column="attempt_count" javaType="_int"/>
+            <arg column="processed_account_count" javaType="_int"/>
+            <arg column="generated_statement_count" javaType="_int"/>
+            <arg column="skipped_account_count" javaType="_int"/>
+            <arg column="failed_account_count" javaType="_int"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="updated_at" javaType="java.time.Instant"/>
             <arg column="last_error" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
 
-    <resultMap id="statementJobStatusSummaryRowMap"
-               type="com.minicard.statement.infrastructure.mybatis.StatementJobStatusSummaryRow">
-        <constructor>
-            <arg column="total_count" javaType="int"/>
-            <arg column="pending_count" javaType="int"/>
-            <arg column="processing_count" javaType="int"/>
-            <arg column="done_count" javaType="int"/>
-            <arg column="dead_count" javaType="int"/>
-        </constructor>
-    </resultMap>
-
     <sql id="statementJobColumns">
-        id, batch_id, shard_no, shard_count, status, claimed_by, claimed_at,
-        claim_until, attempt_count, processed_account_count, generated_statement_count,
-        skipped_account_count, failed_account_count, created_at, updated_at, last_error
+        id, period_start, period_end, due_date, shard_no, shard_count, status,
+        claimed_by, claimed_at, claim_until, attempt_count, processed_account_count,
+        generated_statement_count, skipped_account_count, failed_account_count,
+        created_at, updated_at, last_error
     </sql>
 
+    <!-- INSERT IGNORE 让 cycle 创建幂等：scheduler 重复触发同一个 close date 时，
+         uk_statement_jobs_cycle_shard 会让重复分片成为 no-op，而不是抛 duplicate key。 -->
     <insert id="insert">
-        INSERT INTO statement_jobs (
+        INSERT IGNORE INTO statement_jobs (
             <include refid="statementJobColumns"/>
         ) VALUES (
             #{id},
-            #{batchId},
+            #{periodStart},
+            #{periodEnd},
+            #{dueDate},
             #{shardNo},
             #{shardCount},
             #{status},
@@ -109,16 +107,5 @@
             last_error = #{lastError,jdbcType=VARCHAR}
         WHERE id = #{id}
     </update>
-
-    <select id="summarizeByBatchId" resultMap="statementJobStatusSummaryRowMap">
-        SELECT
-            COUNT(*) AS total_count,
-            SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count,
-            SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END) AS processing_count,
-            SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END) AS done_count,
-            SUM(CASE WHEN status = 'DEAD' THEN 1 ELSE 0 END) AS dead_count
-        FROM statement_jobs
-        WHERE batch_id = #{batchId}
-    </select>
 
 </mapper>

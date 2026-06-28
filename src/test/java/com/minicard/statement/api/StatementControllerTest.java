@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
 import com.minicard.statement.application.StatementGenerationException;
 import com.minicard.statement.application.StatementGenerationService;

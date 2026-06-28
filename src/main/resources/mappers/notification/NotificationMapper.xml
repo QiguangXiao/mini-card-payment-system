@@ -6,15 +6,15 @@
 
     <insert id="insert">
         <!--
-          source_event_id 唯一键让通知创建具备第二道幂等保护。
-          sent_at/last_error 可能为 null；如果后续 DB 对 null 类型判断失败，需要显式加 jdbcType。
+          source_event_id 唯一键让通知创建具备第二道幂等保护（Inbox claim 之外的兜底）。
+          通知只表达意图；投递状态在 notification_deliveries，与本 INSERT 同事务批量写入。
         -->
         INSERT INTO notifications (
-            id, source_event_id, subject_type, subject_id, recipient_key, template, status,
-            delivery_attempts, last_error, sent_at, created_at, updated_at
+            id, source_event_id, subject_type, subject_id, recipient_key, notification_type,
+            created_at, updated_at
         ) VALUES (
-            #{id}, #{sourceEventId}, #{subjectType}, #{subjectId}, #{recipientKey}, #{template}, #{status},
-            #{deliveryAttempts}, #{lastError}, #{sentAt}, #{createdAt}, #{updatedAt}
+            #{id}, #{sourceEventId}, #{subjectType}, #{subjectId}, #{recipientKey}, #{type},
+            #{createdAt}, #{updatedAt}
         )
     </insert>
 

@@ -48,6 +48,9 @@ public class StatementController {
     @GetMapping("/{id}")
     // @PathVariable 由 Spring MVC 把路径文本转换成 UUID；格式错误会在 HTTP boundary 变成 400。
     // 如果先收 String 再手动 parse，错误处理容易散到 controller 里。
+    // GET 走 statement read cache：Controller 不关心 L1/L2 细节，只依赖一个查询服务。
+    // 这能避免把 cache key、Redis JSON、TTL 等技术细节泄漏到 HTTP adapter。
+    // 写路径仍更新 MySQL source of truth；还款提交后由 RepaymentService 注册 after-commit evict。
     public StatementResponse get(@PathVariable UUID id) {
         return StatementResponse.from(statementReadService.get(id));
     }

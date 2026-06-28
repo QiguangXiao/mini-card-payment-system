@@ -7,7 +7,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
 import lombok.Getter;

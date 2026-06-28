@@ -10,6 +10,8 @@ package com.minicard.risk.domain;
 public enum RiskDeclineReason {
     /** 短时间授权次数过多。 */
     VELOCITY_EXCEEDED,
+    /** 长期风险画像显示历史拒绝率过高。 */
+    HISTORICAL_RISK_PROFILE,
     /** 金额超过高风险阈值。 */
     HIGH_RISK_AMOUNT,
     /** 商户/持卡人地区不匹配。 */

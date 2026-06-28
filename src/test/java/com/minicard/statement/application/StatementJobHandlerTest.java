@@ -7,8 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import com.minicard.statement.domain.StatementBatch;
-import com.minicard.statement.domain.StatementBatchStatus;
 import com.minicard.statement.domain.StatementJob;
 import com.minicard.statement.domain.StatementJobExecutionResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,8 +21,9 @@ import static org.mockito.Mockito.when;
 class StatementJobHandlerTest {
 
     private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
-    private static final UUID BATCH_ID =
-            UUID.fromString("99999999-9999-9999-9999-999999999999");
+    private static final LocalDate PERIOD_START = LocalDate.parse("2026-06-01");
+    private static final LocalDate PERIOD_END = LocalDate.parse("2026-06-30");
+    private static final LocalDate DUE_DATE = LocalDate.parse("2026-07-27");
     private static final UUID GENERATED_ACCOUNT_ID =
             UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID SKIPPED_ACCOUNT_ID =
@@ -32,18 +31,15 @@ class StatementJobHandlerTest {
     private static final UUID RETRY_ACCOUNT_ID =
             UUID.fromString("33333333-3333-3333-3333-333333333333");
 
-    private StatementBatchRepository batchRepository;
     private StatementBillingRepository billingRepository;
     private StatementGenerationService statementGenerationService;
     private StatementJobHandler handler;
 
     @BeforeEach
     void setUp() {
-        batchRepository = mock(StatementBatchRepository.class);
         billingRepository = mock(StatementBillingRepository.class);
         statementGenerationService = mock(StatementGenerationService.class);
         handler = new StatementJobHandler(
-                batchRepository,
                 billingRepository,
                 statementGenerationService,
                 statementProperties()
@@ -52,8 +48,8 @@ class StatementJobHandlerTest {
 
     @Test
     void countsRejectedAccountsAsSkippedAndRetryableAccountsAsFailed() {
-        StatementJob job = StatementJob.pending(BATCH_ID, 0, 4, NOW);
-        when(batchRepository.findById(BATCH_ID)).thenReturn(batch());
+        // job 自带 cycle 信息；handler 用它推导分片账户的 JST 账期边界，不再读取 parent batch。
+        StatementJob job = StatementJob.pending(PERIOD_START, PERIOD_END, DUE_DATE, 0, 4, NOW);
         when(billingRepository.findAccountIdsForJob(
                 Instant.parse("2026-05-31T15:00:00Z"),
                 Instant.parse("2026-06-30T15:00:00Z"),
@@ -73,22 +69,6 @@ class StatementJobHandlerTest {
         assertThat(result.generatedStatementCount()).isEqualTo(1);
         assertThat(result.skippedAccountCount()).isEqualTo(1);
         assertThat(result.failedAccountCount()).isEqualTo(1);
-    }
-
-    private StatementBatch batch() {
-        return StatementBatch.restore(
-                BATCH_ID,
-                LocalDate.parse("2026-06-01"),
-                LocalDate.parse("2026-06-30"),
-                LocalDate.parse("2026-07-27"),
-                StatementBatchStatus.RUNNING,
-                3,
-                1000,
-                4,
-                NOW,
-                null,
-                null
-        );
     }
 
     private StatementProperties statementProperties() {

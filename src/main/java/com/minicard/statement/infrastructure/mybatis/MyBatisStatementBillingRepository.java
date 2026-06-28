@@ -5,7 +5,7 @@ import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.statement.application.StatementBillingRepository;
 import com.minicard.statement.domain.StatementLineSource;
 import lombok.RequiredArgsConstructor;

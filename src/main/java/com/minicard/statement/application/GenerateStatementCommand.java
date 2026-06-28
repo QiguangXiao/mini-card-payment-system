@@ -7,7 +7,7 @@ import java.util.UUID;
 /**
  * 生成账单 use case 的输入 command。
  *
- * <p>真实主路径由 StatementBatchService 根据固定 billing day 自动构造。
+ * <p>真实主路径由 StatementJobHandler 按 StatementCycleService 规划的 billing cycle 自动构造。
  * 手动 API 仍复用同一个 command，方便本地学习、测试和运营 backfill。</p>
  */
 public record GenerateStatementCommand(

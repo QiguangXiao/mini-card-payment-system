@@ -13,7 +13,7 @@ import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
 import com.minicard.card.domain.Card;

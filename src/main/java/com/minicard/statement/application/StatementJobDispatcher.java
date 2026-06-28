@@ -20,15 +20,19 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionOperations;
 
 /**
- * Statement jobs 的 claim、dispatch、recover 和 finalize 入口。
+ * Statement jobs 的 claim、dispatch、recover、finalize 入口。
  *
  * <p>关键词：账单任务调度, DB claim, worker pool, PROCESSING lease,
  * statement job dispatcher, FOR UPDATE SKIP LOCKED, 請求ジョブディスパッチャー
  * (せいきゅうジョブディスパッチャー)。</p>
  *
- * <p>为了适合 mini-card 学习项目，dispatcher 合并了原先 claimer/recoverer/worker/poller
- * 的技术动作；业务生成仍交给 StatementJobHandler 和 StatementGenerationService。
- * claim 是短事务，worker finalize 时会重新校验 lease，防止过期 worker 覆盖新状态。</p>
+ * <p>这是本项目 “claimable job” 的 reference dispatcher：一个类完成
+ * poll → 短事务 claim → 交给 worker pool 执行 → finalize（DONE/重试/DEAD）→ recover 卡死 job。
+ * 它刻意不像 delayjob 那样拆成 claimer/poller/worker/recoverer 四个类——合在一起更易读、易讲，
+ * 其他 domain 的 job 之后可以对齐成这个形状。</p>
+ *
+ * <p>claim 是短事务：PENDING → PROCESSING 提交后才把 job 交给 worker，生成账单期间不再持有 job row lock。
+ * finalize 时会重新校验 lease token，防止过期 worker 覆盖已被 recover/reclaim 的新状态。</p>
  */
 @Component
 @ConditionalOnProperty(
@@ -42,7 +46,6 @@ public class StatementJobDispatcher {
 
     private final StatementJobRepository jobRepository;
     private final StatementJobHandler handler;
-    private final StatementBatchService batchService;
     private final StatementProperties properties;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
@@ -84,7 +87,7 @@ public class StatementJobDispatcher {
             );
             for (StatementJob job : jobs) {
                 // PROCESSING 是 lease，不是永久拥有权。worker 宕机后必须放回 PENDING 或 DEAD。
-                // 如果没有 recover，账单分片可能永久卡住，batch 也永远无法完成。
+                // 如果没有 recover，账单分片可能永久卡在 PROCESSING，本期出账永远无法完成。
                 job.markFailed(
                         null,
                         "statement job processing lease expired",
@@ -93,13 +96,11 @@ public class StatementJobDispatcher {
                 );
                 jobRepository.updateExecutionState(job);
                 log.warn(
-                        "statement_job_recovered jobId={} batchId={} attempts={} status={}",
+                        "statement_job_recovered jobId={} attempts={} status={}",
                         job.id(),
-                        job.batchId(),
                         job.attemptCount(),
                         job.status()
                 );
-                batchService.completeBatchIfAllJobsFinished(job.batchId());
             }
         });
     }
@@ -112,7 +113,7 @@ public class StatementJobDispatcher {
         );
         for (StatementJob job : jobs) {
             // PENDING -> PROCESSING 在短事务内提交；commit 后 worker 才真正生成账单。
-            // 如果 claim 和业务处理放进一个大事务，1000 个账户的出账会放大 job row lock 时间。
+            // 如果 claim 和业务处理放进一个大事务，上千账户的出账会放大 job row lock 时间。
             job.markProcessing(workerId, now, properties.jobs().processingTimeoutSeconds());
             jobRepository.updateExecutionState(job);
         }
@@ -146,14 +147,12 @@ public class StatementJobDispatcher {
             job.markDone(result, Instant.now(clock));
             jobRepository.updateExecutionState(job);
             log.info(
-                    "statement_job_done jobId={} batchId={} processed={} generated={} skipped={}",
+                    "statement_job_done jobId={} processed={} generated={} skipped={}",
                     job.id(),
-                    job.batchId(),
                     job.processedAccountCount(),
                     job.generatedStatementCount(),
                     job.skippedAccountCount()
             );
-            batchService.completeBatchIfAllJobsFinished(job.batchId());
         });
     }
 
@@ -171,14 +170,12 @@ public class StatementJobDispatcher {
             job.markFailed(result, error, Instant.now(clock), properties.jobs().maxAttempts());
             jobRepository.updateExecutionState(job);
             log.warn(
-                    "statement_job_failed jobId={} batchId={} attempts={} status={}",
+                    "statement_job_failed jobId={} attempts={} status={}",
                     job.id(),
-                    job.batchId(),
                     job.attemptCount(),
                     job.status(),
                     exception
             );
-            batchService.completeBatchIfAllJobsFinished(job.batchId());
         });
     }
 

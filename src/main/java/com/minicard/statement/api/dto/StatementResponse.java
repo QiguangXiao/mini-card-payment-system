@@ -73,15 +73,7 @@ public record StatementResponse(
         );
     }
 
-    /**
-     * 从 cached read model 转成 API DTO。
-     *
-     * <p>GET 查询路径只需要展示字段，不需要 domain behavior；缓存 read model 可以降低
-     * Redis/L1 miss 后 DB 重建成本，同时避免把 aggregate 放进 cache。</p>
-     */
     public static StatementResponse from(StatementReadModel statement) {
-        // 这里和 from(Statement) 是 overload：Controller 按静态类型选择走 domain 还是 cached read model mapping。
-        // 如果把两种来源混成 Object/Map，编译器就帮不了我们检查字段是否齐全。
         return new StatementResponse(
                 statement.id(),
                 statement.creditAccountId(),

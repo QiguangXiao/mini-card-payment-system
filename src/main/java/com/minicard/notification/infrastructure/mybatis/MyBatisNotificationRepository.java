@@ -33,10 +33,6 @@ public class MyBatisNotificationRepository implements NotificationRepository {
                     notification.subjectId(),
                     notification.recipientKey(),
                     notification.type().name(),
-                    notification.status().name(),
-                    notification.deliveryAttempts(),
-                    notification.lastError(),
-                    notification.sentAt(),
                     notification.createdAt(),
                     notification.updatedAt()
             )) == 1;

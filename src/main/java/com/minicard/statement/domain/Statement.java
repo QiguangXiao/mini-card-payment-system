@@ -3,12 +3,16 @@ package com.minicard.statement.domain;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
+import com.minicard.statement.domain.event.StatementClosedDomainEvent;
+import com.minicard.statement.domain.event.StatementDomainEvent;
 import lombok.Getter;
 import lombok.experimental.Accessors;
 
@@ -26,6 +30,8 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public final class Statement {
 
+    private static final ZoneId JAPAN_BILLING_ZONE = ZoneId.of("Asia/Tokyo");
+
     private final UUID id;
     private final UUID creditAccountId;
     private final LocalDate periodStart;
@@ -40,6 +46,9 @@ public final class Statement {
     private final Instant createdAt;
     private Instant updatedAt;
     private final List<StatementLine> lines;
+    // Domain event buffer 只存在于内存中：只有 close() 新生成的账单会记录 statement.closed，
+    // restore() 重建历史账单不会重新发布事件，避免 reload 触发重复通知。
+    private final List<StatementDomainEvent> domainEvents = new ArrayList<>();
 
     private Statement(
             UUID id,
@@ -106,6 +115,20 @@ public final class Statement {
                 generatedAt,
                 snapshotLines
         );
+        // 在 close() 而不是 service 里记录事件：账单“已关账”是 Statement 自己的业务事实，
+        // 字段（total/minimum/dueDate）也都在这层语境内确定。StatementGenerationService 只负责在
+        // 真正 INSERT 成功后 pull 并 append 到 Outbox，幂等返回已有账单的路径不会重复发事件。
+        statement.domainEvents.add(new StatementClosedDomainEvent(
+                statementId,
+                creditAccountId,
+                periodStart,
+                periodEnd,
+                dueDate,
+                totalAmount,
+                minimumPaymentAmount,
+                snapshotLines.size(),
+                generatedAt
+        ));
         return statement;
     }
 
@@ -152,6 +175,14 @@ public final class Statement {
     public Money remainingAmount() {
         // remaining amount 是账单还款阶段的派生值，不单独落库，避免 total/paid/remaining 三者漂移。
         return totalAmount.subtract(paidAmount);
+    }
+
+    public List<StatementDomainEvent> pullDomainEvents() {
+        // Application service 在同一 transaction 内保存账单后调用这里。
+        // 返回 copy 并清空，避免同一张账单的 statement.closed 被重复 append 到 Outbox。
+        List<StatementDomainEvent> events = List.copyOf(domainEvents);
+        domainEvents.clear();
+        return events;
     }
 
     public void applyRepayment(Money amount, Instant paidAt) {
@@ -223,7 +254,9 @@ public final class Statement {
             if (!line.amount().currency().equals(totalAmount.currency())) {
                 throw new IllegalArgumentException("statement line currency differs");
             }
-            LocalDate postedDate = line.postedAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+            // 本项目固定按日本发卡业务的 JST billing day 切账期，而不是按 UTC 日期。
+            // 如果这里用 UTC，JST 月初 00:30 的交易会被误判成上一天，导致合法账单明细被拒绝。
+            LocalDate postedDate = line.postedAt().atZone(JAPAN_BILLING_ZONE).toLocalDate();
             if (postedDate.isBefore(periodStart) || postedDate.isAfter(periodEnd)) {
                 throw new IllegalArgumentException("statement line postedAt is outside billing period");
             }

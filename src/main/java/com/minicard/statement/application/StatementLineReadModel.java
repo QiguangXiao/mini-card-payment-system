@@ -7,13 +7,10 @@ import java.util.UUID;
 import com.minicard.statement.domain.StatementLine;
 
 /**
- * Statement line 的低风险 read model。
+ * Statement line 查询快照。
  *
- * <p>关键词：账单明细快照, 交易快照, ledger reference,
- * statement line read model, query projection, 明細スナップショット(めいさいスナップショット)。</p>
- *
- * <p>它只承载查询响应需要的快照字段，不包含 domain state transition 方法，
- * 因此可以安全放入 Caffeine/Redis。</p>
+ * <p>关键词：账单明细缓存, read model, transaction snapshot,
+ * statement line read model, 請求明細(せいきゅうめいさい)。</p>
  */
 public record StatementLineReadModel(
         UUID id,

@@ -1,5 +1,7 @@
 package com.minicard.risk.infrastructure.messaging;
 
+import java.util.Set;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.kafka.IntegrationEventReader;
@@ -22,6 +24,22 @@ public class AuthorizationRiskFeatureListener {
 
     private static final String AUTHORIZATION_APPROVED = "authorization.approved";
     private static final String AUTHORIZATION_DECLINED = "authorization.declined";
+
+    // 只有"独立于历史画像自身的真实风险拒绝"才计入 decline rate。其余一律不投影。
+    // 关键排除项（counterfactual）：
+    //  - RISK_HISTORICAL_PROFILE：投影自己的输出。计入会形成 越拒→拒绝率更高→越拒 的自我强化环，
+    //    再叠加终身累计不衰减，会把一张卡永久 brick。
+    //  - RISK_EXTERNAL_UNAVAILABLE：外部风控宕机时的 fail-closed，是基础设施故障而非对卡的风险判定；
+    //    计入会让一次供应商 brownout 把大量卡的历史拒绝率一起拉高。
+    //  - 额度/卡生命周期等运营类拒绝（INSUFFICIENT_AVAILABLE_CREDIT、CARD_NOT_FOUND、CARD_EXPIRED…）：
+    //    不是欺诈信号；把"刷爆额度"误当风险会无辜封死正常高消费用户。
+    private static final Set<String> RISK_PROFILE_DECLINE_REASONS = Set.of(
+            "RISK_VELOCITY_EXCEEDED",
+            "RISK_HIGH_AMOUNT",
+            "RISK_GEOLOCATION_MISMATCH",
+            "RISK_BLOCKED_MERCHANT",
+            "RISK_EXTERNAL_DECLINED"
+    );
 
     private final IntegrationEventReader eventReader;
     private final RiskFeatureProjectionService projectionService;
@@ -49,6 +67,12 @@ public class AuthorizationRiskFeatureListener {
             return;
         }
         if (AUTHORIZATION_DECLINED.equals(event.eventType())) {
+            // 先按 declineReason 过滤：非风险拒绝与画像自身造成的拒绝都不计入，断开自我强化环。
+            // 这些事件仍被正常消费/ack，只是不改变 projection，因此重复投递依然幂等(no-op)。
+            String declineReason = eventReader.requiredText(payload, "declineReason");
+            if (!RISK_PROFILE_DECLINE_REASONS.contains(declineReason)) {
+                return;
+            }
             projectionService.project(ProjectRiskFeatureCommand.declined(
                     event.eventId(),
                     eventReader.requiredText(payload, "cardId"),

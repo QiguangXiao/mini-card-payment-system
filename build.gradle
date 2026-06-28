@@ -36,18 +36,19 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     // AOP starter 是 @CircuitBreaker 等 proxy-based annotation 的运行基础。
     implementation 'org.springframework.boot:spring-boot-starter-aop'
-    // Redis starter 提供 StringRedisTemplate，用于 L2 snapshot cache。
+    // Redis starter 提供 StringRedisTemplate，用于分布式 velocity sliding-window 限流计数器。
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // Caffeine 提供 JVM 内 L1 cache；statement GET 用它配合 Redis L2 演示两级 cache-aside。
+    implementation 'com.github.ben-manes.caffeine:caffeine'
     // Liquibase 管理 schema 版本；如果只靠 schema.sql，持久化 volume 上的旧表不会自动迁移。
     implementation 'org.liquibase:liquibase-core'
     implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.4'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
     implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    implementation 'io.github.resilience4j:resilience4j-bulkhead'
     // Actuator 提供 health/metrics/info，业务 controller 不需要承担 JVM/依赖诊断职责。
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    // Caffeine 是 in-process L1 cache；Redis 是跨实例 L2 cache，二者职责不同。
-    implementation 'com.github.ben-manes.caffeine:caffeine'
     // Lombok 只参与编译期生成代码，运行时不需要打进 artifact。
     compileOnly 'org.projectlombok:lombok'
     runtimeOnly 'com.mysql:mysql-connector-j'
@@ -55,6 +56,16 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // spring-boot-testcontainers 提供 @ServiceConnection：容器一启动就把 jdbc/kafka 连接信息
+    // 注入 Spring，省掉手写 @DynamicPropertySource。版本由 Spring Boot BOM 统一管理。
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    // 真 MySQL 才能验证 SELECT ... FOR UPDATE / SKIP LOCKED 的行锁语义；H2 不支持 SKIP LOCKED。
+    testImplementation 'org.testcontainers:mysql'
+    // 真 Kafka broker（KRaft 模式 apache/kafka 镜像）验证 Outbox→Kafka→Inbox 往返与重复投递幂等。
+    testImplementation 'org.testcontainers:kafka'
+    // Awaitility 用于异步消息断言：轮询等待 consumer 把 inbox/projection 写好，避免 sleep 魔法数。
+    testImplementation 'org.awaitility:awaitility'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

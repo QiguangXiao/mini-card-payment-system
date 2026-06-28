@@ -38,13 +38,13 @@
 | constructor injection | 多数 service/config 类 | 依赖显式、不可变、测试友好 | field injection 隐藏依赖，测试和初始化顺序更脆 |
 | `@Transactional` | `AuthorizationService`、`PostingService` | 由 Spring proxy 开启事务 | self-invocation 或非 Spring 对象上不会生效 |
 | `TransactionOperations` | `OutboxWorker`、`DelayJobWorker` | 一个方法里显式拆多个事务 | worker finalize 容易和 handler transaction 混在一起 |
-| configuration properties | `AuthorizationPolicyProperties`、`SnapshotCacheProperties` | YAML 绑定为 typed record | `@Value` 分散，类型/默认值难统一管理 |
+| configuration properties | `AuthorizationPolicyProperties`、`StatementReadCacheProperties`、历史版本的 `SnapshotCacheProperties` | YAML 绑定为 typed record | `@Value` 分散，类型/默认值难统一管理 |
 | scheduler | `PollingSchedulerConfiguration`、pollers | 打开 `@Scheduled` 并指定调度线程池 | 任务可能不运行，或共享默认 scheduler 互相拖住 |
 | worker executor | `WorkerExecutorConfiguration` | 后台业务和 poller 分线程池 | scheduler 线程直接跑长任务，任务堆积时不可控 |
 | MyBatis mapper | `AuthorizationMapper` + XML | SQL 显式、参数绑定、row mapping | SQL 和业务混杂，或出现 SQL injection/映射错误 |
 | Kafka listener factory | `KafkaMessagingConfiguration` | 每个 consumer group 有独立 retry/DLT/concurrency | 一个上下文失败影响其他上下文，重试策略混乱 |
 | Jackson JSON | `IntegrationEventReader` | 统一解析 envelope、校验 headers/payload | 每个 listener 重复解析且失败行为不一致 |
-| Caffeine + Redis | `SnapshotCacheFactory`、`TwoLevelSnapshotCache` | L1 降本机热点，L2 跨实例共享 | Redis 故障或热点 miss 容易放大成 API/DB 压力 |
+| Caffeine + Redis | `StatementReadService` | L1 降本机热点，L2 跨实例共享 | Redis 故障或热点 miss 容易放大成 API/DB 压力 |
 | Feign + Resilience4j | `ExternalRiskGatewayAdapter` | 外部 HTTP 调用声明式代理和断路器 | 慢外部服务拖住授权请求和线程 |
 | Java record | DTO、row、event、properties | 不可变数据载体，构造器集中校验 | setter POJO 容易被修改，状态来源不清 |
 | `BigDecimal`/`Currency`/`Clock` | `Money`、services | 金额精度、币种类型、可测试时间 | `double` 精度错，字符串币种错，时间测试不稳定 |
@@ -306,7 +306,7 @@ APPROVED -> EXPIRED
 | --- | --- | --- |
 | `@Service` | `AuthorizationService`、`PostingService` | application use case / 业务编排 |
 | `@Component` | `IntegrationEventReader`、Outbox adapters | 通用组件或 adapter |
-| `@Repository` | `MyBatisAuthorizationRepository`、`CachedCardRepository` | persistence adapter |
+| `@Repository` | `MyBatisAuthorizationRepository`、历史版本的 `CachedCardRepository` | persistence adapter |
 
 如果省掉这些注解：
 
@@ -397,12 +397,12 @@ domain aggregate with behavior: write methods explicitly
 
 位置：
 
-- `CachedCardRepository`
+- 历史版本的 `CachedCardRepository`
 - `DelayJobPoller`
 - `OutboxPoller`
-- cache configuration
+- 历史版本的 cache configuration
 
-`@Primary` 用在 `CachedCardRepository`：
+`@Primary` 曾经用在 `CachedCardRepository`：
 
 ```text
 CardRepository has MyBatis implementation and cached decorator
@@ -521,7 +521,7 @@ transactionOperations.executeWithoutResult(status -> {
 
 ### 4.4 `TransactionSynchronization`
 
-位置：`TransactionAwareSnapshotCacheEvictor`
+位置：`StatementReadService.evictAfterCommit`
 
 写路径改了 MySQL 后，缓存删除要等事务 commit 后执行：
 
@@ -560,7 +560,8 @@ next GET unnecessarily rebuilds cache
 
 - `AuthorizationPolicyProperties`
 - `RiskProperties`
-- `SnapshotCacheProperties`
+- `StatementReadCacheProperties`
+- 历史版本的 `SnapshotCacheProperties`
 - `OutboxProperties`
 - `DelayJobProperties`
 - `KafkaTopicsProperties`
@@ -625,14 +626,14 @@ public class AuthorizationPolicyConfiguration {
 
 ### 5.3 compact constructor 做默认值
 
-位置：`SnapshotCacheProperties`
+位置：`StatementReadCacheProperties`
 
 ```java
-public SnapshotCacheProperties {
-    if (keyPrefix == null || keyPrefix.isBlank()) {
-        keyPrefix = DEFAULT_KEY_PREFIX;
-    }
-    caches = caches == null ? Map.of() : Map.copyOf(caches);
+public StatementReadCacheProperties {
+    localTtl = localTtl == null ? Duration.ofSeconds(30) : localTtl;
+    localMaximumSize = localMaximumSize == null ? 1000L : localMaximumSize;
+    remoteTtl = remoteTtl == null ? Duration.ofMinutes(5) : remoteTtl;
+    remoteTtlJitter = remoteTtlJitter == null ? Duration.ofSeconds(30) : remoteTtlJitter;
 }
 ```
 
@@ -1155,11 +1156,15 @@ public record IntegrationEvent(
 
 ## 9. 缓存、Redis 与 Caffeine
 
-更完整 cache 说明见 `docs/cache-snapshot-design-cn.md`。
+当前代码里的 Redis 主要用于 `RedisRiskVelocityCounter` 的 sliding-window velocity 计数，
+也作为 `StatementReadService` 的 statement GET L2 cache。Caffeine 是这个 statement cache
+的同 JVM L1，用来学习 cache-aside、TTL jitter、single-flight 和 after-commit eviction。
+更完整的取舍说明见
+`docs/distributed-cache-cn.md` 和 `docs/cache-snapshot-design-cn.md`。
 
 ### 9.1 为什么用 `StringRedisTemplate`
 
-位置：`SnapshotCacheFactory`
+位置：`StatementReadService`
 
 本项目 Redis L2 存 JSON string：
 
@@ -1196,15 +1201,14 @@ Spring Boot 已经配置了 Jackson 对 Java time、record、HTTP JSON 的支持
 
 ### 9.3 Caffeine L1
 
-位置：`SnapshotCacheFactory`
+位置：`StatementReadService`
 
 Caffeine 是 in-process cache：
 
 ```java
 Caffeine.newBuilder()
-        .maximumSize(spec.maximumSize())
-        .expireAfterWrite(spec.localTtl())
-        .recordStats()
+        .maximumSize(properties.localMaximumSize())
+        .expireAfterWrite(properties.localTtl())
         .build();
 ```
 
@@ -1221,7 +1225,7 @@ Caffeine.newBuilder()
 
 ### 9.4 Redis fallback
 
-位置：`TwoLevelSnapshotCache`
+位置：`StatementReadService`
 
 Redis 只是性能层，不是 source of truth。
 
@@ -1243,13 +1247,10 @@ cache outage
 
 ### 9.5 per-key single-flight
 
-位置：`TwoLevelSnapshotCache`
+位置：`StatementReadService`
 
 ```java
-Object lock = localLocks.computeIfAbsent(key, ignored -> new Object());
-synchronized (lock) {
-    ...
-}
+localCache.get(id, this::loadThroughRedis);
 ```
 
 作用：
@@ -1264,7 +1265,7 @@ others wait and reuse result
 
 如果没有它：
 
-- 热点 statement/card 同时过期。
+- 热点 statement 同时过期。
 - 多个 request thread 同时回源 MySQL。
 - 缓存 miss 被放大成 DB 突刺。
 
@@ -1272,7 +1273,7 @@ others wait and reuse result
 
 ### 9.6 `ThreadLocalRandom` 和 TTL jitter
 
-位置：`TwoLevelSnapshotCache.remoteTtlWithJitter`
+位置：`StatementReadService.remoteTtlWithJitter`
 
 TTL jitter 让不同 key 的过期时间错开。
 
@@ -2256,21 +2257,22 @@ setScale(2, RoundingMode.CEILING)
 
 最低还款可能少收一分钱。真实产品规则要看合同和监管要求；当前项目用 `CEILING` 是为了表达“最低还款 floor/rate 不应因为舍入低估”。
 
-### 14.21 `@Primary` 和 decorator coverage：Card cache
+### 14.21 `@Primary` 和 decorator coverage：历史 Card cache
 
 位置：
 
-- `CachedCardRepository`
+- 历史版本的 `CachedCardRepository`
 - `MyBatisCardRepository`
-- `CardSnapshotCacheConfiguration`
+- 历史版本的 `CardSnapshotCacheConfiguration`
 
-`CardRepository` 同时有 MyBatis 实现和 cache decorator。业务层应该注入 decorator：
+旧版本里 `CardRepository` 同时有 MyBatis 实现和 cache decorator。业务层应该注入 decorator：
 
 ```text
 CardRepository -> CachedCardRepository -> MyBatisCardRepository
 ```
 
-所以 `CachedCardRepository` 使用 `@Primary`。
+所以当时 `CachedCardRepository` 使用 `@Primary`。当前代码已经删除 Card snapshot cache，
+`CardRepository` 只有 `MyBatisCardRepository` 这一个实现，不需要 `@Primary`。
 
 如果没有 `@Primary`：
 
@@ -2279,7 +2281,8 @@ Spring sees two CardRepository beans
 dependency injection becomes ambiguous
 ```
 
-`@Qualifier("cardSnapshotCache")` 也很重要，因为 statement cache 和 card cache 都是 `SnapshotCache` 类型。
+旧版 `@Qualifier("cardSnapshotCache")` 也很重要，因为当时 statement cache 和 card cache
+都是 `SnapshotCache` 类型。当前实现只保留窄版 `StatementReadService`，不再需要这类 qualifier。
 
 如果不指定 qualifier：
 
@@ -2635,18 +2638,18 @@ covered Java files: 136 / 226 = 60.2%
 | Spring Boot / Gradle / YAML | 已覆盖 | starter、BOM、toolchain、env default、mapper-locations |
 | Web API / DTO | 已覆盖 | `@RestController`、`@Validated`、`@Valid`、record、nullable response |
 | Authorization | 高覆盖 | constructor injection、transaction proxy、configuration properties、Outbox adapter、expiry job、API response mapping、Locale.ROOT fingerprint |
-| Card | 高覆盖 | record snapshot、cache decorator、`@Primary`、Bean name、mapper proxy、row/domain separation |
+| Card | 高覆盖 | record snapshot（历史 cache 设计）、cache decorator（已删除）、`@Primary`、Bean name、mapper proxy、row/domain separation |
 | CreditAccount | 已补强 | aggregate 不用 `@Data`、row-lock mapper、repository port、derived available credit、Currency conversion |
 | Transaction / Presentment | 已补强 | `@Valid`、command compact constructor、`@Transactional`、CardTransaction 状态机、`<foreach>` batch update |
 | Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、Outbox adapter、repayment row/domain mapping |
-| Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、snapshot cache、repository duplicate 粒度 |
+| Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、statement read cache、repository duplicate 粒度 |
 | Notification | 高覆盖 | stable consumer name、fluent getter、eventType-before-payload、generic subject type、notification row/domain mapping |
 | Ledger | 高覆盖 | append-only mapper、Inbox idempotency、typed JSON parsing、`BigDecimal(String)`、source type enum |
 | Risk | 已补强 | Feign port、JdbcTemplate adapter、typed config、projection consumer name、atomic upsert、simulated external API |
 | Outbox | 完整覆盖 | properties/configuration/port/event/repository/mapper/claimer/worker/recoverer/XML、backoff、lease、ack/finalize |
 | Inbox | 完整覆盖 | consumer-level idempotency、insert-first claim、DuplicateKeyException -> false |
 | DelayJob | 高覆盖 | handler/repository/type/mapper/row/claim/recoverer/properties/domain/scheduler contract |
-| Cache | 已覆盖 | Caffeine L1、Redis L2、`StringRedisTemplate`、TTL jitter、single-flight、after-commit evict |
+| Cache | 已补强 | Caffeine L1、Redis L2、`StringRedisTemplate`、TTL jitter、single-flight、after-commit evict |
 | MyBatis XML | 已补强 | `#{}`、constructor mapping、`&lt;=`, `jdbcType`, `<foreach>`, upsert |
 
 按目录统计，合并覆盖大致是：
@@ -2683,7 +2686,7 @@ covered Java files: 136 / 226 = 60.2%
 4. 读 `AuthorizationMapper` 和 XML，理解 MyBatis proxy、`@Param`、constructor mapping、`#{}`。
 5. 读 `WorkerExecutorConfiguration`、`PollingSchedulerConfiguration`、`DelayJobPoller`，理解 scheduler 和 worker pool 分离。
 6. 读 `KafkaMessagingConfiguration`、`KafkaOutboxMessagePublisher`、`IntegrationEventReader`，理解 Kafka container、DLT、ack、JSON contract。
-7. 读 `SnapshotCacheFactory`、`TwoLevelSnapshotCache`、`TransactionAwareSnapshotCacheEvictor`，理解第三方 cache 和 transaction hook。
+7. 读 `StatementReadService`、`StatementReadCacheProperties` 和 `docs/cache-snapshot-design-cn.md`，理解第三方 cache、TTL jitter、single-flight 和 transaction hook；再读 `RedisRiskVelocityCounter` 理解 Redis velocity 计数。
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
 9. 读 `RequestNotificationService`、`RecordLedgerEntryService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
 10. 读 `OutboxEvent`、`DelayJob`、`OutboxEventMapper.xml`、`CardTransactionMapper.xml`，理解 backoff、XML escaping 和 MyBatis `<foreach>`。

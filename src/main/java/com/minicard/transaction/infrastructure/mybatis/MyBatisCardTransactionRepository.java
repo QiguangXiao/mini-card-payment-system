@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionBillingStatus;
 import com.minicard.transaction.domain.CardTransactionRepository;

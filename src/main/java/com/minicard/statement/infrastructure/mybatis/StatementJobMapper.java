@@ -30,6 +30,4 @@ public interface StatementJobMapper {
     StatementJobRow findByIdForUpdate(@Param("id") String id);
 
     int updateExecutionState(StatementJobRow row);
-
-    StatementJobStatusSummaryRow summarizeByBatchId(@Param("batchId") String batchId);
 }

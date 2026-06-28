@@ -7,7 +7,9 @@ import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
+import com.minicard.statement.domain.event.StatementClosedDomainEvent;
+import com.minicard.statement.domain.event.StatementDomainEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +41,36 @@ class StatementTest {
         assertThat(statement.items())
                 .hasSize(2)
                 .allSatisfy(item -> assertThat(item.statementId()).isEqualTo(statement.id()));
+    }
+
+    @Test
+    void recordsStatementClosedEventOnceAfterClose() {
+        UUID accountId = UUID.randomUUID();
+
+        Statement statement = Statement.close(
+                accountId,
+                LocalDate.parse("2026-06-01"),
+                LocalDate.parse("2026-06-30"),
+                LocalDate.parse("2026-07-27"),
+                List.of(transaction("ntx-001", "1000.00"), transaction("ntx-002", "500.00")),
+                money("1000.00"),
+                NOW
+        );
+
+        List<StatementDomainEvent> events = statement.pullDomainEvents();
+
+        assertThat(events).singleElement()
+                .isInstanceOfSatisfying(StatementClosedDomainEvent.class, closed -> {
+                    assertThat(closed.statementId()).isEqualTo(statement.id());
+                    assertThat(closed.creditAccountId()).isEqualTo(accountId);
+                    assertThat(closed.dueDate()).isEqualTo(LocalDate.parse("2026-07-27"));
+                    assertThat(closed.totalAmount().amount()).isEqualByComparingTo("1500.00");
+                    assertThat(closed.minimumPaymentAmount().amount()).isEqualByComparingTo("1000.00");
+                    assertThat(closed.transactionCount()).isEqualTo(2);
+                    assertThat(closed.occurredAt()).isEqualTo(NOW);
+                });
+        // pull 后清空：reload/二次 pull 不会让同一张账单重复发布 statement.closed。
+        assertThat(statement.pullDomainEvents()).isEmpty();
     }
 
     @Test
@@ -82,6 +114,30 @@ class StatementTest {
     }
 
     @Test
+    void acceptsTransactionOnPeriodStartInBillingTimezone() {
+        StatementLineSource transaction = transactionAt(
+                "ntx-jst-start",
+                "500.00",
+                // UTC では 5/31 だが、JST の請求日切では 6/1 00:30。
+                // 旧実装の UTC 判定だとここを誤って outside billing period として拒否していた。
+                Instant.parse("2026-05-31T15:30:00Z")
+        );
+
+        Statement statement = Statement.close(
+                UUID.randomUUID(),
+                LocalDate.parse("2026-06-01"),
+                LocalDate.parse("2026-06-30"),
+                LocalDate.parse("2026-07-25"),
+                List.of(transaction),
+                money("500.00"),
+                NOW
+        );
+
+        assertThat(statement.items()).singleElement()
+                .satisfies(line -> assertThat(line.networkTransactionId()).isEqualTo("ntx-jst-start"));
+    }
+
+    @Test
     void appliesPartialAndFullRepayment() {
         Statement statement = statement("1500.00");
 
@@ -108,6 +164,14 @@ class StatementTest {
     }
 
     private StatementLineSource transaction(String networkTransactionId, String amount) {
+        return transactionAt(networkTransactionId, amount, Instant.parse("2026-06-15T10:00:00Z"));
+    }
+
+    private StatementLineSource transactionAt(
+            String networkTransactionId,
+            String amount,
+            Instant postedAt
+    ) {
         return new StatementLineSource(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -115,7 +179,7 @@ class StatementTest {
                 UUID.randomUUID(),
                 "card-123",
                 money(amount),
-                Instant.parse("2026-06-15T10:00:00Z")
+                postedAt
         );
     }
 

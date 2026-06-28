@@ -11,12 +11,13 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
+import com.minicard.statement.domain.event.StatementDomainEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,7 @@ public class StatementGenerationService {
     private final StatementBillingRepository billingRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final StatementDueJobScheduler dueJobScheduler;
+    private final StatementDomainEventPublisher eventPublisher;
     private final StatementProperties properties;
     private final Clock clock;
 
@@ -138,7 +140,17 @@ public class StatementGenerationService {
         // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
         // 如果这一步不和 statement 同事务提交，就可能出现账单已生成但没有任何到期扣款计划。
         dueJobScheduler.scheduleAutoRepayment(statement);
+        // statement.closed 的 Outbox row 和账单/明细/BILLED 标记/扣款计划在同一事务内提交，
+        // 避免“账单已生成但通知消息丢失”或“消息已发但账单回滚”的不一致。Kafka 发布由后台 worker 处理，
+        // 所以账单生成批处理不等待 broker。只有这条新插入成功的路径才发事件；幂等命中已有账单的分支不会到这里。
+        publishDomainEvents(statement);
         return statement;
+    }
+
+    private void publishDomainEvents(Statement statement) {
+        for (StatementDomainEvent event : statement.pullDomainEvents()) {
+            eventPublisher.append(event);
+        }
     }
 
     private Money totalAmount(List<StatementLineSource> transactions) {
@@ -161,16 +173,12 @@ public class StatementGenerationService {
                             + totalAmount.currency().getCurrencyCode()
             );
         }
-        BigDecimal percentageAmount = totalAmount.amount()
-                .multiply(properties.policy().minimumPaymentRate())
-                // CEILING 对最低还款更保守：分以下的小数向上取整到 0.01，避免少收最低还款。
-                // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
-                .setScale(2, RoundingMode.CEILING);
-        BigDecimal minimum = percentageAmount.max(floor);
-        if (minimum.compareTo(totalAmount.amount()) > 0) {
-            minimum = totalAmount.amount();
-        }
-        return new Money(minimum, totalAmount.currency());
+        // CEILING 对最低还款更保守：向上取整到本币种最小单位（JPY 到 1 円、USD 到 0.01），避免少收最低还款。
+        // 如果使用 HALF_UP，某些边界金额会被舍入到更低的 minimum payment。
+        // 取整 scale 由 Money.multiply 按 currency 决定，这里不再硬编码 2 位——否则对 JPY 会算出“分以下日元”。
+        Money percentage = totalAmount.multiply(properties.policy().minimumPaymentRate(), RoundingMode.CEILING);
+        Money minimum = percentage.max(new Money(floor, totalAmount.currency()));
+        return minimum.isGreaterThan(totalAmount) ? totalAmount : minimum;
     }
 
     private Instant periodStartInstant(LocalDate periodStart) {

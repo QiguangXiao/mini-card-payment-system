@@ -9,25 +9,25 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * simulated bank result, 口座振替設定(こうざふりかえせってい),
  * 銀行結果シミュレーション(ぎんこうけっかシミュレーション)。</p>
  *
- * <p>默认 SUCCESS 让主流程可运行；切成 FAILED 可以演示扣款失败路径，
- * 但暂不引入真实银行网络、清算文件或失败通知。</p>
+ * <p>默认成功让主流程可运行；把 simulated-success 设成 false 可以演示扣款失败路径
+ * （DelayJob retry / DEAD），但暂不引入真实银行网络、清算文件或失败通知。</p>
  */
-// @ConfigurationProperties 把 YAML 绑定成 typed record。相比 @Value 字段，
-// 它更适合把 simulatedResult/failureReason 作为一组配置一起校验和默认化。
+// @ConfigurationProperties 把 repayment.auto-debit.* 绑定成 typed record，供 simulated gateway 注入。
 @ConfigurationProperties(prefix = "repayment.auto-debit")
 public record AutoDebitProperties(
-        /** 本地模拟的银行扣款结果（bank debit result / 口座振替結果）。 */
-        BankDebitStatus simulatedResult,
+        /** 本地模拟的银行扣款是否成功（口座振替結果）。 */
+        Boolean simulatedSuccess,
         /** 模拟失败时的错误原因，后续可以进入通知或人工处理。 */
         String failureReason
 ) {
 
-    // compact constructor 会在 Spring 绑定后执行，适合做默认值归一化。
-    // 如果不在这里处理 null，本地未配置 repayment.auto-debit 时第一笔自动扣款才会 NPE。
+    // compact constructor 在 Spring 绑定后执行，做默认值归一化。
+    // 这里用 Boolean（包装类型）而不是 boolean：未配置时基本类型会默认 false，
+    // 会把“默认成功”悄悄变成“默认失败”，本地第一笔自动扣款就会走失败路径。
     public AutoDebitProperties {
-        if (simulatedResult == null) {
-            // 默认 SUCCESS 让主业务路径可跑通；FAILED 分支保留给失败恢复练习。
-            simulatedResult = BankDebitStatus.SUCCESS;
+        if (simulatedSuccess == null) {
+            // 默认成功让主业务路径可跑通；false 分支保留给失败恢复练习。
+            simulatedSuccess = Boolean.TRUE;
         }
         if (failureReason == null || failureReason.isBlank()) {
             // failureReason 不能空，否则 DelayJob DEAD/日志没有可排查信息。

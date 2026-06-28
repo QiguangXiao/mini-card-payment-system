@@ -5,17 +5,17 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
-import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
+import com.minicard.statement.application.StatementReadService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,10 +121,13 @@ public class RepaymentService {
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
-        // statement.paidAmount/status 改变后必须 evict GET read model。
-        // 注意注册到 after commit：如果在 transaction boundary 内提前删缓存，另一个 GET
-        // 可能读到旧 DB 快照并重新写入 Redis，造成还款后短时间 stale response。
-        statementReadService.evictAfterCommit(statement.id());
+        // 写路径不"顺手更新 cache"，而是更新 MySQL source of truth 后失效 cache。
+        // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
+        // 传整个 statement（而不是只传 id）：StatementReadService 要用还款后的新 paidAmount 算出墓碑的版本地板，
+        // 让"迟到写"(旧版本)被 L2 的 CAS 拒绝。失效只在 DB commit 后触发（见 evictAfterCommit）。
+        // 跨 pod L1 仍最长 stale 一个 localTtl（除非开启 Pub/Sub 广播），这是刻意接受的 tradeoff：
+        // 账单查询容忍秒级 stale；要强一致就直接读 DB。
+        statementReadService.evictAfterCommit(statement);
     }
 
     private void validateCanApply(

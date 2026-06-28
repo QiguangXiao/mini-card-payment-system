@@ -35,6 +35,15 @@ spring:
       auto-offset-reset: earliest
     listener:
       ack-mode: record
+  cloud:
+    openfeign:
+      client:
+        config:
+          external-risk:
+            # 外部风控还在 authorization transaction 内调用，所以 HTTP timeout 是连接被钉住多久的硬上限。
+            # 如果不显式设置，供应商 brownout 时 socket 等待可能先耗尽 Hikari/Tomcat，再等 CircuitBreaker 反应。
+            connect-timeout: 300
+            read-timeout: 800
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -88,6 +97,7 @@ messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
+    statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
@@ -125,26 +135,23 @@ delay-jobs:
     worker-pool-size: 4
     worker-queue-capacity: 100
 
-snapshot-cache:
-  enabled: true
-  key-prefix: mini-card
-  caches:
-    statement-read-model-v1:
-      # L1 Caffeine 只做很短的 in-process cache，降低高频 GET 打到 Redis/DB 的压力。
-      # 多 pod 场景下其他实例的 L1 不会被本实例 evict，所以 local TTL 必须短。
-      local-ttl: 30s
-      maximum-size: 1000
-      # L2 Redis 保存跨实例共享读模型，TTL 比 L1 长，但仍不缓存写模型或强一致决策。
-      remote-ttl: 5m
-      # 给 Redis TTL 加抖动，避免一批账单在同一秒一起过期造成 cache avalanche。
-      remote-ttl-jitter: 30s
-    card-snapshot-v1:
-      # Card snapshot 会参与 authorization/posting 决策，风险高于纯展示型 read model。
-      # 因此 TTL 设置得更短；未来如果加入 block/unblock card API，写路径必须 after-commit evict。
-      local-ttl: 10s
-      maximum-size: 5000
-      remote-ttl: 1m
-      remote-ttl-jitter: 10s
+notification:
+  delivery:
+    # 关掉后只创建 PENDING delivery、不实际外发，便于迁移/排查时隔离副作用。
+    enabled: true
+    fixed-delay-ms: 1000
+    recovery-fixed-delay-ms: 5000
+    batch-size: 50
+    # PROCESSING lease 超时秒数：必须 > 一次"provider 调用(含 Resilience4j 重试) + finalize"的正常耗时，
+    # 否则正常投递还没结束 lease 就过期，recoverer 会重复领取。
+    processing-timeout-seconds: 30
+    max-attempts: 8
+    worker-pool-size: 4
+    worker-queue-capacity: 100
+    sender-threads: 4
+    # 模拟 provider 的延迟/失败注入：默认 0 失败，改大可演示 TimeLimiter 超时与重试/断路/DEAD。
+    simulated-latency-millis: 20
+    simulated-failure-rate-percent: 0
 
 authorization:
   policy:
@@ -181,17 +188,58 @@ statement:
     minimum-payment-floors:
       JPY: 1000.00
       USD: 25.00
+  read-cache:
+    # Statement GET read model 的两级 cache：Caffeine L1 + Redis L2。
+    # 只缓存可从 MySQL 重建的查询快照，不缓存额度、幂等 claim 或写模型。
+    # L1 很快但只在本 JVM 生效，所以 TTL 要短；L2 跨实例共享，所以 TTL 可以稍长。
+    local-ttl: 30s
+    # 生产 cache 必须有容量上限，避免无限 key 把应用 heap 吃满。
+    local-maximum-size: 1000
+    remote-ttl: 5m
+    # 在基础 TTL 上加随机抖动，避免一批 key 同秒过期后一起回源 MySQL。
+    remote-ttl-jitter: 30s
+    # 还款 after-commit 写入 L2 的"版本地板"墓碑存活时间。它挡住"迟到写"覆盖新值，
+    # 只需活到第一个新鲜 reader 用真实值替换墓碑为止，所以远短于 remote-ttl。
+    # 取值要 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞。
+    tombstone-ttl: 10s
+    # 热点 key 重建锁，防缓存击穿(cache breakdown / stampede)：L2 miss 时用一把跨 pod 的 Redis 锁
+    # (SET NX PX) 做 single-flight，只有 winner 回源 DB，其余 pod 等它填好 L2 后复用，不重复打库。
+    # 它是 best-effort 优化：抢锁失败/超时/Redis 故障一律 fail-open 回源，不是 GET 的硬依赖。
+    rebuild-lock-enabled: true
+    # 锁持有时间，要 >= 一次"回源 DB + 写回 L2"的正常耗时，否则 winner 没写完锁就过期、放第二个进来；
+    # 同时也是持锁者崩溃后的自动释放上限。
+    rebuild-lock-ttl: 2s
+    # loser 等 winner 填好 L2 的最大自旋次数 × 间隔 = 请求最多被这把锁阻塞多久（这里 5×20ms=100ms 封顶）。
+    # 超过后 fail-open 自己回源，绝不让请求无限等在锁上。
+    rebuild-lock-wait-attempts: 5
+    rebuild-lock-wait-interval: 20ms
+    broadcast:
+      # 跨 pod L1 失效广播（Redis Pub/Sub）。默认关闭：单实例/测试不需要，跨 pod L1 由 local-ttl 兜底。
+      # 开启后，还款 after-commit 会 PUBLISH 一条失效消息，所有 pod 的订阅者清各自 Caffeine L1，
+      # 把跨 pod L1 stale 窗口从 local-ttl 压到一次广播延迟。它是 best-effort，丢消息时退回 local-ttl。
+      # 它只关 L1 窗口，不解决 L2 late-write 竞态（那要版本号/CAS）。
+      enabled: false
 
 repayment:
   auto-debit:
-    # 默认模拟银行扣款成功；改成 FAILED 可演示 DelayJob retry/DEAD 的失败路径。
-    simulated-result: SUCCESS
+    # 默认模拟银行扣款成功；改成 false 可演示 DelayJob retry/DEAD 的失败路径。
+    simulated-success: true
     failure-reason: simulated insufficient bank balance
 
 risk:
+  # velocity 限流计数器实现：redis(默认, sliding window, 主库零读压) 或 jdbc(COUNT(*) 精确对照)。
+  velocity:
+    store: redis
   local:
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
+    # 长期画像来自 card_risk_features projection：样本太少时不参与判定，避免一两次失败就打标签。
+    min-historical-authorizations: 5
+    # 0.80 表示历史拒绝率达到 80% 时把这张卡提高审查档位。它是长窗口 soft signal，不替代 Redis 短窗口 velocity。
+    max-historical-decline-rate: 0.80
+    # elevated scrutiny 下仍可接受的最高外部风险分：历史画像超阈值的卡，外部即使 approve，
+    # 分数 ≥ 60 也会被收紧为拒绝。只在外部参与后生效，所以历史画像永远不会单独把卡永久封死。
+    elevated-scrutiny-max-approved-score: 60
     high-risk-amount-thresholds:
       JPY: 50000.00
       USD: 500.00
@@ -213,3 +261,46 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 2
+      # 每渠道独立断路器：push provider 故障不会连带把 email 熔断。slow-call 阈值让"慢调用"也算失败，
+      # 配合 TimeLimiter 一起把"又慢又错"的 provider 快速隔离。
+      notificationPush:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        slow-call-rate-threshold: 100
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+      notificationEmail:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        slow-call-rate-threshold: 100
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+  retry:
+    instances:
+      # intra-attempt 快速重试：对 provider 抖动做几次内存级退避重试；跨重启的 durable 重试由投递状态机负责。
+      notificationDelivery:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+  timelimiter:
+    instances:
+      # 单次 provider 调用的硬超时；超时计为失败，进入 Retry/CircuitBreaker。
+      notificationDelivery:
+        timeout-duration: 2s
+        cancel-running-future: true
+  bulkhead:
+    instances:
+      externalRisk:
+        # 使用 semaphore bulkhead，同线程限并发，不把 @Transactional 内的调用丢到另一个线程。
+        # 这个值必须小于 Hikari pool 可用连接数减去 headroom：如果 Hikari 是 10，就不能把 risk bulkhead 配成 10。
+        # 这样外部风控全堵时，最多只有 max-concurrent-calls 条授权事务占着连接，其他端点仍有余量。
+        max-concurrent-calls: 4
+        # 0 表示 bulkhead 满时立即 fail-closed，而不是排队继续占 Tomcat request thread。
+        max-wait-duration: 0

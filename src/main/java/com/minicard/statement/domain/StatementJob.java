@@ -1,6 +1,7 @@
 package com.minicard.statement.domain;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -8,26 +9,38 @@ import lombok.Getter;
 import lombok.experimental.Accessors;
 
 /**
- * Statement batch 的一个分片任务。
+ * 一个 billing cycle 的分片任务（sharded claimable job）。
  *
- * <p>关键词：账单分片任务, DB claim, PROCESSING lease,
+ * <p>关键词：账单分片任务, DB claim, PROCESSING lease, claimable job,
  * statement job, FOR UPDATE SKIP LOCKED, 請求ジョブ(せいきゅうジョブ),
  * リース(リース)。</p>
  *
- * <p>Job 是 worker 并行处理的 durable work item。PENDING -> PROCESSING 是短事务 claim；
- * 真正生成 statement 在 worker 里按账户拆成小 transaction boundary。</p>
+ * <p>这是本项目“claimable job”的 reference shape：状态机
+ * PENDING → PROCESSING(lease) → DONE / 重试回 PENDING / DEAD。
+ * 它自带 cycle 身份(period/dueDate)和 shard 信息，不再依赖一个 parent batch 行——
+ * “整个周期是否出账完成”用 statement_jobs 上的查询回答即可，避免额外的 batch 生命周期表。
+ * 其他 domain 的 job 之后可以对齐成同样的 claim/lease/recover 形状。</p>
+ *
+ * <p>job id 在 domain factory 生成；(period_start, period_end, shard_no) 唯一键
+ * 负责 job creation idempotency：scheduler 重复触发同一个 close date 不会产生重复分片。</p>
  */
+// StatementJob 是状态机对象，只生成 getter 不生成 setter。
+// 如果外部能直接 setStatus(DONE)，就会绕过 lease 校验、attempt 计数和 lastError 记录。
 @Getter
 @Accessors(fluent = true)
 public final class StatementJob {
 
     private final UUID id;
-    private final UUID batchId;
+    // cycle 身份直接落在 job 上：worker 处理分片时不需要再去读一个 parent batch 行。
+    private final LocalDate periodStart;
+    private final LocalDate periodEnd;
+    private final LocalDate dueDate;
     private final int shardNo;
     private final int shardCount;
     private StatementJobStatus status;
     private String claimedBy;
     private Instant claimedAt;
+    // claim_until 是 lease 截止时间，也是迟到 worker finalize 时的 lease token。
     private Instant claimUntil;
     private int attemptCount;
     private int processedAccountCount;
@@ -40,7 +53,9 @@ public final class StatementJob {
 
     private StatementJob(
             UUID id,
-            UUID batchId,
+            LocalDate periodStart,
+            LocalDate periodEnd,
+            LocalDate dueDate,
             int shardNo,
             int shardCount,
             StatementJobStatus status,
@@ -57,7 +72,9 @@ public final class StatementJob {
             String lastError
     ) {
         this.id = Objects.requireNonNull(id);
-        this.batchId = Objects.requireNonNull(batchId);
+        this.periodStart = Objects.requireNonNull(periodStart);
+        this.periodEnd = Objects.requireNonNull(periodEnd);
+        this.dueDate = Objects.requireNonNull(dueDate);
         this.shardNo = shardNo;
         this.shardCount = shardCount;
         this.status = Objects.requireNonNull(status);
@@ -76,15 +93,18 @@ public final class StatementJob {
     }
 
     public static StatementJob pending(
-            UUID batchId,
+            LocalDate periodStart,
+            LocalDate periodEnd,
+            LocalDate dueDate,
             int shardNo,
             int shardCount,
             Instant createdAt
     ) {
-        // job id 在 domain factory 生成；batch_id + shard_no 唯一键负责 job creation idempotency。
         return new StatementJob(
                 UUID.randomUUID(),
-                batchId,
+                periodStart,
+                periodEnd,
+                dueDate,
                 shardNo,
                 shardCount,
                 StatementJobStatus.PENDING,
@@ -104,7 +124,9 @@ public final class StatementJob {
 
     public static StatementJob restore(
             UUID id,
-            UUID batchId,
+            LocalDate periodStart,
+            LocalDate periodEnd,
+            LocalDate dueDate,
             int shardNo,
             int shardCount,
             StatementJobStatus status,
@@ -122,7 +144,9 @@ public final class StatementJob {
     ) {
         return new StatementJob(
                 id,
-                batchId,
+                periodStart,
+                periodEnd,
+                dueDate,
                 shardNo,
                 shardCount,
                 status,
@@ -141,6 +165,7 @@ public final class StatementJob {
     }
 
     public void markProcessing(String workerId, Instant now, long leaseSeconds) {
+        // 只有 PENDING 能被 claim。claim 在短事务内提交，commit 后才把 job 交给 worker pool 处理。
         if (status != StatementJobStatus.PENDING) {
             throw new IllegalStateException("only PENDING statement job can be claimed");
         }
@@ -172,6 +197,7 @@ public final class StatementJob {
         if (result != null) {
             applyResult(result);
         }
+        // attemptCount 在 claim 时已自增；达到上限就进入 DEAD，等待人工排查，否则回到 PENDING 等待重试。
         status = attemptCount >= maxAttempts ? StatementJobStatus.DEAD : StatementJobStatus.PENDING;
         clearClaim();
         updatedAt = Objects.requireNonNull(now);
@@ -198,6 +224,9 @@ public final class StatementJob {
     }
 
     private void validateState() {
+        if (periodEnd.isBefore(periodStart) || !dueDate.isAfter(periodEnd)) {
+            throw new IllegalArgumentException("statement job cycle dates are invalid");
+        }
         if (shardCount <= 0 || shardNo < 0 || shardNo >= shardCount) {
             throw new IllegalArgumentException("statement job shard is invalid");
         }
@@ -208,6 +237,8 @@ public final class StatementJob {
                 || failedAccountCount < 0) {
             throw new IllegalArgumentException("statement job counters must be non-negative");
         }
+        // PROCESSING 必须持有完整 lease；非 PROCESSING 不能残留 lease，
+        // 否则 recover 或 lease-token 校验会因为脏状态做出错误判断。
         boolean hasClaim = claimedBy != null || claimedAt != null || claimUntil != null;
         if (status == StatementJobStatus.PROCESSING && !hasClaim) {
             throw new IllegalArgumentException("processing statement job requires claim lease");

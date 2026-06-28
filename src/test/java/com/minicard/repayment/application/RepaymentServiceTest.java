@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
 import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.creditaccount.domain.CreditAccountStatus;
@@ -20,11 +20,11 @@ import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
 import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
-import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
 import com.minicard.statement.domain.StatementStatus;
+import com.minicard.statement.application.StatementReadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -92,7 +92,7 @@ class RepaymentServiceTest {
         lockOrder.verify(statementRepository).findByIdForUpdate(command.statementId());
         verify(creditAccountRepository).update(account);
         verify(statementRepository).updatePayment(statement);
-        verify(statementReadService).evictAfterCommit(statement.id());
+        verify(statementReadService).evictAfterCommit(statement);
         verify(repaymentRepository).update(repayment);
         ArgumentCaptor<RepaymentDomainEvent> event =
                 ArgumentCaptor.forClass(RepaymentDomainEvent.class);
@@ -135,7 +135,6 @@ class RepaymentServiceTest {
         verify(creditAccountRepository, never()).update(any());
         verify(statementRepository, never()).updatePayment(any());
         verify(eventPublisher, never()).append(any());
-        verify(statementReadService, never()).evictAfterCommit(any());
     }
 
     private void arrangeNewRepayment() {

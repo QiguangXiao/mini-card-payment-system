@@ -47,10 +47,11 @@ without duplicating or fragmenting the account's available-credit balance.
 The authorization flow rejects missing, blocked, and expired cards before
 locking or changing their CreditAccount.
 
-The current primary `CardRepository` bean is a cache decorator:
-`CachedCardRepository` reads a low-risk `CardSnapshot` through Caffeine L1 and
-Redis L2, then rebuilds a `Card` domain object. This cache is only reference
-data acceleration. It never caches `CreditAccount`, available credit, or
+The current `CardRepository` bean reads card reference data directly through
+MyBatis. An older `CachedCardRepository` design used a low-risk-looking
+`CardSnapshot` with Caffeine L1 and Redis L2, but that cache was removed because
+stale card status can affect authorization approval. Even if card lookup is
+cached in the future, it must never cache `CreditAccount`, available credit, or
 idempotency ownership, so the financial consistency boundary remains the MySQL
 transaction and `CreditAccount` row lock.
 

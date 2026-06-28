@@ -28,7 +28,7 @@
 | 位置 | 例子 | 含义 | 为什么不合并 |
 | --- | --- | --- | --- |
 | 业务模块内的 `infrastructure` | `authorization.infrastructure.messaging`, `repayment.infrastructure.delayjob` | 某个 bounded context 的 adapter，把业务意图接到 MyBatis、Outbox、DelayJob、Kafka 等机制上 | 它依赖本模块业务语义，例如 authorization expiry、auto repayment |
-| 根 `com.minicard.infrastructure` | `cache`, `async`, `scheduler`, `transaction`, `time`, `web` | shared platform helper，提供线程池、scheduler bean、transaction helper、web error handling、cache 基础设施 | 它不拥有业务状态机，也不决定发布什么事件或执行什么 job |
+| 根 `com.minicard.infrastructure` | `async`, `scheduler`, `transaction`, `time`, `web` | shared platform helper，提供线程池、scheduler bean、transaction helper、web error handling | 它不拥有业务状态机，也不决定发布什么事件或执行什么 job |
 | 根机制包 | `messaging`, `delayjob` | 一等 reliability mechanism，有自己的表、状态、lease、retry、recoverer | 它们比普通 helper 更重；放在根包可以让 Outbox/Inbox/DelayJob 的可靠性语义更清楚 |
 
 所以 `com.minicard.infrastructure.scheduler` 不是“所有 scheduler 业务逻辑”的地方。
@@ -130,7 +130,7 @@ repayment 阶段减少 `postedBalance`，恢复可用额度。
 
 - `id`：statement id，由 `Statement.close(...)` 内部 `UUID.randomUUID()` 生成。
 - `credit_account_id`：账单属于哪个信用账户。
-- `period_start` / `period_end`：账单周期，当前按 UTC 日期切分。
+- `period_start` / `period_end`：账单周期，当前固定按 Asia/Tokyo billing timezone 的日期切分。
 - `due_date`：还款到期日。
 - `total_amount`：本期已入账交易汇总金额。
 - `minimum_payment_amount`：当前简化规则计算出的最低还款额。
@@ -247,7 +247,7 @@ credit_account_id + period_start + period_end
 - `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等。
 - `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`、`REPAYMENT`。
 - `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
-- `template`：通知模板类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_READY`、`REPAYMENT_RECEIVED`。
+- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_CLOSED`、`REPAYMENT_RECEIVED`。
 - `status`：`PENDING`、`SENT`、`FAILED`。
 
 提醒：
@@ -364,19 +364,78 @@ curl -X POST http://localhost:8080/api/authorizations \
 
 2. `cardRepository.findById(...)`
 
-   查询 card aggregate。当前实际 Bean 是 `CachedCardRepository`：
-   先查 `card-snapshot-v1`，miss 时再回到 `MyBatisCardRepository` 查询 `cards` 表。
+   查询 card aggregate。当前实际实现是 `MyBatisCardRepository`，直接查询 `cards` 表。
 
    Card 回答“这张卡是否存在、是否被 blocked、是否过期”。
-   这个 cache 只保存 `CardSnapshot(id, creditAccountId, status)`，不缓存额度，也不替代后面的
-   `credit_accounts` row lock。
+   旧版本曾经有 `CachedCardRepository` + `card-snapshot-v1`，只缓存
+   `CardSnapshot(id, creditAccountId, status)`，不缓存额度。后来删除它，是因为 card 状态会影响
+   authorization 决策，安全 TTL 必须短，而真正的并发瓶颈仍是后面的 `credit_accounts` row lock。
 
 3. `riskAssessmentService.assess(command.toRiskAssessmentRequest())`
 
    做风控判断。
-   本地 velocity 查询通过 `RiskVelocityCounter` port 进入当前 JDBC adapter；
+   本地 velocity 查询通过 `RiskVelocityCounter` port 进入 Redis sliding-window adapter
+   （`JdbcRiskVelocityCounter` 保留为对照实现）。port 返回 `VelocityCheckResult(count, degraded, source)`，
+   所以 service 能区分“窗口内确实 0 次”和“Redis 不可用，按 fail-open policy 降级放行”；
+   长期画像通过 `RiskFeatureReader` 读取 `card_risk_features` projection：
+   `AuthorizationRiskFeatureListener` 消费 authorization decision event，`RiskFeatureProjectionService`
+   用 Inbox 幂等后 upsert 这张表；下一笔授权再把它作为 long-window risk profile 使用。
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
+
+   当前同步风控形成两层特征 + 一个外部判定：
+
+   - Redis short-window velocity：实时近似，适合防 card-testing 突刺，主库零读压。
+   - MySQL projection long-window profile：`card_risk_features` 按 `card_id` 读一行，
+     当历史样本量达到 `min-historical-authorizations` 且 decline ratio 达到
+     `max-historical-decline-rate` 时，把这张卡置于 **elevated scrutiny**。
+   - 历史画像是 **soft signal**：它本身从不单独拒绝，只在外部风控 approve 但分数偏高
+     （≥ `elevated-scrutiny-max-approved-score`）时，才把判定收紧为拒绝。
+
+   为什么不让历史画像直接硬拒绝（重要 counterfactual）：早期实现让它在 external 之前单独拒绝，
+   暴露出一个**自我强化反馈环**——画像拒绝 → `authorization.declined` 回灌 projection → decline ratio
+   抬高 → 更容易拒绝；叠加终身累计不衰减与 `(d+1)/(t+1) ≥ d/t`，一张卡越线后会每笔必拒、
+   `approved_count` 再也无法增长、被**永久 brick**。修复分两步：
+   1. 降级为 soft signal：历史再差，只要本次外部判定干净仍放行，`approved_count` 得以增长、ratio 自愈；
+   2. 断开反馈：`AuthorizationRiskFeatureListener` 只统计真正的风险拒绝（如 `RISK_VELOCITY_EXCEEDED`），
+      排除画像自身的 `RISK_HISTORICAL_PROFILE`、外部宕机的 `RISK_EXTERNAL_UNAVAILABLE`、以及额度/卡
+      生命周期等运营类拒绝，避免信号污染与自激。
+
+   trade-off 也要讲清楚：projection 补齐了 CQRS 读侧，但每笔通过 cheap rules 的授权会多一次 DB read。
+   生产上可以让它走 read replica、加本地/Redis profile cache，或只对高风险候选请求启用；
+   本项目先保留最直观的一行主键读取，方便看懂“实时 Redis + 历史 DB 特征”的分层。
+
+   这里故意让两类风控依赖的失败策略不同：
+
+   - Redis velocity 是辅助高频信号，失败时 `RedisRiskVelocityCounter` 记录
+     `risk.velocity.redis.unavailable`，`RiskAssessmentService` 记录
+     `risk.velocity.fallback.allow`，然后 fail-open。
+   - external risk 是最终风险判定依赖，失败、断路器打开或 bulkhead 满时 fail-closed，
+     返回 `EXTERNAL_RISK_UNAVAILABLE`。
+
+   这不是“Redis 查不到所以当作安全”，而是显式 trade-off：避免一次 Redis 抖动拒掉所有授权，
+   同时用 metric/告警让“正在失效放行”可见。
+
+   当前实现仍在 `AuthorizationService.authorize(...)` 的同一个 transaction boundary 内调用外部风控。
+   这样保留了 idempotency loser 通过 authorization row lock 等 winner 终态的同步语义，
+   也保证 fail-closed 的拒绝结果会落到 `authorizations` audit row。
+   代价是 external risk brownout 时，winner request 仍会短时间占用 Hikari connection。
+   所以当前采用 Path B 防护：OpenFeign connect/read timeout 给等待时间封顶，Resilience4j
+   semaphore `Bulkhead` 把同时进入 external risk 的授权数量限制在 Hikari pool headroom 内，
+   `CircuitBreaker` 负责连续失败后的 fail-closed fallback。
+
+   为什么不是现在就拆成两阶段：
+
+   ```text
+   phase 1: 短事务 claim PENDING
+   phase 2: 事务外 external risk
+   phase 3: 再锁 authorization owner/lease finalize
+   ```
+
+   两阶段可以让风控完全不占 DB connection，但会丢掉“duplicate loser 阻塞在 row lock 上等终态”
+   这个免费同步语义，必须额外设计 owner token、lease、recover 和有界等待/PROCESSING 返回策略。
+   因此本项目先用 timeout + semaphore bulkhead 把爆炸半径夹住；只有当指标证明
+   `risk.external.latency` 和 `risk.external.bulkhead.rejected` 长期限制授权吞吐时，再进入两阶段设计。
 
 4. `creditAccountRepository.findByIdForUpdate(...)`
 
@@ -887,7 +946,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
    job_type = AUTO_REPAYMENT
    aggregate_type = Statement
    aggregate_id = statement.id
-   scheduled_at = dueDate 00:00 UTC
+   scheduled_at = dueDate 00:00 JST（保存为 UTC instant）
    ```
 
    为什么用 DelayJob：
@@ -907,7 +966,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 
    - 主 statement transaction 不直接调用 Notification，也不等待短信/邮件/Push provider。
    - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
-   - Listener 把内部事件映射成用户侧 `NotificationType.STATEMENT_READY`。
+   - Listener 把 `statement.closed` 映射成 `NotificationType.STATEMENT_CLOSED`（与事件同名，和其它三类通知 1:1 同构）。
    - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
    - claim 成功后创建一条 `notifications/PENDING` 请求。
    - duplicate delivery claim 失败后直接返回，避免重复提醒用户。
@@ -948,7 +1007,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
 - `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；`statement.closed` 使用 Outbox，因为它是 integration event。
-- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_READY` 通知；未来 PDF 生成、还款提醒也可以独立消费。
+- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_CLOSED` 通知；未来 PDF 生成、还款提醒也可以独立消费。
 - 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
 
 ## 6. 核心流程四：Repayment 还款入账
@@ -1310,7 +1369,7 @@ credit account row lock -> statement row lock
 - Outbox 是 messaging 的 reliable delivery 机制，不是业务 aggregate。
 - `OutboxEvent` 表达的是一条待发布消息的 delivery state，不需要伪装成业务 domain。
 - 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务发送/消费入口放回各自 bounded context。
-- interview中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
+- interview 中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
 
 PayPay Card interview提示：
 
@@ -1466,8 +1525,9 @@ repayment.received
 4. `cardRepository.findById(...)`
 
    根据 authorization.cardId 找到 card，再找到 creditAccountId。
-   这里同样会经过 `CachedCardRepository` 的 Card snapshot cache；但释放额度仍必须以后面的
-   `creditAccountRepository.findByIdForUpdate(...)` 为准。
+   当前直接经过 `MyBatisCardRepository` 读取 `cards` 表；释放额度仍必须以后面的
+   `creditAccountRepository.findByIdForUpdate(...)` 为准。旧版本的 Card snapshot cache 已删除，
+   原因同授权主路径：card 读不是主要瓶颈，且 stale card 状态会影响授权判断。
 
 5. `creditAccountRepository.findByIdForUpdate(...)`
 
@@ -1552,23 +1612,21 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 - `AuthorizationController.get(id)`
 - `AuthorizationService.get(id)`
 - `StatementController.get(id)`
-- `StatementReadModelService.get(id)`
-- `SnapshotCache<UUID, StatementReadModel>`
-- `StatementService.get(id)`
+- `StatementReadService.get(id)`（statement GET 先走 Caffeine L1 + Redis L2）
 - `RepaymentController.get(id)`
 - `RepaymentService.get(id)`
 
 处理：
 
-- `@Transactional(readOnly = true)`
-- 通过 authorization id、statement id 或 repayment id 查询当前状态。
+- authorization/repayment 查询用 `@Transactional(readOnly = true)` 直接读 DB。
+- statement GET 先读 read model cache，miss 后通过 `StatementGenerationService.get(id)` 回源 DB。
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
 
-### 9.1 `GET /api/statements/{id}` 的 L1/L2 snapshot cache
+### 9.1 `GET /api/statements/{id}` 的当前路径
 
-当前只缓存一类低风险读模型：
+当前 `GET /api/statements/{id}` 用两级 cache：
 
 ```bash
 curl http://localhost:8080/api/statements/{statementId}
@@ -1578,34 +1636,26 @@ curl http://localhost:8080/api/statements/{statementId}
 
 ```text
 StatementController.get(id)
--> StatementReadModelService.get(id)
--> SnapshotCache<UUID, StatementReadModel>
+-> StatementReadService.get(id)
    -> Caffeine L1
    -> Redis L2
-   -> StatementService.get(id)
+   -> StatementGenerationService.get(id)
    -> StatementRepository.findById(id)
+-> StatementResponse.from(readModel)
 ```
 
-为什么缓存 `StatementReadModel`，而不是缓存 `Statement` aggregate：
+为什么只缓存 `StatementReadModel`：
 
 - `Statement` aggregate 有还款状态转换和不变量保护，属于写模型。
-- `StatementReadModel` 只包含 response 需要的字段，没有 business behavior。
-- 这样可以明确表达：cache 只是 read acceleration，不是 source of truth。
-
-当前配置：
-
-- cache name：`statement-read-model-v1`。
-- Redis key 形状：`mini-card:cache:statement-read-model-v1:{statementId}`。
-- L1：Caffeine，`local-ttl = 30s`，`maximum-size = 1000`。
-- L2：Redis，`remote-ttl = 5m`，`remote-ttl-jitter = 30s`。
-- 不缓存 404 negative result。`statement not found` 仍然直接来自 DB/source of truth。
+- `StatementReadModel` 只有 response 字段，没有 business behavior。
+- Redis JSON 存 read model，避免把 cache 当成 domain object store。
 
 读取策略：
 
 1. 先查 Caffeine L1。
 2. L1 miss 后查 Redis L2。
 3. L2 hit 时回填 L1。
-4. L1/L2 都 miss 时调用 `StatementService.get(id)`，从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
+4. L1/L2 都 miss 时调用 `StatementGenerationService.get(id)` 从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
 5. Redis 读写失败时降级回 DB，不让低风险缓存影响 GET 可用性。
 
 为什么 Redis TTL 要加 jitter：
@@ -1615,65 +1665,32 @@ StatementController.get(id)
 
 为什么还需要 evict：
 
-- `statement_items` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
+- `statement_lines` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
 - 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
-- `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和 statement 后，
-  调用 `StatementSnapshotCacheInvalidator.evictAfterCommit(statement.id())`。
+- `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和
+  statement 后，调用 `StatementReadService.evictAfterCommit(statement.id())`。
 - after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
   造成 stale read model。
 
-当前 evict 范围：
+仍然可能出现的不一致：
 
-- 当前 JVM 的 Caffeine L1。
-- Redis L2。
-- 其他 pod 的 Caffeine L1 不会收到本地内存通知，因此 L1 TTL 必须短。
-  如果生产要求“还款提交后所有 pod 立即不可读旧账单”，可以在这个 invalidation port 后面增加 Redis Pub/Sub、
-  Kafka invalidation event 或集中式 cache invalidation service。
+- 其他 pod 的 Caffeine L1 不会被本 pod 直接删除，可能在 `local-ttl` 内读到旧 statement read model。
+- 如果 DB commit 成功但 Redis delete 失败，本 pod L1 已删，但 Redis L2 可能保留旧值到 `remote-ttl`。
+- 如果还款事务提交前有 GET 请求，它读到旧状态是正常的，因为旧状态当时仍是已提交事实。
 
-interview可以这样解释：
+### 9.2 已删除的 Card snapshot cache 设计
 
-- 只缓存可重建的 read model，不缓存写模型和强一致决策。
-- DB 仍然是 source of truth；cache miss 或 Redis 故障不会改变业务结果。
-- L1 降低同 JVM 热点开销，L2 让多实例共享缓存。
-- TTL 负责最终兜底，evict 负责业务更新后的及时失效。
-- after-commit evict 避免 transaction boundary 内的 stale reload 竞态。
+旧版本还做过 Card snapshot cache：
 
-### 9.2 Card snapshot cache
+| cache name | value | 用途 | 删除原因 |
+| --- | --- | --- | --- |
+| `card-snapshot-v1` | `CardSnapshot` | 加速 card 状态和 account 归属读取 | stale card 状态会影响授权判断；短 TTL 命中率有限 |
 
-Card snapshot 不是一个公开 GET API，而是 authorization/posting/expiry 流程里的 reference snapshot：
-
-```text
-AuthorizationService.decideAndReserve(...)
--> CardRepository.findById(cardId)
--> CachedCardRepository
--> SnapshotCache<String, CardSnapshot>
-   -> Caffeine L1
-   -> Redis L2
-   -> MyBatisCardRepository.findById(cardId)
-   -> cards
-```
-
-当前配置：
-
-- cache name：`card-snapshot-v1`。
-- Redis key 形状：`mini-card:cache:card-snapshot-v1:{cardId}`。
-- L1：Caffeine，`local-ttl = 10s`，`maximum-size = 5000`。
-- L2：Redis，`remote-ttl = 1m`，`remote-ttl-jitter = 10s`。
-- 不缓存 card-not-found negative result。
-
-为什么 Card 可以缓存，但要比 statement 更保守：
-
-- Card 状态和 account 归属通常变化低频，适合做 reference data cache。
-- 但 Card 会影响授权批准/拒绝，stale `ACTIVE` 可能让刚 blocked 的卡短时间继续通过卡状态检查。
-- 因此 Card snapshot TTL 比 statement read model 短。
-- 当前项目还没有 card block/unblock API；未来加入时，状态变更写路径必须在 transaction commit 后
-  通过 `CardSnapshotCacheInvalidator.evictAfterCommit(cardId)` evict `card-snapshot-v1:{cardId}`。
-
-为什么不缓存额度：
+为什么始终不缓存额度：
 
 - 额度是高并发写模型，必须读 `credit_accounts` 并使用 `SELECT ... FOR UPDATE`。
 - 如果缓存 available credit，会绕开 row lock，产生超额授权风险。
-- Card snapshot 只让系统少查一张低频变化的 `cards` 表，不改变额度一致性边界。
+- Card snapshot 即使恢复，也只能让系统少查一张低频变化的 `cards` 表，不改变额度一致性边界。
 
 这个接口适合观察状态变化：
 
@@ -1792,18 +1809,21 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - statementId：账单 aggregate id。
 - creditAccountId：Kafka partition key，用来保证同一账户账单事件有序。
 
-### 为什么 statement.closed 映射成 STATEMENT_READY？
+### 为什么 statement.closed 映射成 STATEMENT_CLOSED？
 
 `statement.closed` 是系统内部业务事实，意思是 billing cycle 已关闭、账单金额固定。
-用户侧通知不应该直接说 “closed”，而应该表达“本期账单已生成，可以查看并还款”。
-
-所以 Notification 侧使用：
+通知类型与事件类型保持 1:1 同名，和其它三类通知完全一致：
 
 ```text
-statement.closed -> NotificationType.STATEMENT_READY
+authorization.approved   -> NotificationType.AUTHORIZATION_APPROVED
+card_transaction.posted  -> NotificationType.CARD_TRANSACTION_POSTED
+statement.closed         -> NotificationType.STATEMENT_CLOSED
+repayment.received       -> NotificationType.REPAYMENT_RECEIVED
 ```
 
-这个区分能体现 event contract 和 customer-facing template 的边界。
+这样四个 listener 的结构和命名完全同构，新增事件类型时不必再为“事件名 vs 通知名”单独做命名决策。
+面向用户的友好文案（例如“本期账单已生成，可查看并还款”）属于 delivery 阶段按 `NotificationType`
+选择渲染模板的事，不需要把内部 `NotificationType` 改名来表达。
 
 ### 为什么 notifications 不再只存 authorizationId？
 

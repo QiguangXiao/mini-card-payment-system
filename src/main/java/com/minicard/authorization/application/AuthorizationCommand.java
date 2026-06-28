@@ -9,7 +9,7 @@ import java.util.HexFormat;
 import java.util.Locale;
 
 import com.minicard.authorization.domain.Authorization;
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 
 /**

@@ -10,7 +10,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
 import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
@@ -62,7 +62,8 @@ class RepaymentOutboxAdapterTest {
         assertThat(payload.get("repaymentId").asText()).isEqualTo(repaymentId.toString());
         assertThat(payload.get("statementId").asText()).isEqualTo(statementId.toString());
         assertThat(payload.get("creditAccountId").asText()).isEqualTo(accountId.toString());
-        assertThat(payload.get("statementRemainingAmount").asText()).isEqualTo("1000.00");
+        // JPY 是零小数币种：序列化成整数日元 "1000"，不再是 "1000.00"。
+        assertThat(payload.get("statementRemainingAmount").asText()).isEqualTo("1000");
         assertThat(payload.get("receivedAt").asText()).isEqualTo(NOW.toString());
     }
 

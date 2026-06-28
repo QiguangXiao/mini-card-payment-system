@@ -9,7 +9,7 @@ import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
 
-import com.minicard.authorization.domain.Money;
+import com.minicard.shared.domain.Money;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobRepository;
 import com.minicard.delayjob.DelayJobType;
@@ -43,7 +43,7 @@ class AutoRepaymentDelayJobSchedulerTest {
         assertThat(job.getValue().aggregateType()).isEqualTo("Statement");
         assertThat(job.getValue().aggregateId()).isEqualTo(statement.id().toString());
         assertThat(job.getValue().scheduledAt())
-                .isEqualTo(Instant.parse("2026-07-27T00:00:00Z"));
+                .isEqualTo(Instant.parse("2026-07-26T15:00:00Z"));
         assertThat(job.getValue().nextAttemptAt()).isEqualTo(job.getValue().scheduledAt());
     }
 

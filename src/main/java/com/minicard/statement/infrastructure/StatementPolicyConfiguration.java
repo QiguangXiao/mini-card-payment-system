@@ -1,6 +1,7 @@
 package com.minicard.statement.infrastructure;
 
 import com.minicard.statement.application.StatementProperties;
+import com.minicard.statement.application.StatementReadCacheProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,6 +18,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 // 一个配置入口同时启用 policy 和 batch properties，避免 service 直接散落读取 YAML。
 // 如果漏启用其中一个 properties，相关 service 的 constructor injection 会在启动期失败。
-@EnableConfigurationProperties(StatementProperties.class)
+@EnableConfigurationProperties({
+        StatementProperties.class,
+        StatementReadCacheProperties.class
+})
 public class StatementPolicyConfiguration {
 }
