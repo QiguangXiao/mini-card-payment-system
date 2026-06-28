@@ -75,9 +75,11 @@ See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
 beginner-friendly but production-oriented map from this project's Docker Compose
 shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
 CodePipeline, AWS resource naming, and small/medium/large production sizing.
-See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
-MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
-backend interview talking points.
+See [MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md) for
+MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and the
+Liquibase schema-migration workflow (the current 0001-0007 changesets, drift
+fixes, and data backfill). (Merged from the former mybatis-sql-learning and
+database-migration-liquibase notes, now archived under docs/archive/.)
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
 authorization-to-repayment state transitions, lock ordering, row-level lock
 scope, and request-by-request examples.
@@ -133,12 +135,6 @@ See [Thread Runtime Notes](docs/thread-runtime-learning-cn.md) for the
 project-specific runtime thread model covering Tomcat request threads,
 schedulers, worker pools, Kafka listeners, OS thread mapping, thread states, and
 production troubleshooting.
-See [Local DB Schema Sync Notes](docs/db-schema-sync-2026-06-21-cn.md) for the
-2026-06-21 local MySQL schema drift fix, including updated columns, indexes,
-constraints, data backfill, and runtime verification.
-See [Database Migration Notes](docs/database-migration-liquibase-cn.md) for the
-Liquibase migration setup, local operations, and examples of outdated table
-structures.
 
 Create an authorization:
 
@@ -300,7 +296,7 @@ docker compose up -d
 ```
 
 For details and outdated-schema examples, see
-[Database Migration Notes](docs/database-migration-liquibase-cn.md).
+[MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md).
 
 ## Run Application
 

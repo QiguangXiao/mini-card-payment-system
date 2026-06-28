@@ -46,8 +46,8 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `mybatis-sql-learning-cn.md` + `database-migration-liquibase-cn.md` | ⏳ | 拟合并为一份数据/SQL 文档 |
-| `db-schema-sync-2026-06-21-cn.md` | ⏳ | 一次性本地 schema 同步记录，拟直接归档 |
+| [`mybatis-sql-and-migration-cn.md`](mybatis-sql-and-migration-cn.md) | ✅ | **已合并** `mybatis-sql-learning` + `database-migration-liquibase`；迁移文件列表对齐到 **0001–0007**（旧文档只列到 0003），保留全部 SQL 例子与面试话术 |
+| `db-schema-sync-2026-06-21-cn.md` | ✅ 归档 | 一次性本地 schema drift 修复日志，**直接归档**不并入 |
 
 ### 5. 缓存与限流（Caching & Rate Limiting）
 
@@ -97,3 +97,6 @@
 - `async-workflows-comparison-cn.md` → 合并进 `claimable-jobs-cn.md`
 - `claimable-job-families-comparison-claude-cn.md` → 合并进 `claimable-jobs-cn.md`
 - `statement-job-design-cn.md` → 合并进 `claimable-jobs-cn.md`
+- `mybatis-sql-learning-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
+- `database-migration-liquibase-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
+- `db-schema-sync-2026-06-21-cn.md` → 一次性日志，直接归档（未并入）
