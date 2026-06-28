@@ -23,9 +23,8 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `credit-card-lifecycle-cn.md` | ⏳ | 发卡方刷卡到还款全流程概念（拟并入 `ToDo.md` 的 remaining-domain 路线图） |
-| `domain-state-flow-cn.md` | ⏳ | 授权→还款的状态流转与锁规则（深度，逐请求示例） |
-| `ToDo.md` | ⏳ | 剩余领域学习路线图（ledger/reconciliation/reversal…），拟并入业务领域文档 |
+| [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `ToDo` 路线图；对齐 statement claimable job 类名（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobHandler`/`StatementGenerationService`） |
+| `domain-state-flow-cn.md` | ⏳ 待对齐 | 保留为锁/状态深度文档（逐请求示例 + 锁顺序），下一步对齐代码 |
 
 ### 2. 项目实现（Implementation）
 
@@ -102,3 +101,5 @@
 - `db-schema-sync-2026-06-21-cn.md` → 一次性日志，直接归档（未并入）
 - `jvm-monitoring-learning-cn.md` → 合并进 `jvm-threads-runtime-cn.md`
 - `thread-runtime-learning-cn.md` → 合并进 `jvm-threads-runtime-cn.md`
+- `credit-card-lifecycle-cn.md` → 合并进 `credit-card-domain-cn.md`
+- `ToDo.md` → 合并进 `credit-card-domain-cn.md`（剩余领域路线图）

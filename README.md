@@ -83,9 +83,13 @@ database-migration-liquibase notes, now archived under docs/archive/.)
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
 authorization-to-repayment state transitions, lock ordering, row-level lock
 scope, and request-by-request examples.
-See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
-issuer-side business concepts such as authorization, presentment, statement,
-payment, refund, dispute, ledger, and reconciliation.
+See [Credit Card Domain Notes](docs/credit-card-domain-cn.md) for the issuer-side
+business flow (authorization, presentment/posting, statement, repayment), the
+branch flows (reversal, expiry, refund, clearing adjustment, dispute), the
+ledger-vs-transaction-vs-reconciliation distinction, the issuer engineering
+concerns, and the remaining-domain roadmap (what to build next and why). (Merged
+from the former credit-card-lifecycle and ToDo notes, now archived under
+docs/archive/.)
 See [Caching & Rate Limiting](docs/caching-and-rate-limiting-cn.md) for the
 statement GET two-level cache (Caffeine L1 + Redis L2, cache-aside, versioned
 Lua CAS + tombstone, cross-pod rebuild lock, Pub/Sub L1 invalidation), the
@@ -94,9 +98,6 @@ rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general cache
 design rules (penetration/breakdown/avalanche), and hardcore interview Q&A.
 (Merged from the former cache-snapshot-design, cache-invalidation-broadcast, and
 distributed-cache notes, now archived under docs/archive/.)
-See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
-for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
-topics.
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
