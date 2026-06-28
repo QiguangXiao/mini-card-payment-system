@@ -59,7 +59,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `spring-java-technical-learning-cn.md` | ⏳ | 保留，但裁掉已被 cache/kafka/mybatis 文档覆盖的重复部分 |
+| [`spring-java-technical-learning-cn.md`](spring-java-technical-learning-cn.md) | ✅ | **保留不归档**；§7/§8/§9 裁成指向新 数据/消息/缓存 文档的精简指针节（2702→2259 行），保留 Spring/库集成的独特小点；修正 §15 过时引用（归档 cache 文档、已删除的 `StatementBatchService`/`StatementService`）|
 
 ### 7. 运行时与运维（Runtime & Ops）
 
