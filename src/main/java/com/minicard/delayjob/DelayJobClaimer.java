@@ -3,6 +3,7 @@ package com.minicard.delayjob;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -44,9 +45,10 @@ public class DelayJobClaimer {
         );
         for (DelayJob job : jobs) {
             // claim 后立刻 PENDING -> PROCESSING，commit 后其他 pod 就不会重复领取。
-            // nextAttemptAt 在 PROCESSING 状态下临时充当 lease deadline。
+            // nextAttemptAt 在 PROCESSING 状态下临时充当 lease deadline；leaseToken 才是本轮 owner identity。
             // 如果不先写 PROCESSING lease，多实例 poller 会同时执行同一个 future business action。
-            job.markProcessing(now, properties.processingTimeoutSeconds());
+            String leaseToken = UUID.randomUUID().toString();
+            job.markProcessing(now, properties.processingTimeoutSeconds(), leaseToken);
             delayJobRepository.updateExecutionState(job);
         }
         return jobs;

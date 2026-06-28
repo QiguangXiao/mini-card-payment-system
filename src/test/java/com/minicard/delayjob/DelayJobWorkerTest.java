@@ -63,7 +63,8 @@ class DelayJobWorkerTest {
         DelayJobHandler handler = mock(DelayJobHandler.class);
         DelayJob claimed = claimedJob();
         DelayJob current = claimedJob();
-        current.markProcessing(NOW.plusSeconds(1), 60);
+        // deadline 相同但 token 不同：证明 finalize ownership 不再依赖 nextAttemptAt timestamp。
+        current.markProcessing(NOW, 60, "lease-token-2");
         when(handler.jobType()).thenReturn(DelayJobType.AUTHORIZATION_EXPIRY);
         when(repository.findByIdForUpdate(claimed.id())).thenReturn(Optional.of(current));
         DelayJobWorker worker = worker(repository, handler);
@@ -96,7 +97,7 @@ class DelayJobWorkerTest {
                 NOW,
                 NOW
         );
-        job.markProcessing(NOW, 60);
+        job.markProcessing(NOW, 60, "lease-token-1");
         return job;
     }
 

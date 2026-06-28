@@ -56,8 +56,8 @@
 - **OutboxEvent 是状态机**（`messaging/outbox/OutboxEvent.java`）：
   - 状态 `PENDING / PROCESSING / PUBLISHED / DEAD`，只读 getter，状态只能经
     `markProcessing / markPublished / markFailed / markProcessingTimedOut` 推进。
-  - `next_attempt_at` **一列两用**：既是 PROCESSING 的 lease 截止时间，又是 finalize 时的
-    lease token。
+  - `next_attempt_at` 只做时间语义：PENDING 时是下次可发布时间，PROCESSING 时是 lease deadline；
+    `lease_token` 是 finalize 时比较的 owner token。
   - `markFailed` 指数退避：`delay = min(2^(attempts-1), 60s)`，`1L << n` 防溢出；
     `attempts >= maxAttempts` 转 `DEAD`，阻断 poison message 无限重试。
   - `lastError` 在 domain 内截断到 500 字符，避免 DB 列长异常盖掉真正的失败原因。
@@ -78,7 +78,7 @@
   `outboxWorkerExecutor`。**等 broker ack 期间不持任何 DB 行锁**——否则 broker latency 会被
   放大成 MySQL 行锁时间，拖垮连接池。
 - **finalize 重校验 lease token**。`OutboxWorker.lockCurrentLease` 重新 `FOR UPDATE` 取行，
-  校验 `status==PROCESSING && next_attempt_at==claimed.next_attempt_at`。
+  校验 `status==PROCESSING && lease_token==claimed.lease_token`。
   迟到的老 worker 不能覆盖 recoverer/新 worker 已经推进的状态。
 - **worker pool 拒绝也要 finalize**。`TaskRejectedException` -> `markRejectedForRetry`，
   否则 event 会卡在 PROCESSING 直到 recoverer 才可见。
@@ -265,11 +265,12 @@ poller 的 `WHERE status='PENDING' AND next_attempt_at<=now ORDER BY created_at`
   消息已进 Kafka，但 outbox 行没标 PUBLISHED（仍 PROCESSING）→ recoverer 到期后放回 PENDING →
   **重发**。这又落回 at-least-once，消费者幂等兜底。完全自洽。
 
-### Q5. PROCESSING lease 的意义？lease token 用 `next_attempt_at` 靠谱吗？
+### Q5. PROCESSING lease 的意义？为什么不用 `next_attempt_at` 当 lease token？
 **答**：PROCESSING 是租约不是永久所有权。worker 宕机后 `OutboxRecoverer` 在
 `next_attempt_at <= now` 时把行按一次失败处理放回重试。finalize 前
-`lockCurrentLease` 校验 `status==PROCESSING && next_attempt_at` 未变，
-防止**迟到的老 worker** 把别人已推进的状态改回 PUBLISHED。
+`lockCurrentLease` 校验 `status==PROCESSING && lease_token` 未变，防止**迟到的老 worker**
+把别人已推进的状态改回 PUBLISHED。`next_attempt_at` 不再兼任 token，因为 timestamp 有
+Java `Instant` vs MySQL `TIMESTAMP(6)` 精度边界。
 - **硬核追问：两个 worker 同一 `now` claim 同一行，token 会撞吗？**
   不会。claim 在短事务里 `FOR UPDATE SKIP LOCKED`，对同一行是串行化的，只有一个 winner 写 lease；
   且 token 是**按行**比较，不同行互不影响。

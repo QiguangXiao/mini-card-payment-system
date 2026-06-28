@@ -21,7 +21,7 @@ class OutboxRecovererTest {
     void recoversExpiredProcessingLeaseForRetry() {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         OutboxEvent event = pendingEvent();
-        event.markProcessing(NOW.minusSeconds(60), 30);
+        event.markProcessing(NOW.minusSeconds(60), 30, "lease-token-1");
         when(repository.findStuckProcessingBatchForUpdate(NOW, 10)).thenReturn(List.of(event));
         OutboxRecoverer recoverer = new OutboxRecoverer(
                 repository,
@@ -33,6 +33,7 @@ class OutboxRecovererTest {
 
         assertThat(event.status()).isEqualTo(OutboxEventStatus.PENDING);
         assertThat(event.attempts()).isEqualTo(1);
+        assertThat(event.leaseToken()).isNull();
         assertThat(event.lastError()).isEqualTo("outbox processing lease expired");
         verify(repository).updateDeliveryState(event);
     }

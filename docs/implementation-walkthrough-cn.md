@@ -1323,7 +1323,8 @@ credit account row lock -> statement row lock
 
    领取后调用：
 
-   - `event.markProcessing(now, processingTimeoutSeconds)`
+   - 生成随机 `lease_token`
+   - `event.markProcessing(now, processingTimeoutSeconds, leaseToken)`
    - `outboxEventRepository.updateDeliveryState(event)`
 
    这一步提交后，DB row lock 释放。
@@ -1355,7 +1356,7 @@ credit account row lock -> statement row lock
 
 6. stale lease 防护
 
-   `PROCESSING` 的 `next_attempt_at` 被当作轻量 lease token。
+   `PROCESSING` 的 `next_attempt_at` 只表示 lease deadline，`lease_token` 才是本轮 owner token。
    如果 publisher 太慢，lease 过期后事件被另一个实例重新领取，旧 publisher 的迟到结果不会覆盖新状态。
 
 7. `OutboxRecoverer.recoverStuckEvents()`
@@ -1485,6 +1486,7 @@ repayment.received
 - 使用 `FOR UPDATE SKIP LOCKED`。
 - 把 job 标记成 `PROCESSING`。
 - 设置 `next_attempt_at = now + processingTimeoutSeconds`。
+- 生成随机 `lease_token`，作为本轮 PROCESSING lease 的 owner identity。
 - claim transaction 立刻 commit。
 - commit 后，poller 再把每个 claimed job submit 给 `delayJobWorkerExecutor`。
 
@@ -1492,7 +1494,7 @@ repayment.received
 
 - 如果 pod claim job 后宕机，job 不能永久卡住。
 - lease 到期后，`DelayJobRecoverer` 会把 job 恢复成可 retry 状态。
-- worker finalize 时会重新锁 job row，并检查当前 row 仍然是同一个 `PROCESSING` lease，避免旧 worker 覆盖新 lease。
+- worker finalize 时会重新锁 job row，并比较 `lease_token`，避免旧 worker 覆盖新 lease。
 
 ### 8.2 Worker dispatch handler
 

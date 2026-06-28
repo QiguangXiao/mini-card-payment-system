@@ -24,7 +24,7 @@ import org.springframework.transaction.support.TransactionOperations;
  * side-effect outside tx, lease revalidation, 配信ワーカー(はいしんワーカー)。</p>
  *
  * <p>结构照搬 OutboxWorker：等待 provider 回执的耗时不占用 DB 事务，只在更新投递状态时短暂开事务，
- * 且 finalize 前重新 FOR UPDATE 锁住并校验 lease token(status==PROCESSING 且 nextAttemptAt 未变)，
+ * 且 finalize 前重新 FOR UPDATE 锁住并校验 lease token(status==PROCESSING 且 leaseToken 未变)，
  * 防止迟到 worker 覆盖 recoverer/新 worker 的结果。</p>
  */
 @Service

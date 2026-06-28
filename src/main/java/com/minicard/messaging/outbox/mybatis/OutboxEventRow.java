@@ -30,6 +30,8 @@ public record OutboxEventRow(
         Integer attempts,
         /** 下次可发布时间；PROCESSING 时表示 lease deadline。 */
         Instant nextAttemptAt,
+        /** PROCESSING lease 的 owner token；非 PROCESSING 时为空。 */
+        String leaseToken,
         /** 创建时间。 */
         Instant createdAt,
         /** 成功发布时间。 */

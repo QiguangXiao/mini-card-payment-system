@@ -30,6 +30,8 @@ public record DelayJobRow(
         Instant scheduledAt,
         /** 下次可执行时间；PROCESSING 时临时表示 lease deadline。 */
         Instant nextAttemptAt,
+        /** PROCESSING lease 的 owner token；非 PROCESSING 时为空。 */
+        String leaseToken,
         /** 创建时间。 */
         Instant createdAt,
         /** 更新时间。 */

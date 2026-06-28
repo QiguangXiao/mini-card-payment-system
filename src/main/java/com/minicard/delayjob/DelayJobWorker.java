@@ -127,16 +127,18 @@ public class DelayJobWorker {
         DelayJob job = delayJobRepository.findByIdForUpdate(claimedJob.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed delay job disappeared " + claimedJob.id()
-                ));
+        ));
         if (job.status() != DelayJobStatus.PROCESSING
-                || !job.nextAttemptAt().equals(claimedJob.nextAttemptAt())) {
+                || claimedJob.leaseToken() == null
+                || !claimedJob.leaseToken().equals(job.leaseToken())) {
             // 旧 worker 可能在 lease 过期后才返回；此时不能覆盖新 worker/recoverer 的状态。
-            // 如果不校验 lease token，迟到 worker 可能把新 lease 的失败/重试结果错误改成 DONE。
+            // leaseToken 是本轮 claim 的 owner identity；nextAttemptAt 只表示 lease deadline。
             log.warn(
-                    "delay_job_lease_changed jobId={} claimedLease={} currentStatus={} currentLease={}",
+                    "delay_job_lease_changed jobId={} claimedToken={} currentStatus={} currentToken={} currentLease={}",
                     claimedJob.id(),
-                    claimedJob.nextAttemptAt(),
+                    claimedJob.leaseToken(),
                     job.status(),
+                    job.leaseToken(),
                     job.nextAttemptAt()
             );
             return null;

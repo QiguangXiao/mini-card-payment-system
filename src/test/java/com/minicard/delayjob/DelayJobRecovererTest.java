@@ -21,7 +21,7 @@ class DelayJobRecovererTest {
     void recoversExpiredProcessingLeaseForRetry() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJob job = job();
-        job.markProcessing(NOW.minusSeconds(120), 60);
+        job.markProcessing(NOW.minusSeconds(120), 60, "lease-token-1");
         when(repository.findStuckProcessingBatchForUpdate(NOW, 100)).thenReturn(List.of(job));
         DelayJobRecoverer recoverer = new DelayJobRecoverer(
                 repository,
@@ -33,6 +33,7 @@ class DelayJobRecovererTest {
 
         assertThat(job.status()).isEqualTo(DelayJobStatus.PENDING);
         assertThat(job.attempts()).isEqualTo(1);
+        assertThat(job.leaseToken()).isNull();
         assertThat(job.lastError()).isEqualTo("processing lease expired");
         verify(repository).updateExecutionState(job);
     }

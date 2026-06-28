@@ -17,6 +17,7 @@
             <arg column="attempts" javaType="_int"/>
             <arg column="scheduled_at" javaType="java.time.Instant"/>
             <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="lease_token" javaType="java.lang.String"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="updated_at" javaType="java.time.Instant"/>
             <arg column="last_error" javaType="java.lang.String"/>
@@ -25,7 +26,7 @@
 
     <sql id="delayJobColumns">
         id, job_type, aggregate_type, aggregate_id, status, attempts,
-        scheduled_at, next_attempt_at, created_at, updated_at, last_error
+        scheduled_at, next_attempt_at, lease_token, created_at, updated_at, last_error
     </sql>
 
     <insert id="insert">
@@ -40,6 +41,7 @@
             #{attempts},
             #{scheduledAt},
             #{nextAttemptAt},
+            #{leaseToken,jdbcType=CHAR},
             #{createdAt},
             #{updatedAt},
             #{lastError,jdbcType=VARCHAR}
@@ -88,6 +90,7 @@
         SET status = #{status},
             attempts = #{attempts},
             next_attempt_at = #{nextAttemptAt},
+            lease_token = #{leaseToken,jdbcType=CHAR},
             updated_at = #{updatedAt},
             last_error = #{lastError,jdbcType=VARCHAR}
         WHERE id = #{id}

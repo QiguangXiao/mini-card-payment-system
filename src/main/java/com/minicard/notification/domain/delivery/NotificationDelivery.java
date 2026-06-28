@@ -85,6 +85,7 @@ public final class NotificationDelivery {
         this.sentAt = sentAt;
         this.createdAt = Objects.requireNonNull(createdAt);
         this.updatedAt = Objects.requireNonNull(updatedAt);
+        validateLeaseState();
     }
 
     /**
@@ -217,6 +218,21 @@ public final class NotificationDelivery {
 
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH ? value : value.substring(0, MAX_ERROR_LENGTH);
+    }
+
+    private void validateLeaseState() {
+        if (leaseToken != null && leaseToken.isBlank()) {
+            throw new IllegalArgumentException("lease token must not be blank");
+        }
+        // PROCESSING 必须有 token；SENT/PENDING/DEAD 不能残留 token。
+        // 如果旧 token 被持久化残留，迟到 worker 可能误以为自己仍拥有本轮 lease。
+        boolean hasLeaseToken = leaseToken != null;
+        if (status == NotificationDeliveryStatus.PROCESSING && !hasLeaseToken) {
+            throw new IllegalArgumentException("processing notification delivery requires lease token");
+        }
+        if (status != NotificationDeliveryStatus.PROCESSING && hasLeaseToken) {
+            throw new IllegalArgumentException("non-processing notification delivery cannot keep lease token");
+        }
     }
 
     private static String requireText(String value, String fieldName) {

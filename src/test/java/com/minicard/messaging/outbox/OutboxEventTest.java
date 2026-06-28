@@ -15,10 +15,11 @@ class OutboxEventTest {
     void marksEventProcessingWithLeaseDeadline() {
         OutboxEvent event = pendingEvent();
 
-        event.markProcessing(NOW, 30);
+        event.markProcessing(NOW, 30, "lease-token-1");
 
         assertThat(event.status()).isEqualTo(OutboxEventStatus.PROCESSING);
         assertThat(event.nextAttemptAt()).isEqualTo(NOW.plusSeconds(30));
+        assertThat(event.leaseToken()).isEqualTo("lease-token-1");
     }
 
     @Test
@@ -41,12 +42,14 @@ class OutboxEventTest {
     @Test
     void marksAcknowledgedEventPublished() {
         OutboxEvent event = pendingEvent();
+        event.markProcessing(NOW, 30, "lease-token-1");
 
         event.markPublished(NOW.plusSeconds(1));
 
         assertThat(event.status()).isEqualTo(OutboxEventStatus.PUBLISHED);
         assertThat(event.publishedAt()).isEqualTo(NOW.plusSeconds(1));
         assertThat(event.lastError()).isNull();
+        assertThat(event.leaseToken()).isNull();
     }
 
     private OutboxEvent pendingEvent() {

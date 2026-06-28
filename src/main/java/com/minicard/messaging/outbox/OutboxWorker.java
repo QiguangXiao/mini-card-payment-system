@@ -108,16 +108,18 @@ public class OutboxWorker {
         OutboxEvent event = outboxEventRepository.findByIdForUpdate(claimedEvent.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed outbox event disappeared " + claimedEvent.id()
-                ));
+        ));
         if (event.status() != OutboxEventStatus.PROCESSING
-                || !event.nextAttemptAt().equals(claimedEvent.nextAttemptAt())) {
+                || claimedEvent.leaseToken() == null
+                || !claimedEvent.leaseToken().equals(event.leaseToken())) {
             // 老 worker 返回太晚时不能覆盖新 lease 的处理结果，这是防并发覆盖的关键保护。
-            // 如果不比较 lease token，旧 worker 可能把新 worker 已失败/重试的结果改成 PUBLISHED。
+            // leaseToken 是本轮 claim 的 owner identity；nextAttemptAt 只是 deadline，不能再兼任 token。
             log.warn(
-                    "outbox_lease_changed eventId={} claimedLease={} currentStatus={} currentLease={}",
+                    "outbox_lease_changed eventId={} claimedToken={} currentStatus={} currentToken={} currentLease={}",
                     claimedEvent.id(),
-                    claimedEvent.nextAttemptAt(),
+                    claimedEvent.leaseToken(),
                     event.status(),
+                    event.leaseToken(),
                     event.nextAttemptAt()
             );
             return null;

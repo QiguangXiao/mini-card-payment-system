@@ -61,8 +61,8 @@ sender 调用（当前是模拟的）外部 push/email provider，成功标 `SEN
 - **PROCESSING 是 lease 不是所有权（`...Recoverer`）** — ✅ 必需。worker/pod 在“已 claim、未 finalize”
   之间宕机，*如果* 没有 recoverer，这条投递永远停在 PROCESSING、永远不可见，可靠投递链路就断了。
 - **finalize 校验 lease token（`NotificationDeliveryWorker.lockCurrentLease`）** — ✅ 防并发覆盖的命门。
-  迟到的旧 worker 不能覆盖 recoverer/新 worker 的结果。token 用 `nextAttemptAt`（lease deadline）做乐观比较，
-  和 OutboxWorker / DelayJobWorker 完全一致。
+  迟到的旧 worker 不能覆盖 recoverer/新 worker 的结果。token 用独立 UUID `lease_token` 做乐观比较，
+  现在和 OutboxWorker / DelayJobWorker 完全一致。
 - **副作用在事务外、finalize 在另一个短事务（`TransactionOperations`）** — ✅ 直接照搬 `OutboxWorker`：
   等 provider 回执的耗时不占 DB 事务，只在写状态时短暂开事务。
 - **bounded worker pool + 队列满回退（`notificationDeliveryWorkerExecutor` + poller 捕获 `TaskRejectedException`）**
@@ -372,8 +372,8 @@ poller: 重新 claim D_push → worker 再 send(idem=D_push)
   **微秒**列。claim 返回的是**内存**对象（纳秒），worker finalize 时**回读 DB**（微秒截断），两者 `equals` 会
   **确定性地为 false**。后果：provider 已成功、worker 却误判 "lease changed" 不写 SENT → recoverer 反复重试 →
   最终 **DEAD**（一条其实已送达的通知）。独立 `lease_token`（CHAR(36) UUID 精确比较）既不受时间戳精度影响，
-  也避免"同一微秒两次 claim 撞同一时间戳令牌"。注：`outbox`/`delayjob` 仍用 `nextAttemptAt` 当 token，存在同一
-  潜在隐患（被固定时钟测试 + 下游去重掩盖），应同样改成独立 token。
+  也避免"同一微秒两次 claim 撞同一时间戳令牌"。同样的独立 token 现在也用于 `outbox` / `delayjob`，
+  三个轻量 claimable job 家族都不再用 `nextAttemptAt` 当 owner token。
 - **worker 池满**：poller 提交时抛 `TaskRejectedException` → `markRejectedForRetry` 立刻把投递放回退避重试，
   而不是让它干等到 lease 超时才被 Recoverer 捡回（更快回到队列）。
 - **provider 去重表与并发**：`computeIfAbsent` 保证同一 idemKey 并发只生成一个 receipt（模拟 provider 的幂等）。

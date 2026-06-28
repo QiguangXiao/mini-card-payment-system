@@ -61,7 +61,8 @@ class OutboxWorkerTest {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         OutboxEvent claimed = claimedEvent();
         OutboxEvent current = copy(claimed);
-        current.markProcessing(NOW.plusSeconds(1), 30);
+        // deadline 相同但 token 不同：证明 finalize ownership 不再依赖 nextAttemptAt timestamp。
+        current.markProcessing(NOW, 30, "lease-token-2");
         when(repository.findByIdForUpdate(claimed.id())).thenReturn(Optional.of(current));
         OutboxWorker worker = worker(repository, new RecordingPublisher());
 
@@ -94,7 +95,7 @@ class OutboxWorkerTest {
                 "{\"eventType\":\"authorization.approved\"}",
                 NOW
         );
-        event.markProcessing(NOW, 30);
+        event.markProcessing(NOW, 30, "lease-token-1");
         return event;
     }
 
@@ -114,6 +115,7 @@ class OutboxWorkerTest {
                 source.status(),
                 source.attempts(),
                 source.nextAttemptAt(),
+                source.leaseToken(),
                 source.createdAt(),
                 source.publishedAt(),
                 source.lastError()

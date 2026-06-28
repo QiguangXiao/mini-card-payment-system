@@ -77,6 +77,7 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
                 job.attempts(),
                 job.scheduledAt(),
                 job.nextAttemptAt(),
+                job.leaseToken(),
                 job.createdAt(),
                 job.updatedAt(),
                 job.lastError()
@@ -94,6 +95,7 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
                 row.attempts(),
                 row.scheduledAt(),
                 row.nextAttemptAt(),
+                row.leaseToken(),
                 row.createdAt(),
                 row.updatedAt(),
                 row.lastError()

@@ -214,8 +214,8 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 - `outbox` 同形，但业务是“可靠发消息到 Kafka”，状态机
   `PENDING/PROCESSING/PUBLISHED/DEAD`。
 
-> 注意（更正一个常见误解）：`delayjob` **也有** lease token 校验
-> （`DelayJobWorker.lockCurrentLease` 比较 `nextAttemptAt`）。
+> 注意（更正一个常见误解）：`delayjob` / `outbox` **也有** lease token 校验
+> （`Worker.lockCurrentLease` 比较随机 `lease_token`）。
 > 区别不在“有没有 lease 校验”，而在下面这些点。
 
 ### 家族 B：`statement` job（1 类 dispatcher + 显式 owner token + fan-out）
@@ -235,8 +235,8 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 | 维度 | delayjob / outbox（家族 A） | statement job（家族 B，新） |
 | --- | --- | --- |
 | 调度类数量 | 4（Poller/Claimer/Worker/Recoverer） | 1（Dispatcher） |
-| lease 列 | 单列 `next_attempt_at`（兼 backoff + lease） | `claimed_by/at/until` + `claim_token` |
-| lease token 校验 | 有（比较 `next_attempt_at`） | 有（比较随机 `claim_token`） |
+| lease 列 | `next_attempt_at` + `lease_token` | `claimed_by/at/until` + `claim_token` |
+| lease token 校验 | 有（比较随机 `lease_token`） | 有（比较随机 `claim_token`） |
 | 重试 backoff | 有（指数退避 + 上限） | 无（立即可重试，max_attempts 兜底） |
 | 一个 job 干什么 | 一个聚合的未来动作 / 一条消息 | 一个分片（上千账户）的 fan-out |
 | 故障粒度 | 整个 job 成功/失败 | 单账户隔离，分片级计数 |

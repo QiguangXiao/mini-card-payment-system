@@ -479,7 +479,8 @@ aggregate_id = auth-001
 OutboxPoller -> OutboxClaimer
   -> SELECT ... FOR UPDATE SKIP LOCKED
   -> status PENDING -> PROCESSING
-  -> lease token encoded by nextAttemptAt
+  -> next_attempt_at = lease deadline
+  -> lease_token = owner token
   -> commit
 
 Worker A -> OutboxWorker.publishClaimedEvent(evt-001)

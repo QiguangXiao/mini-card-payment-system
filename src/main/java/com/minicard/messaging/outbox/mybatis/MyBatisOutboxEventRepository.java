@@ -71,6 +71,7 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
                 event.status().name(),
                 event.attempts(),
                 event.nextAttemptAt(),
+                event.leaseToken(),
                 event.createdAt(),
                 event.publishedAt(),
                 event.lastError()
@@ -89,6 +90,7 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
                 OutboxEventStatus.valueOf(row.status()),
                 row.attempts(),
                 row.nextAttemptAt(),
+                row.leaseToken(),
                 row.createdAt(),
                 row.publishedAt(),
                 row.lastError()

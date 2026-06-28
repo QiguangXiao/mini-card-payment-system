@@ -33,6 +33,7 @@ class DelayJobClaimerTest {
         assertThat(claimed).containsExactly(job);
         assertThat(job.status()).isEqualTo(DelayJobStatus.PROCESSING);
         assertThat(job.nextAttemptAt()).isEqualTo(NOW.plusSeconds(60));
+        assertThat(job.leaseToken()).isNotBlank();
         verify(repository).updateExecutionState(job);
     }
 

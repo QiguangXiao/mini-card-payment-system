@@ -17,6 +17,7 @@
             <arg column="status" javaType="java.lang.String"/>
             <arg column="attempts" javaType="int"/>
             <arg column="next_attempt_at" javaType="java.time.Instant"/>
+            <arg column="lease_token" javaType="java.lang.String"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="published_at" javaType="java.time.Instant"/>
             <arg column="last_error" javaType="java.lang.String"/>
@@ -25,7 +26,7 @@
 
     <sql id="outboxColumns">
         id, aggregate_type, aggregate_id, event_type, event_version,
-        partition_key, payload, status, attempts, next_attempt_at, created_at,
+        partition_key, payload, status, attempts, next_attempt_at, lease_token, created_at,
         published_at, last_error
     </sql>
 
@@ -43,6 +44,7 @@
             #{status},
             #{attempts},
             #{nextAttemptAt},
+            #{leaseToken,jdbcType=CHAR},
             #{createdAt},
             #{publishedAt,jdbcType=TIMESTAMP},
             #{lastError,jdbcType=VARCHAR}
@@ -90,6 +92,7 @@
         SET status = #{status},
             attempts = #{attempts},
             next_attempt_at = #{nextAttemptAt},
+            lease_token = #{leaseToken,jdbcType=CHAR},
             published_at = #{publishedAt,jdbcType=TIMESTAMP},
             last_error = #{lastError,jdbcType=VARCHAR}
         WHERE id = #{id}
