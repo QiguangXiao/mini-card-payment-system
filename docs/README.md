@@ -39,7 +39,7 @@
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
 | [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐代码（3 个 gap 仍存在、新增 StatementNotificationListener），保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
-| `async-workflows-comparison-cn.md` + `claimable-job-families-comparison-claude-cn.md` + `statement-job-design-cn.md` | ⏳ | 拟合并为一份"claimable job（DelayJob/Outbox/StatementJob）"文档 |
+| [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
 | `notification-delivery-design-cn.md` | ⏳ | 通知真实投递（保留独立，对齐代码） |
 
 ### 4. 数据（Data：MyBatis / SQL / Migration）
@@ -94,3 +94,6 @@
 - `kafka-outbox-design.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
 - `kafka-learning-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
 - `event-outbox-messaging-design-claude-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
+- `async-workflows-comparison-cn.md` → 合并进 `claimable-jobs-cn.md`
+- `claimable-job-families-comparison-claude-cn.md` → 合并进 `claimable-jobs-cn.md`
+- `statement-job-design-cn.md` → 合并进 `claimable-jobs-cn.md`

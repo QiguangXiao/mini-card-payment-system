@@ -44,17 +44,16 @@ reference, partition ordering, per-context DLTs, the real gaps (retention, DEAD
 observability, version negotiation), and hardcore interview Q&A. (Merged from the
 former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
 notes, now archived under docs/archive/.)
-See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
-side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
-producer/consumer contexts, platform execution resources, and why their names
-are similar or intentionally different.
-See [Statement Job Design](docs/statement-job-design-cn.md) for the flattened
-sharded claimable-job design, the before/after of dropping the parent batch,
-and a comparison with the DelayJob and Outbox job implementations.
-See [Claimable Job Families Comparison (Claude)](docs/claimable-job-families-comparison-claude-cn.md)
-for a side-by-side comparison of the DelayJob, Outbox, and StatementJob queues and
-their executors (claimer/poller/worker/recoverer/dispatcher): the shared
-claim-lease-recover model, the deliberate differences, real gaps, and interview Q&A.
+See [Claimable Jobs (DelayJob / Outbox / StatementJob)](docs/claimable-jobs-cn.md)
+for the three database-backed job families: the shared claim-lease-recover model
+and seven invariants, the per-family details (4-class framework vs 1-class
+dispatcher, single vs multi-column lease, backoff vs none, sharded fan-out), the
+master comparison table, the StatementJob flatten (parent-batch removal) with its
+data model and per-account fault isolation, the scheduler-vs-worker pool platform
+resources, the real gaps (DEAD observability, completed-row retention), and Q&A.
+(Merged from the former async-workflows-comparison, statement-job-design, and
+claimable-job-families notes — and corrects the stale "statement batch is not a
+claimable job" description — now archived under docs/archive/.)
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
