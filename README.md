@@ -30,30 +30,31 @@ Caffeine L1 + Redis L2 cache-aside for statement GET read models.
 
 See [Core Implementation Walkthrough](docs/implementation-walkthrough-cn.md) for
 the request-to-table learning path, current package map, state transitions,
-ID-generation points, and Outbox/DelayJob reliability flow.
+ID-generation points, the authorization/posting/statement/repayment flows, and
+the authorization & credit-account aggregate design decisions (boundary,
+invariants, idempotency/concurrency, persistence defense — merged from the former
+authorization-design note, now archived under docs/archive/).
 See [Spring, Java, and Library Usage Notes](docs/spring-java-technical-learning-cn.md)
 for a technical walkthrough of annotations, constructor injection, validation,
 configuration binding, transactions, schedulers, MyBatis, Kafka, cache,
 Feign/Resilience4j, and Java language habits used in this project.
-See [Authorization Design](docs/authorization-design.md) for the aggregate,
-transaction, idempotency, and concurrency decisions.
-See [Kafka and Outbox Design](docs/kafka-outbox-design.md) for event delivery,
-consumer idempotency, partition ordering, and failure-recovery decisions.
-See [Async Workflows Comparison](docs/async-workflows-comparison-cn.md) for a
-side-by-side Chinese walkthrough of schedulers, Outbox, DelayJob, Kafka
-producer/consumer contexts, platform execution resources, and why their names
-are similar or intentionally different.
-See [Statement Job Design](docs/statement-job-design-cn.md) for the flattened
-sharded claimable-job design, the before/after of dropping the parent batch,
-and a comparison with the DelayJob and Outbox job implementations.
-See [Event / Outbox / Messaging Design (Claude)](docs/event-outbox-messaging-design-claude-cn.md)
-for the end-to-end producer→outbox→Kafka→consumer→inbox implementation, its real
-strengths and gaps (retention, DEAD observability, version negotiation), and a
-hardcore interview Q&A on delivery semantics, idempotency, and ordering.
-See [Claimable Job Families Comparison (Claude)](docs/claimable-job-families-comparison-claude-cn.md)
-for a side-by-side comparison of the DelayJob, Outbox, and StatementJob queues and
-their executors (claimer/poller/worker/recoverer/dispatcher): the shared
-claim-lease-recover model, the deliberate differences, real gaps, and interview Q&A.
+See [Events, Outbox, Inbox & Kafka](docs/events-outbox-inbox-kafka-cn.md) for the
+transactional outbox (dual-write, claim/publish/finalize/recover), at-least-once
+delivery, consumer double-idempotency (Inbox + business key), the Kafka config
+reference, partition ordering, per-context DLTs, the real gaps (retention, DEAD
+observability, version negotiation), and hardcore interview Q&A. (Merged from the
+former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
+notes, now archived under docs/archive/.)
+See [Claimable Jobs (DelayJob / Outbox / StatementJob)](docs/claimable-jobs-cn.md)
+for the three database-backed job families: the shared claim-lease-recover model
+and seven invariants, the per-family details (4-class framework vs 1-class
+dispatcher, single vs multi-column lease, backoff vs none, sharded fan-out), the
+master comparison table, the StatementJob flatten (parent-batch removal) with its
+data model and per-account fault isolation, the scheduler-vs-worker pool platform
+resources, the real gaps (DEAD observability, completed-row retention), and Q&A.
+(Merged from the former async-workflows-comparison, statement-job-design, and
+claimable-job-families notes — and corrects the stale "statement batch is not a
+claimable job" description — now archived under docs/archive/.)
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
@@ -75,23 +76,29 @@ See [AWS ECS Deployment Notes](docs/aws-ecs-deployment-cn.md) for a
 beginner-friendly but production-oriented map from this project's Docker Compose
 shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
 CodePipeline, AWS resource naming, and small/medium/large production sizing.
-See [MyBatis and SQL Learning Notes](docs/mybatis-sql-learning-cn.md) for
-MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and
-backend interview talking points.
+See [MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md) for
+MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and the
+Liquibase schema-migration workflow (the current 0001-0007 changesets, drift
+fixes, and data backfill). (Merged from the former mybatis-sql-learning and
+database-migration-liquibase notes, now archived under docs/archive/.)
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
 authorization-to-repayment state transitions, lock ordering, row-level lock
 scope, and request-by-request examples.
-See [Credit Card Lifecycle Notes](docs/credit-card-lifecycle-cn.md) for broader
-issuer-side business concepts such as authorization, presentment, statement,
-payment, refund, dispute, ledger, and reconciliation.
-See [Distributed Cache, Rate Limiting & Lua](docs/distributed-cache-cn.md) for
-the velocity sliding-window limiter, why card snapshot cache was removed, how
-statement GET uses L1/L2 cache-aside, rate-limiting algorithms, Lua atomicity,
-Redisson build-vs-buy, general cache design rules (cache-aside,
-penetration/breakdown/avalanche), and hardcore interview Q&A.
-See [Remaining Domain Roadmap](docs/ToDo.md) for the suggested learning order
-for ledger, reconciliation, reversal, refund, dispute, settlement, and user/auth
-topics.
+See [Credit Card Domain Notes](docs/credit-card-domain-cn.md) for the issuer-side
+business flow (authorization, presentment/posting, statement, repayment), the
+branch flows (reversal, expiry, refund, clearing adjustment, dispute), the
+ledger-vs-transaction-vs-reconciliation distinction, the issuer engineering
+concerns, and the remaining-domain roadmap (what to build next and why). (Merged
+from the former credit-card-lifecycle and ToDo notes, now archived under
+docs/archive/.)
+See [Caching & Rate Limiting](docs/caching-and-rate-limiting-cn.md) for the
+statement GET two-level cache (Caffeine L1 + Redis L2, cache-aside, versioned
+Lua CAS + tombstone, cross-pod rebuild lock, Pub/Sub L1 invalidation), the
+velocity sliding-window limiter, why card snapshot cache was removed,
+rate-limiting algorithms, Lua atomicity, Redisson build-vs-buy, general cache
+design rules (penetration/breakdown/avalanche), and hardcore interview Q&A.
+(Merged from the former cache-snapshot-design, cache-invalidation-broadcast, and
+distributed-cache notes, now archived under docs/archive/.)
 
 Most repositories use MyBatis XML mappers so SQL, pessimistic locks, and
 idempotency behavior remain explicit while repetitive JDBC row mapping is
@@ -122,20 +129,13 @@ GET /actuator/metrics/jvm.gc.pause
 GET /actuator/metrics/jvm.threads.live
 ```
 
-See [JVM Core, GC, and Monitoring Notes](docs/jvm-monitoring-learning-cn.md) for
-the interview-oriented explanation of JVM memory structure, request-allocation
-growth, GC, threads, liveness/readiness, production troubleshooting, and why JVM
-diagnostics stay outside the public business API.
-See [Thread Runtime Notes](docs/thread-runtime-learning-cn.md) for the
-project-specific runtime thread model covering Tomcat request threads,
-schedulers, worker pools, Kafka listeners, OS thread mapping, thread states, and
-production troubleshooting.
-See [Local DB Schema Sync Notes](docs/db-schema-sync-2026-06-21-cn.md) for the
-2026-06-21 local MySQL schema drift fix, including updated columns, indexes,
-constraints, data backfill, and runtime verification.
-See [Database Migration Notes](docs/database-migration-liquibase-cn.md) for the
-Liquibase migration setup, local operations, and examples of outdated table
-structures.
+See [JVM, Threads & Runtime Notes](docs/jvm-threads-runtime-cn.md) for the
+interview-oriented explanation of JVM memory structure, request-allocation
+growth and GC, the full thread model (Tomcat request threads, scheduler/worker
+pools, Kafka listeners, OS thread mapping, thread states, MySQL row-lock vs Java
+BLOCKED), liveness/readiness, the monitoring/diagnostics commands, and a
+production troubleshooting runbook. (Merged from the former jvm-monitoring and
+thread-runtime notes, now archived under docs/archive/.)
 
 Create an authorization:
 
@@ -297,7 +297,7 @@ docker compose up -d
 ```
 
 For details and outdated-schema examples, see
-[Database Migration Notes](docs/database-migration-liquibase-cn.md).
+[MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md).
 
 ## Run Application
 

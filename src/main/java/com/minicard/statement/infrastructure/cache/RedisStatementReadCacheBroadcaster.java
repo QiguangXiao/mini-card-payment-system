@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * <p>为什么是 Redis Pub/Sub 而不是 Kafka：缓存失效要的是<strong>广播给所有 pod</strong>，而 Kafka
  * 消费者组是竞争消费（一条消息只有一个 pod 收到），要广播得给每个 pod 配唯一 group，别扭且慢。
  * Redis Pub/Sub 天生广播、亚毫秒、fire-and-forget，正好配 L1 TTL 兜底。详见
- * docs/cache-invalidation-broadcast-cn.md。</p>
+ * docs/caching-and-rate-limiting-cn.md 第三部分。</p>
  */
 @Component
 @ConditionalOnProperty(prefix = "statement.read-cache.broadcast", name = "enabled", havingValue = "true")

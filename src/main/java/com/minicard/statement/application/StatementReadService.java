@@ -42,7 +42,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * "GET 在 commit 前读到旧值、evict 后才写回 L2"的迟到写（delete 把可比的版本也删了，迟到写落在空 key 上）。
  * 这里 evict 不再 delete，而是写一个带版本的<strong>墓碑</strong>(版本地板)；读回填和墓碑写都走同一段
  * Lua CAS（仅当 incoming.version >= stored.version 或不存在才写），于是旧版本的迟到写被地板挡下。
- * 版本取 paidAmount 的 minor units（本域单调非减）。详见 docs/cache-invalidation-broadcast-cn.md 第 3 节。</p>
+ * 版本取 paidAmount 的 minor units（本域单调非减）。详见 docs/caching-and-rate-limiting-cn.md 第三部分。</p>
  *
  * <p><strong>热点 key 重建锁防缓存击穿(cache breakdown / stampede)</strong>：当一个热点 statement 的 L2
  * entry 过期，每个 pod 都会有线程同时 miss 并回源 MySQL 重建同一份 read model——Caffeine 的 single-flight
