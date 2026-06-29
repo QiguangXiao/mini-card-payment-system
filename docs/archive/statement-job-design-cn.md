@@ -244,10 +244,10 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 
 ### 5.2 各自优缺点
 
-**家族 A（4 类 + 单列）**
-- 优点：单列 lease 极简；backoff 现成；泛型 + handler map 扩展新 jobType 方便。
-- 缺点：4 个类对“一个队列”来说偏碎；`next_attempt_at` 一列身兼两职，
-  含义需要解释（既是“下次重试时间”又是“lease 截止时间”）。
+**家族 A（4 类 + 轻量 lease）**
+- 优点：`next_attempt_at` + `lease_token` 模型简单；backoff 现成；泛型 + handler map 扩展新 jobType 方便。
+- 缺点：4 个类对“一个队列”来说偏碎；`next_attempt_at` 同时表达“下次重试时间”和“lease 截止时间”，
+  需要解释清楚，但 owner identity 已由 `lease_token` 单独承担。
 
 **家族 B（1 类 + 双列 + fan-out）**
 - 优点：一个 dispatcher 读完即懂；`claimed_by/at/until` 排障时一眼看清归属；
@@ -293,8 +293,8 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 1. **合并 4 类为 1 个 dispatcher**：把 `Poller/Claimer/Worker/Recoverer` 合成一个
    `DelayJobDispatcher`（poll / claim / 派发 / finalize / recover），保留
    `EnumMap` handler 分发。
-2. **决定 lease 列模型**：要么保留单列 `next_attempt_at`（简，但身兼两职），
-   要么升级成 `claimed_by/at/until + claim_token`（observability 强，owner check 更稳）。
+2. **决定 lease 列模型**：要么保留轻量 `next_attempt_at + lease_token`（简单），
+   要么升级成 `claimed_by/at/until + claim_token`（observability 强）。
    两者择一并统一。
 3. **保留各自不可合并的差异**：delayjob 的 backoff、泛型 handler；
    statement 的 sharding、单项隔离。**不要**为了“统一”强行抽象成一个泛型框架——

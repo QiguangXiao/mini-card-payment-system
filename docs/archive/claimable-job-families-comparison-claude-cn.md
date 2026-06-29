@@ -63,8 +63,8 @@
   `insertIfAbsent`，`scheduledAt = dueDate`。
 - **创建幂等**：`uk_delay_jobs_aggregate UNIQUE (job_type, aggregate_type, aggregate_id)` —— 一张
   statement 只会有一个 AUTO_REPAYMENT。
-- **lease 单列复用**：`next_attempt_at` 既是首次执行时间，又在 PROCESSING 时充当 lease deadline +
-  finalize token。
+- **轻量 lease**：`next_attempt_at` 表达时间语义（首次执行时间 / retry time / PROCESSING lease deadline），
+  `lease_token` 表达本轮 owner identity，finalize 时比较 token。
 - **退避**：`markFailed` 指数退避 `min(2^(n-1), 60s)`。
 - **派发表**：`DelayJobHandler` 列表启动时转 `EnumMap<DelayJobType, handler>`；缺 handler 走失败路径
   而非静默 DONE。
@@ -83,7 +83,7 @@
 - **一个 row = 一条要发布的消息**。**没有业务 handler**，worker 的“业务”就是
   `KafkaOutboxMessagePublisher.publish` 同步等 ack。
 - **业务方在状态变更同事务写入**（transactional outbox），无 `scheduledAt`：`next_attempt_at=createdAt`，立即可发。
-- **lease 单列复用**：同样用 `next_attempt_at`。
+- **轻量 lease**：同样用 `next_attempt_at` 表达时间语义，用 `lease_token` 表达本轮 owner identity。
 - **退避**：与 delayjob 完全对称 `min(2^(n-1), 60s)`。
 - **终态是 `PUBLISHED`**（不是 DONE）。
 - 详见姊妹篇 `event-outbox-messaging-design-claude-cn.md`。

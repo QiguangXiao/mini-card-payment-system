@@ -78,7 +78,7 @@ shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
 CodePipeline, AWS resource naming, and small/medium/large production sizing.
 See [MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and the
-Liquibase schema-migration workflow (the current 0001-0007 changesets, drift
+Liquibase schema-migration workflow (the current 0001-0009 changesets, drift
 fixes, and data backfill). (Merged from the former mybatis-sql-learning and
 database-migration-liquibase notes, now archived under docs/archive/.)
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full

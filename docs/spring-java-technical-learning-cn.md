@@ -822,7 +822,7 @@ downstream observes delay
 - **`@Mapper` + `@Param`**：mapper 接口由 MyBatis 在运行时实现；多参数方法必须 `@Param` 命名，否则 XML 里只能用 `param1/param2` 这种不直观名字。
 - **`Optional` 用在 repository 返回值**：`findById` 返回 `Optional<...>` 而非裸 null，强制调用方在 use case 层显式处理 not-found，不把 null 漏进 domain。
 - **`DuplicateKeyException`**：Spring 把 MySQL 唯一键冲突（如 `idempotency_key`）转成 `DataAccessException` 体系的 `DuplicateKeyException`；insert-first claim 正是 catch 它判断"别的请求已抢占"，而不是先 SELECT 再 INSERT。
-- **Liquibase 与 SQL init**：`spring.sql.init.mode: never` 关掉 Spring 的 schema.sql 自动建表，改由 Liquibase changelog 启动时迁移（当前 0001–0007）。
+- **Liquibase 与 SQL init**：`spring.sql.init.mode: never` 关掉 Spring 的 schema.sql 自动建表，改由 Liquibase changelog 启动时迁移（当前 0001–0009）。
 
 ## 8. Kafka、Spring Kafka 与 Jackson（机制详见消息文档）
 

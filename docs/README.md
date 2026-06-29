@@ -38,14 +38,14 @@
 | --- | --- | --- |
 | [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐代码（3 个 gap 仍存在、新增 StatementNotificationListener），保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
 | [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
-| [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、迁移 0006/0007 一致）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
+| [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、`lease_token` 模型）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
 | [`notification-mechanism-review-cn.md`](notification-mechanism-review-cn.md) | ✅ | 当前 Notification 分层梳理与类缩减评估：事件入口、Inbox 幂等、intent/delivery 拆分、delivery worker 状态机、provider 幂等、哪些类可缩减以及取舍 |
 
 ### 4. 数据（Data：MyBatis / SQL / Migration）
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`mybatis-sql-and-migration-cn.md`](mybatis-sql-and-migration-cn.md) | ✅ | **已合并** `mybatis-sql-learning` + `database-migration-liquibase`；迁移文件列表对齐到 **0001–0007**（旧文档只列到 0003），保留全部 SQL 例子与面试话术 |
+| [`mybatis-sql-and-migration-cn.md`](mybatis-sql-and-migration-cn.md) | ✅ | **已合并** `mybatis-sql-learning` + `database-migration-liquibase`；迁移文件列表对齐到 **0001–0009**（旧文档只列到 0003），保留全部 SQL 例子与 interview 话术 |
 | `db-schema-sync-2026-06-21-cn.md` | ✅ 归档 | 一次性本地 schema drift 修复日志，**直接归档**不并入 |
 
 ### 5. 缓存与限流（Caching & Rate Limiting）

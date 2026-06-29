@@ -71,7 +71,8 @@ OutboxWorker  ->  稍后发布 Kafka
 - **adapter 手工拼 payload（Anti-Corruption Layer）**。`RepaymentOutboxAdapter` 用 `objectMapper.createObjectNode()` 逐字段写，**不直接序列化 domain record**。domain 字段改名不会无意改动 Kafka contract。
 - **`OutboxEvent` 是状态机**（`messaging/outbox/OutboxEvent.java`）：
   - 状态 `PENDING / PROCESSING / PUBLISHED / DEAD`，只读 getter，只能经 `markProcessing / markPublished / markFailed / markProcessingTimedOut` 推进。
-  - `next_attempt_at` **一列两用**：既是 PROCESSING 的 lease 截止时间，又是 finalize 时的 lease token。
+  - `next_attempt_at` 只做时间语义：PENDING 时是下次可发布时间，PROCESSING 时是 lease deadline；
+    `lease_token` 是 finalize 时比较的 owner token。
   - `markFailed` 指数退避：`delay = min(2^(attempts-1), 60s)`，`1L << n` 防溢出；`attempts >= maxAttempts` 转 `DEAD`，阻断 poison message 无限重试。
   - `lastError` 在 domain 内截断到 500 字符，避免 DB 列长异常盖掉真正失败原因。
 
@@ -91,7 +92,9 @@ OutboxWorker  ->  稍后发布 Kafka
 关键正确性细节（都是"反向事实"驱动的设计）：
 
 - **claim 与 publish 分离**。claim 把 `PENDING->PROCESSING` 在短事务里提交后，才把 event 交给 `outboxWorkerExecutor`。**等 broker ack 期间不持任何 DB 行锁**——否则 broker latency 会被放大成 MySQL 行锁时间，拖垮连接池。
-- **finalize 重校验 lease token**。`OutboxWorker` 重新 `FOR UPDATE` 取行，校验 `status==PROCESSING && next_attempt_at==claimed.next_attempt_at`。迟到的老 worker 不能覆盖 recoverer / 新 worker 已推进的状态（乐观并发）。
+- **finalize 重校验 lease token**。`OutboxWorker` 重新 `FOR UPDATE` 取行，校验
+  `status==PROCESSING && lease_token==claimed.lease_token`。迟到的老 worker 不能覆盖
+  recoverer / 新 worker 已推进的状态（乐观并发）。
 - **worker pool 拒绝也要 finalize**。`TaskRejectedException` → `markRejectedForRetry`，否则 event 会卡在 PROCESSING 直到 recoverer 才可见。
 - **开关保护**。`OutboxPoller` / `OutboxRecoverer` 都 `@ConditionalOnProperty(outbox.publisher.enabled)`，开发/迁移时可只写 outbox 行不实际发 Kafka。
 
@@ -185,7 +188,7 @@ mini-card.repayment-events.v1       repayment.received
 ```sql
 outbox_events(
   id PK, aggregate_type, aggregate_id, event_type, event_version,
-  partition_key, payload JSON, status, attempts, next_attempt_at,
+  partition_key, payload JSON, status, attempts, next_attempt_at, lease_token,
   created_at, published_at, last_error,
   INDEX idx_outbox_publishable (status, next_attempt_at, created_at),  -- 匹配 poller 查询
   CHECK status IN ('PENDING','PROCESSING','PUBLISHED','DEAD'), CHECK attempts >= 0
