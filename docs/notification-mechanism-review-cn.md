@@ -1,217 +1,750 @@
-# Notification 机制分层梳理与精简评估
+# Notification 机制分层梳理与类缩减评估
 
-> 本文只做两件事：(1) 把当前 `notification` 模块**按层**讲清楚现在是什么样；
-> (2) 给出**能缩减哪些类、缩减后长什么样、缩与不缩的取舍**。
-> 不改任何代码，是一份决策用的梳理报告。
+> 关键词：Notification, notification intent, per-channel delivery, Inbox idempotency,
+> claimable job, `FOR UPDATE SKIP LOCKED`, `PROCESSING` lease, retry/backoff,
+> `DEAD`, Resilience4j, provider idempotency, effectively-once, 配信(はいしん),
+> 通知(つうち)。
+
+这份文档回答三个问题：
+
+1. 当前 `notification` 模块到底怎么跑？
+2. 哪些类是为了表达可靠性边界而值得保留，哪些只是学习项目里的包装？
+3. 如果要缩减类，缩减后会变成什么样，代价是什么？
+
+> [!IMPORTANT]
+> 本文按当前代码事实写，不按历史设计或未来理想图写。当前实现里
+> `NotificationDelivery` 已经有独立 `lease_token` 字段。`nextAttemptAt`
+> 表达 PENDING 的下次可投递时间、PROCESSING 的 lease deadline；
+> `leaseToken` 表达本轮 worker ownership。worker finalize 时比较
+> `status == PROCESSING && leaseToken 未变`，防止迟到 worker 覆盖新 worker 或 recoverer 的结果。
 
 ---
 
-## 0. 一句话结论
+## 1. 一句话总览
 
-`notification` 是全项目最大的模块（**41 个类**），但它其实是**两个子系统**拼起来的：
+当前 Notification 不是同步发消息，也不是在业务事务里直接调 push/email。
 
-- **意图层（intent，13 类）**：把 Kafka 业务事件翻译成"该给谁发哪种通知"并幂等落库。**轻、对齐 JD、该留。**
-- **投递层（delivery，28 类）**：把意图按渠道扇出、用一套可靠投递状态机 + Resilience4j 真的"发出去"（provider 当前是模拟的）。**重、离 JD 核心最远、是这次精简的主战场。**
+它是两段异步：
 
-投递层同时叠了三层本可不要的复杂度：它是 claimable-job 模式的**第 4 份拷贝**、Resilience4j 的**第 2 处展示**、以及一整套**只为驱动前两者而造的模拟 provider 脚手架**。
-
----
-
-## 1. 全景：两个子系统的边界
-
-```
- Kafka 业务事件 (authorization / transaction / statement / repayment)
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  意图层 INTENT（13 类，原本就有，轻）                          │
-│  4 个 Kafka listener → RequestNotificationService            │
-│    · Inbox 幂等 claim（at-least-once 去重）                    │
-│    · 写 1 行 notifications（不可变"意图"）                      │
-│    · 按收件人渠道 fan-out 出 N 行 notification_deliveries      │  ← 扇出是两层的接缝
-└─────────────────────────────────────────────────────────────┘
-        │  (同一事务内写入 deliveries)
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  投递层 DELIVERY（28 类，后加，重）                            │
-│  poller → claimer(短事务打 lease) → worker pool               │
-│    → 收件人解析 + 模板渲染 + ResilientSender(Resilience4j)     │
-│    → 模拟 push/email provider → 回执 → markSent / 退避 / DEAD  │
-│  recoverer 回收 lease 超时的 PROCESSING 行                     │
-└─────────────────────────────────────────────────────────────┘
+```text
+业务事实
+  -> Outbox
+  -> Kafka
+  -> XxxNotificationListener
+  -> RequestNotificationService
+  -> notifications intent + notification_deliveries work rows
+  -> NotificationDeliveryPoller/Worker/Recoverer
+  -> simulated push/email provider
 ```
 
-**关键观察**：两层的唯一耦合点是 `RequestNotificationService` 里那段"按渠道扇出建 delivery 行"。
-**砍掉投递层，只需把这段扇出删掉**，意图层完全独立自洽。
+核心思想：
+
+- `Notification` 只表达“应该通知谁、因为什么业务事实、发哪种通知”。
+- `NotificationDelivery` 才表达“某一个渠道的投递生命周期”。
+- Kafka 到 Notification 的入口靠 Inbox 做 consumer-side `idempotency`。
+- Provider 调用在 DB 事务外；结果 finalize 时再开短事务并重新校验 lease。
+- 对外部 provider 只能做到 `at-least-once + provider idempotency key`，也就是 practical
+  `effectively-once`，不是严格 exactly-once。
 
 ---
 
-## 2. 分层类清单
+## 2. 当前包结构怎么读
 
-### 2.1 意图层 INTENT（13 类 — 所有方案都保留）
+### 2.1 `notification/infrastructure/messaging`
 
-| 子层 | 类 | 角色 |
+这一层是 Kafka inbound adapter。
+
+当前有四个 listener：
+
+| Listener | Topic | 关心的 event | 生成的 NotificationType |
+| --- | --- | --- | --- |
+| `AuthorizationNotificationListener` | `authorization-events` | `authorization.approved`, `authorization.declined` | `AUTHORIZATION_APPROVED`, `AUTHORIZATION_DECLINED` |
+| `CardTransactionNotificationListener` | `transaction-events` | `card_transaction.posted` | `CARD_TRANSACTION_POSTED` |
+| `StatementNotificationListener` | `statement-events` | `statement.closed` | `STATEMENT_CLOSED` |
+| `RepaymentNotificationListener` | `repayment-events` | `repayment.received` | `REPAYMENT_RECEIVED` |
+
+这些类不做投递，不做模板，不查收件人。它们只做一件事：
+
+```text
+IntegrationEvent payload
+  -> RequestNotificationCommand(sourceEventId, subjectType, subjectId, recipientKey, type)
+```
+
+为什么分成四个 listener 而不是一个万能 listener：
+
+- 好处：source context 清楚，`card_transaction.posted` 不会和 `authorization.posted` 混淆。
+- 好处：每个 listener 先判断 `eventType`，合法但无关的 future event 会被跳过，不会误入 DLT。
+- 代价：类数量增加，四个类有重复样板。
+
+### 2.2 `notification/application`
+
+这一层是 use case 和 durable worker 编排。
+
+| 类 | 当前职责 | 是否核心 |
 | --- | --- | --- |
-| 入站适配 | `AuthorizationNotificationListener` | 授权事件 → 通知请求 |
-| | `CardTransactionNotificationListener` | 入账事件 → 通知请求 |
-| | `StatementNotificationListener` | 账单事件 → 通知请求 |
-| | `RepaymentNotificationListener` | 还款事件 → 通知请求 |
-| 应用用例 | `RequestNotificationService` | Inbox 幂等 + 写意图 +（当前）扇出投递 |
-| | `RequestNotificationCommand` | listener→service 的输入 record |
-| 意图领域 | `Notification` | 不可变意图聚合 |
-| | `NotificationType` | 发生了什么（5 个枚举值） |
-| | `NotificationSubjectType` | 关联业务对象类型 |
-| | `NotificationRepository` | 意图仓储端口 |
-| 意图持久化 | `MyBatisNotificationRepository` | `insertIfAbsent`（source_event_id 唯一） |
-| | `NotificationMapper` | MyBatis 接口 |
-| | `NotificationRow` | 行映射 |
+| `RequestNotificationService` | Inbox claim、创建 `Notification` intent、按渠道扇出 `NotificationDelivery` | 核心 |
+| `RequestNotificationCommand` | listener 到 service 的 transport-neutral command | 可保留 |
+| `NotificationDeliveryClaimer` | 短事务领取 PENDING delivery，打 PROCESSING lease | 核心 |
+| `NotificationDeliveryWorker` | 事务外调 provider，短事务 finalize | 核心 |
+| `NotificationDeliveryProperties` | typed config + fail-fast 校验 | 可保留 |
 
-### 2.2 投递层 DELIVERY（28 类 — 精简对象）
+### 2.3 `notification/domain`
 
-| 子层 | 类 | 角色 | 备注 |
-| --- | --- | --- | --- |
-| 投递领域 | `NotificationDelivery` (208 行) | per-channel 投递聚合 + 状态机 | 与 `OutboxEvent` 同构 |
-| | `NotificationDeliveryStatus` | PENDING/PROCESSING/SENT/DEAD | |
-| | `NotificationDeliveryRepository` | 投递仓储端口（claim/recover/finalize） | |
-| | `NotificationChannel` | APP_PUSH / EMAIL | |
-| | `NotificationContent` | 渲染后的 title+body | record |
-| | `NotificationDispatch` | 交给 sender 的一次发送请求 | record |
-| | `NotificationRecipient` | 解析后的收件人+各渠道地址 | record |
-| | `ProviderReceipt` | provider 回执 | record |
-| | `NotificationDeliveryException` | 统一失败异常 | |
-| 端口（接缝） | `NotificationSender` | 发送门面端口（含弹性） | 单实现 |
-| | `NotificationChannelSender` | 单渠道发送端口 | |
-| | `NotificationRecipientResolver` | 收件人解析端口 | 单实现 |
-| | `NotificationTemplateRenderer` | 模板渲染端口 | 单实现 |
-| 投递引擎（第 4 套 claimable job） | `NotificationDeliveryClaimer` | 短事务打 lease | ≈ `OutboxClaimer` |
-| | `NotificationDeliveryWorker` | 事务外副作用 + finalize 校验 lease | ≈ `OutboxWorker` |
-| | `NotificationDeliveryPoller` | 定时 poll+submit | ≈ `OutboxPoller` |
-| | `NotificationDeliveryRecoverer` | 回收 stuck PROCESSING | ≈ `OutboxRecoverer` |
-| | `NotificationDeliveryProperties` | 投递配置 record | ≈ `OutboxProperties` |
-| | `NotificationDeliveryConfiguration` | 配置绑定 + sender 线程池 | |
-| 发送弹性（第 2 处 Resilience4j） | `ResilientNotificationSender` (130 行) | per-channel TimeLimiter+CircuitBreaker+Retry | |
-| 渠道实现 + 模拟脚手架 | `SimulatedChannelSender` | 故障/延迟注入 + 幂等去重基类 | 演示用 |
-| | `SimulatedPushNotificationSender` | 29 行纯样板子类 | |
-| | `SimulatedEmailNotificationSender` | 29 行纯样板子类 | |
-| 模板 / 收件人 | `DefaultNotificationTemplateRenderer` | switch 出文案 | |
-| | `StubNotificationRecipientResolver` | 合成地址、默认全渠道 | User 域缺口的收口点 |
-| 投递持久化 | `MyBatisNotificationDeliveryRepository` | 投递仓储实现 | |
-| | `NotificationDeliveryMapper` | MyBatis 接口 | |
-| | `NotificationDeliveryRow` | 行映射 | |
+这一层表达业务概念。
 
-### 2.3 模块外的关联资产（投递层专属）
+| 类 | 当前职责 | 判断 |
+| --- | --- | --- |
+| `Notification` | 不可变 intent；由 integration event 创建 | 合理 |
+| `NotificationType` | 用户可见通知类型 | 合理 |
+| `NotificationSubjectType` | 被通知的业务对象类型 | 合理 |
+| `NotificationRepository` | intent 持久化端口 | 合理 |
 
-- 线程池/调度：`WorkerExecutorConfiguration#notificationDeliveryWorkerExecutor`、
-  `PollingSchedulerConfiguration#notificationDeliveryTaskScheduler`、
-  `NotificationDeliveryConfiguration#notificationSenderExecutor`
-- 配置：`application.yml` 的 `notification.delivery.*` 与 Resilience4j
-  `notificationPush` / `notificationEmail` / `notificationDelivery`（circuitbreaker/retry/timelimiter）
-- 数据库：`notification_deliveries` 表 + 迁移 `0006`（重命名 template→notification_type）`0007`（把投递列搬出 notifications）
-- MyBatis XML：`NotificationDeliveryMapper.xml`
+`Notification` 没有 `status`、`attempts`、`sentAt`。这是有意为之：一条通知可能同时扇出 push/email，
+push 成功但 email 失败时，单个 status 无法表达。
 
----
+### 2.4 `notification/domain/delivery`
 
-## 3. 端到端数据流（当前）
+这一层表达 per-channel delivery。
 
-```
-1. Kafka 事件到达 XxxNotificationListener
-2. → RequestNotificationService.request(command)
-3.   → inboxRepository.claim(consumer, eventId)         // 重复事件在此短路
-4.   → notificationRepository.insertIfAbsent(intent)     // source_event_id 唯一兜底
-5.   → recipientResolver.resolve(key)                    // stub：默认 push+email
-6.   → 每渠道 NotificationDelivery.pendingFor(...) → deliveryRepository.insertAll()  // 同事务
-   ──────────────（以下是投递层，异步）──────────────
-7. NotificationDeliveryPoller @Scheduled
-8.   → claimer.claim(...)（短事务 FOR UPDATE SKIP LOCKED → markProcessing lease）
-9.   → workerExecutor.execute(worker.handleClaimedDelivery)
-10.    → recipientResolver.resolve → addressFor(channel)
-11.    → templateRenderer.render(type, channel) → NotificationContent
-12.    → resilientSender.send(dispatch)                  // 事务外，Resilience4j 包裹
-13.      → 按 channel 选 SimulatedXxxSender → 模拟延迟/失败/幂等去重 → ProviderReceipt
-14.    → markSent / markFailed（独立短事务 + lease token 校验）
-15. NotificationDeliveryRecoverer @Scheduled 回收 lease 超时行
-```
+重要类：
+
+| 类 | 当前职责 | 判断 |
+| --- | --- | --- |
+| `NotificationDelivery` | 每个 channel 一条 work row，状态机 owner | 核心 |
+| `NotificationDeliveryStatus` | `PENDING/PROCESSING/SENT/DEAD` | 核心 |
+| `NotificationDeliveryRepository` | delivery 持久化端口 | 核心 |
+| `NotificationChannel` | `APP_PUSH/EMAIL` | 合理 |
+| `NotificationRecipientResolver` | recipientKey -> 联系方式和渠道偏好 | 可保留，未来 User 域接缝 |
+| `NotificationTemplateRenderer` | `(type, channel, subjectId)` -> 标题正文 | 可缩减 |
+| `NotificationSender` | worker 依赖的发送门面 | 可缩减但不建议优先 |
+| `NotificationChannelSender` | 单渠道 provider 调用端口 | 合理 |
+| `NotificationDispatch` / `NotificationContent` / `ProviderReceipt` | provider 调用 DTO | 可缩减 |
+
+### 2.5 `notification/infrastructure/delivery`
+
+这一层是技术机制和模拟 provider。
+
+| 类 | 当前职责 | 判断 |
+| --- | --- | --- |
+| `NotificationDeliveryPoller` | `@Scheduled` poll + submit worker pool | 核心 |
+| `NotificationDeliveryRecoverer` | 扫描 lease 超时的 PROCESSING rows | 核心 |
+| `ResilientNotificationSender` | 按 channel 路由并套 TimeLimiter/CircuitBreaker/Retry | 偏重但有学习价值 |
+| `DefaultNotificationTemplateRenderer` | switch 写死文案 | 可缩减 |
+| `StubNotificationRecipientResolver` | 无 User 域时合成 email/push token | 可保留 |
+| `SimulatedChannelSender` | 模拟 provider latency/failure/idempotency | 学习价值高 |
+| `SimulatedPushNotificationSender` / `SimulatedEmailNotificationSender` | 两个薄 wrapper | 可缩减 |
+| `NotificationDeliveryConfiguration` | sender executor 配置 | 可保留 |
+
+### 2.6 `notification/infrastructure/mybatis`
+
+这一层是 MyBatis persistence adapter。
+
+| 类 | 当前职责 |
+| --- | --- |
+| `MyBatisNotificationRepository` / `NotificationMapper` / `NotificationRow` | `notifications` intent 写入 |
+| `MyBatisNotificationDeliveryRepository` / `NotificationDeliveryMapper` / `NotificationDeliveryRow` | delivery 查询、claim、recover、状态更新 |
+
+这层看起来文件多，但符合项目里 MyBatis 的一贯风格：domain object、row DTO、mapper interface、XML SQL 分开。
+如果强行压缩，会省文件，但 SQL/row/domain 转换会混在一起。
 
 ---
 
-## 4. 精简方案（三档）
+## 3. 端到端链路
 
-### 方案 A — 激进：删掉整个投递层，回到"只记录意图"
+### 3.1 从业务事件到通知意图
 
-**删**：2.2 的 28 个类 + 2.3 的全部关联资产（表/迁移回滚或保留空表/Resilience4j 配置/三个线程池 bean/XML）。
-**改**：`RequestNotificationService` 删掉第 5–6 步的扇出，只保留 Inbox 幂等 + 写意图。
-**留**：意图层 13 类。
-
-缩减后形态：
-
-```
-listener → RequestNotificationService
-             → Inbox claim（at-least-once 去重）
-             → 写 1 行 notifications（意图）
-（没有真实外发；"投递"是显式声明的 deferred 能力）
+```text
+Outbox worker 发布 Kafka event
+  -> XxxNotificationListener.on...(ConsumerRecord)
+  -> IntegrationEventReader.read(record)
+  -> 判断 eventType
+  -> new RequestNotificationCommand(...)
+  -> RequestNotificationService.request(command)
 ```
 
-- 模块 **41 → 13 类**；claimable-job 引擎 **4 → 2 套**（Outbox + DelayJob）；Resilience4j 回到只在 risk 一处。
-- **取舍**：
-  - ✅ 最对齐 JD —— "通知是 eventual-consistency 下游，用 Outbox/Inbox 保证不丢不重"这条叙事干净有力，且这正是面试会问的点。
-  - ✅ 把"四套引擎"降回"两套"，顺手消掉 §3.2 的过度设计质疑。
-  - ✅ 删掉"为演示而注入故障"的脚手架（这类代码进 main 本身是减分项）。
-  - ⚠️ 失去一个完整的"可靠投递 + 多渠道 + 弹性"案例。但它**与 Outbox 同构**，讲 Outbox 时就能把这套机制讲透，并不缺这块拼图。
-  - ⚠️ 要诚实表述："投递留了接缝、当前不实现"，而不是假装能发。这比之前"有 markSent 却没人调用的死代码"更诚实。
+`RequestNotificationService.request()` 的事务边界很关键：
 
-> 适合：目标是"减少过度设计、聚焦 JD 主线"。**这是我推荐的方案。**
+```text
+@Transactional
+1. consumer_inbox.claim("notification-v1", sourceEventId)
+2. Notification.requestFromEvent(...)
+3. notifications.insertIfAbsent(source_event_id unique)
+4. recipientResolver.resolve(recipientKey)
+5. 每个 channel 创建 NotificationDelivery.pendingFor(...)
+6. notification_deliveries.insertAll(deliveries)
+```
 
-### 方案 B — 中度：保留投递闭环，砍掉弹性与模拟脚手架
+如果第 1 步失败，说明 Kafka redelivery 或 offset replay 重复投递，直接返回。
 
-**删**：`ResilientNotificationSender`、`NotificationSender`（门面端口）、`SimulatedChannelSender` 的故障/延迟注入、
-把 `SimulatedPush/EmailNotificationSender` 合并为 1 个参数化 sender、Resilience4j 的三段配置、`notificationSenderExecutor`。
-**改**：`NotificationDeliveryWorker` 直接依赖按 channel 路由的 `NotificationChannelSender`（EnumMap），失败抛异常→走状态机 durable 退避。
-**留**：投递表、per-channel 扇出、claimer/poller/worker/recoverer、template renderer、recipient resolver。
+如果第 3 步重复，说明 source_event_id 唯一键兜底命中，也直接返回，不创建第二批 delivery。
 
-缩减后形态：保留"可靠投递状态机 + 多渠道扇出"，去掉"intra-attempt 弹性"和"为演示注入故障"。约 **28 → 20 类**。
+### 3.2 从 delivery 到 provider
 
-- **取舍**：
-  - ✅ 仍保留多渠道扇出 + 可靠投递这条主干。
-  - ⚠️ 第 4 套 claimable job **依然在**（四套引擎不变），过度设计的主因没消除。
-  - ⚠️ 同时失去 Resilience4j 在通知侧的展示价值。
-  - ❌ **性价比最差的中间态**：既没把引擎降回两套，又丢了弹性亮点。除非你明确"想保留多渠道投递、但讨厌 Resilience4j 那层"，否则不建议。
+```text
+NotificationDeliveryPoller
+  -> NotificationDeliveryClaimer.claimDispatchableDeliveries()
+       SELECT PENDING WHERE next_attempt_at <= now
+       FOR UPDATE SKIP LOCKED
+       markProcessing(now, timeout, leaseToken)
+       update row
+       commit
+  -> worker pool execute(NotificationDeliveryWorker.handleClaimedDelivery)
+```
 
-### 方案 C — 不动：当作 distributed-delivery showcase 保留
+Worker 处理：
 
-**取舍**：
-- ✅ 是一个**完整、自洽、注释质量很高**的"可靠投递 + per-channel 断路 + 多渠道扇出"案例，真要展开能讲很深。
-- ⚠️ 代价是：模块最重、四套引擎、第 2 处 Resilience4j、模拟脚手架进 main —— 与"减少过度设计"的目标直接冲突。
+```text
+1. resolver.resolve(recipientKey)
+2. addressFor(channel)
+3. renderer.render(notificationType, channel, subjectId)
+4. resilientSender.send(NotificationDispatch)
+5. 短事务 findByIdForUpdate(deliveryId)
+6. 校验 status == PROCESSING && leaseToken == claimed.leaseToken
+7. 成功 markSent；失败 markFailed；update row
+```
 
-> 适合：你把"通知真实投递"当成想主动展示的亮点，且愿意承担"看起来在堆量"的观感。
+如果 worker pool queue 满，poller 捕获 `TaskRejectedException`，调用 `markRejectedForRetry`，把 row 放回 retry/DEAD，
+避免一直卡到 lease timeout。
 
-### 附：与方案无关的微清理
+### 3.3 Recoverer 做什么
 
-无论 B/C，`SimulatedPushNotificationSender` 与 `SimulatedEmailNotificationSender`（各 29 行，只差 `channel()`/`providerName()`）
-可合并成 1 个参数化 sender、用 `@Bean` 注册两次。省 1 个类，属于边角优化。
+```text
+NotificationDeliveryRecoverer
+  -> SELECT PROCESSING WHERE next_attempt_at <= now
+     FOR UPDATE SKIP LOCKED
+  -> markProcessingTimedOut(...)
+  -> PENDING retry or DEAD
+```
+
+没有 recoverer 的话，pod 在 provider 调用中途宕机，delivery 会永久停在 `PROCESSING`。
 
 ---
 
-## 5. 取舍总表
+## 4. 当前状态机
 
-| 维度 | A 激进（删投递层） | B 中度（砍弹性） | C 不动 |
-| --- | --- | --- | --- |
-| notification 类数 | 41 → **13** | 41 → ~33 | 41 |
-| claimable-job 引擎 | **4 → 2** | 4（不变） | 4 |
-| Resilience4j 处数 | 2 → **1** | 2 → 1 | 2 |
-| 对齐 JD（聚焦正确性主线） | **最强** | 中 | 弱（广度有余） |
-| 保留的 showcase | Outbox/Inbox 幂等 | 多渠道可靠投递 | 投递+弹性+多渠道 |
-| 诚实度 | 高（明说 deferred） | 高 | 高 |
-| 工作量 | 中（删类+回滚迁移+改 service+删测试） | 中大（要改 worker 接线） | 0 |
-| 风险 | 低（意图层独立自洽） | 中（动接线易引入 bug） | 0 |
+```text
+PENDING
+  -- claim / short tx -->
+PROCESSING
+  -- provider receipt + lease recheck -->
+SENT
+
+PROCESSING
+  -- provider error / timeout / circuit open -->
+PENDING(nextAttemptAt = now + exponential backoff)
+
+PROCESSING
+  -- attempts >= maxAttempts -->
+DEAD
+
+PROCESSING
+  -- worker crashed and lease deadline passed -->
+PENDING or DEAD by recoverer
+```
+
+当前默认配置：
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `notification.delivery.enabled` | `true` | 开启 delivery poller/recoverer |
+| `fixed-delay-ms` | `1000` | poller 扫描间隔 |
+| `recovery-fixed-delay-ms` | `5000` | recoverer 扫描间隔 |
+| `batch-size` | `50` | 单轮 claim 数 |
+| `processing-timeout-seconds` | `30` | PROCESSING lease deadline |
+| `max-attempts` | `8` | 超过后 DEAD |
+| `worker-pool-size` | `4` | delivery worker pool |
+| `sender-threads` | `4` | provider call executor |
 
 ---
 
-## 6. 建议
+## 5. 幂等边界
 
-1. **优先 A**：与你"减少过度设计、对齐 JD"的目标最契合，且意图层独立、风险低。
-2. **不建议 B**：中间态，投入不小却没解决主要质疑。
-3. **C 仅在**你确实想把"通知真实投递"当王牌主动讲时保留。
+### 5.1 Kafka event -> Notification intent
 
-> 若选 A，落地顺序建议：先删投递层类与配置 → 改 `RequestNotificationService` 去掉扇出 →
-> 删/改对应测试（`NotificationDeliveryTest`、各 listener test 里对 delivery 的断言）→
-> 处理 `notification_deliveries` 表（加一条回滚迁移，或留空表并在文档标注弃用）→ `./gradlew test`。
+强幂等，靠两道门：
+
+1. `consumer_inbox`：`notification-v1 + sourceEventId` 只处理一次。
+2. `notifications.source_event_id` unique：即使 Inbox 失效或迁移异常，也挡住重复 intent。
+
+### 5.2 Notification intent -> per-channel delivery
+
+强幂等，靠同事务 fan-out 和 `UNIQUE(notification_id, channel)`。
+
+也就是说，一条通知对一个渠道最多一条 delivery。
+
+### 5.3 Delivery -> external provider
+
+不能严格 exactly-once，只能 practical `effectively-once`。
+
+崩溃窗口：
+
+```text
+worker 调 provider 成功，provider 已经发出 push/email
+worker 在 markSent 事务提交前宕机
+recoverer 之后把 delivery 放回 PENDING
+新 worker 再次调 provider
+```
+
+这个窗口无法用本地 MySQL transaction 关闭，因为 provider side effect 不属于 MySQL。
+
+当前做法：
+
+- `NotificationDelivery.idempotencyKey()` 返回 delivery id。
+- `NotificationDispatch` 把 idempotency key 传给 sender。
+- `SimulatedChannelSender` 用内存 map 模拟 provider 按 idempotency key 去重。
+
+生产含义：真实 provider 要支持 idempotency key；不支持时只能接受极低概率重复，或自己做 provider-call ledger，
+但 provider-call ledger 也不能彻底消灭“provider 成功但本地未提交”的窗口。
+
+---
+
+## 6. 当前设计的优点
+
+### 6.1 意图和投递拆开是对的
+
+`Notification` 是 intent，`NotificationDelivery` 是 per-channel work row。
+
+这能表达：
+
+```text
+同一条 statement.closed 通知：
+  APP_PUSH -> SENT
+  EMAIL    -> PENDING / DEAD
+```
+
+如果只有一个 `notifications.status`，这个状态无法表达。
+
+### 6.2 和 Outbox/DelayJob 的 mental model 一致
+
+Notification delivery 复用了项目里的 claimable-job 心智模型：
+
+```text
+poller -> claimer(short tx + SKIP LOCKED) -> worker(side effect outside tx)
+       -> finalize(short tx + lease recheck) -> recoverer
+```
+
+这是很好的 interview 解释素材。
+
+### 6.3 Provider 调用没有放进 DB 事务
+
+这是正确性和性能都很重要的边界。
+
+如果把 provider HTTP 调用放进 `@Transactional`，慢 provider 会把 DB connection 和 row lock 长时间占住，
+最后可能拖垮 Hikari pool。
+
+### 6.4 Resilience4j 和 durable retry 分工清楚
+
+`ResilientNotificationSender` 做一次投递尝试内的快速 timeout/retry/circuit breaker。
+
+`NotificationDelivery` 状态机做跨 JVM、跨重启的 durable retry/backoff/DEAD。
+
+这两层不是重复：
+
+| 层 | 生命周期 | 解决的问题 |
+| --- | --- | --- |
+| Resilience4j Retry | 单次 worker 调用内 | provider 瞬时抖动 |
+| Delivery retry | DB 持久化，跨重启 | pod 宕机、持续故障、人工可见 DEAD |
+
+---
+
+## 7. 当前设计的偏重点和风险
+
+### 7.1 类数量偏多
+
+只为模拟 push/email，当前已经有：
+
+- recipient port + recipient record + stub resolver
+- template port + content record + default renderer
+- sender facade + channel sender port + dispatch record + receipt record
+- resilient sender + simulated sender base + push/email wrappers
+
+这对生产演进友好，但对学习者第一眼会显得“通知还没接真实 provider，类却很多”。
+
+### 7.2 lease ownership 已经显式化
+
+当前代码已经把 lease 的两个维度拆开：
+
+- `nextAttemptAt`：PENDING 的 next retry time；PROCESSING 的 lease deadline
+- `leaseToken`：本轮 claim 的 owner identity，worker finalize 只认这个 token
+
+这比早期“用 timestamp 兼职 token”的写法更干净：
+
+```text
+PENDING:    next_attempt_at = retry time, lease_token = null
+PROCESSING: next_attempt_at = lease deadline, lease_token = UUID
+finalize:   WHERE id = ? AND status = PROCESSING AND lease_token = ?
+```
+
+Outbox、DelayJob、NotificationDelivery 共享这个 lightweight claimable job 模型。
+StatementJob 更重一些：保留 `claimed_by / claimed_at / claim_until`，并额外用
+`claim_token` 做 finalize ownership check。
+
+### 7.3 `StatementNotificationListener` 是否必要，要和 statement event 路径一起判断
+
+当前代码存在 `statement.closed -> StatementNotificationListener -> STATEMENT_CLOSED`。
+
+如果 statement event path 保留，它合理；如果未来再次简化 statement，不发 `statement.closed` 了，
+就应该连 listener、topic wiring、测试一起清掉，避免死 consumer。
+
+---
+
+## 8. 类缩减建议
+
+### 8.1 不建议缩减的核心类
+
+这些类承载关键边界，缩掉会让机制变糊：
+
+| 类 | 为什么保留 |
+| --- | --- |
+| `Notification` | intent 和 delivery 分离的核心 |
+| `NotificationDelivery` | per-channel 状态机核心 |
+| `RequestNotificationService` | Inbox + intent + fan-out 的 transaction boundary |
+| `NotificationDeliveryClaimer` | claim 短事务边界清楚 |
+| `NotificationDeliveryWorker` | provider side effect outside tx + finalize 短事务 |
+| `NotificationDeliveryPoller` | scheduler 只 poll/submit，不做业务 |
+| `NotificationDeliveryRecoverer` | 可靠性闭环，防 PROCESSING 永久卡死 |
+| MyBatis mapper/XML/row/repository | 项目风格一致，SQL 明确 |
+
+### 8.2 可以缩减：四个 listener 的重复样板
+
+当前：
+
+```text
+AuthorizationNotificationListener
+CardTransactionNotificationListener
+StatementNotificationListener
+RepaymentNotificationListener
+```
+
+可缩减方案：
+
+```text
+NotificationEventMapping
+  eventType
+  subjectType
+  subjectIdField
+  recipientKeyField
+  notificationType
+
+GenericNotificationListener
+  每个 topic 一个 @KafkaListener 方法
+  调 common handle(record, mappings)
+```
+
+缩减后：
+
+- 少一些重复 `eventReader.requiredText(...)`。
+- 新增 event 只加 mapping。
+
+代价：
+
+- 当前 source-specific listener 名字很直观，能直接看出 bounded context。
+- mapping 配错时不如显式代码容易 review。
+- `authorization.approved/declined` 共享 helper、`statement/repayment` 的 recipientKey caveat 会藏进配置式映射里。
+
+建议：**暂时不缩。**
+如果 listener 增加到 8 个以上，再抽 common helper，不急着 generic。
+
+### 8.3 可以缩减：模板端口
+
+当前：
+
+```text
+NotificationTemplateRenderer interface
+DefaultNotificationTemplateRenderer implementation
+NotificationContent record
+```
+
+可缩减方案：
+
+```text
+NotificationDeliveryWorker
+  private NotificationContent render(...)
+```
+
+或：
+
+```text
+DefaultNotificationTemplateRenderer
+  不要 interface，worker 直接依赖 concrete class
+```
+
+缩减后：
+
+- 少一个 port。
+- 对当前硬编码英文文案足够。
+
+代价：
+
+- 未来接模板引擎、多语言、AB 文案时要重新抽。
+- Worker 会同时承担 delivery state machine 和 copywriting/template 责任。
+
+建议：**如果目标是降低类数，可以缩这个；如果目标是保留未来模板扩展接缝，可以不动。**
+它不是核心可靠性类，缩不缩都不影响机制正确性。
+
+### 8.4 可以缩减：`NotificationSender` facade
+
+当前：
+
+```text
+NotificationSender
+NotificationChannelSender
+ResilientNotificationSender implements NotificationSender
+```
+
+可缩减方案：
+
+```text
+NotificationDeliveryWorker -> ResilientNotificationSender
+ResilientNotificationSender -> List<NotificationChannelSender>
+```
+
+缩减后：
+
+- 少一个 interface。
+- 当前只有一个 facade 实现，测试也可直接 mock concrete class。
+
+代价：
+
+- Worker 对 infrastructure class 命名更敏感。
+- 和 `OutboxWorker -> OutboxMessagePublisher` 的端口形状不再对称。
+
+建议：**可以缩，但优先级不高。**
+它是“为了对称和测试边界”的轻包装，不是明显坏味道。
+
+### 8.5 可以缩减：`NotificationDispatch` / `ProviderReceipt`
+
+当前 sender 入参和出参是小 record：
+
+```text
+NotificationDispatch(channel, recipientAddress, content, idempotencyKey)
+ProviderReceipt(providerMessageId)
+```
+
+可缩减方案：
+
+```text
+send(channel, address, content, idempotencyKey) -> String providerMessageId
+```
+
+缩减后：
+
+- 少两个 record。
+- 代码更短。
+
+代价：
+
+- 参数顺序更容易错。
+- `ProviderReceipt` 这个名字强调“拿到 provider ack 后才能 mark SENT”，学习表达更清楚。
+- 未来 provider 返回更多字段时又要加对象。
+
+建议：**不急着缩。**
+这两个 record 很小，但语义很干净。
+
+### 8.6 可以缩减：push/email 两个模拟 sender wrapper
+
+当前：
+
+```text
+SimulatedChannelSender
+SimulatedPushNotificationSender
+SimulatedEmailNotificationSender
+```
+
+可缩减方案：
+
+```text
+@Configuration
+NotificationChannelSender pushSender(...) { return new SimulatedChannelSender(APP_PUSH, "push", properties); }
+NotificationChannelSender emailSender(...) { return new SimulatedChannelSender(EMAIL, "email", properties); }
+```
+
+缩减后：
+
+- 少两个很薄的 class。
+
+代价：
+
+- 具体 sender 从 class 变成 bean factory，初学者不一定更容易找。
+- 以后 push/email 真实实现差异变大时，又要拆回 class。
+
+建议：**可以缩，但收益很小。**
+如果你想降低文件数量，这是最安全的一刀。
+
+### 8.7 可以缩减：`NotificationRecipientResolver` 是否要 port
+
+当前：
+
+```text
+NotificationRecipientResolver interface
+StubNotificationRecipientResolver implementation
+NotificationRecipient record
+```
+
+可缩减方案：
+
+```text
+RequestNotificationService 或 Worker 内硬编码：
+recipientKey -> push-token/email
+```
+
+缩减后：
+
+- 少一个 port 和 stub 实现。
+
+代价：
+
+- 当前项目没有 User/Customer 聚合，recipient 解析正是一个真实缺口。
+- 把缺口藏进 service/worker，会让未来接 customerId、渠道偏好、退订设置时更难改。
+
+建议：**不缩。**
+这是少数“虽然当前是假实现，但边界非常合理”的接口。
+
+---
+
+## 9. 如果按“最小但还正确”来缩，最终形态是什么
+
+一个克制版可以长这样：
+
+```text
+notification/
+  application/
+    RequestNotificationService
+    RequestNotificationCommand
+    NotificationDeliveryWorker
+    NotificationDeliveryClaimer
+    NotificationDeliveryProperties
+
+  domain/
+    Notification
+    NotificationType
+    NotificationSubjectType
+    NotificationRepository
+    delivery/
+      NotificationDelivery
+      NotificationDeliveryStatus
+      NotificationDeliveryRepository
+      NotificationChannel
+      NotificationRecipientResolver
+      NotificationRecipient
+      NotificationChannelSender
+
+  infrastructure/
+    messaging/
+      四个 source-specific listeners 先保留
+    delivery/
+      NotificationDeliveryPoller
+      NotificationDeliveryRecoverer
+      ResilientNotificationSender
+      StubNotificationRecipientResolver
+      SimulatedChannelSender
+      NotificationDeliveryConfiguration
+      DefaultNotificationTemplateRenderer  # 可 concrete，不必 interface
+    mybatis/
+      保持现状
+```
+
+具体可删/合并：
+
+- 删除 `NotificationSender` interface，让 worker 直接依赖 `ResilientNotificationSender`。
+- 删除 `NotificationTemplateRenderer` interface，让 worker 或 concrete renderer 直接使用。
+- 合并 `SimulatedPushNotificationSender` / `SimulatedEmailNotificationSender` 到 config factory。
+
+这会减少约 3-4 个小类。
+
+但不会动：
+
+- intent/delivery 分离
+- Inbox idempotency
+- poller/claimer/worker/recoverer
+- per-channel delivery row
+- provider idempotency key
+
+也就是说，**缩外围，不缩可靠性骨架**。
+
+---
+
+## 10. 我建议怎么取舍
+
+### 当前最推荐：暂时不动代码，先消化
+
+理由：
+
+- Notification 机制已经能作为“外部副作用可靠投递”的学习样本。
+- 类多主要多在扩展接缝，不是在核心链路里乱套。
+- 真正值得你先搞清楚的是状态机和事务边界，而不是马上删文件。
+
+### 如果你想瘦身，第一批只动外围
+
+优先顺序：
+
+1. 合并 `SimulatedPushNotificationSender` / `SimulatedEmailNotificationSender`。
+2. 去掉 `NotificationTemplateRenderer` interface，保留 concrete renderer。
+3. 评估去掉 `NotificationSender` interface。
+
+不要第一批就动：
+
+- `NotificationDeliveryClaimer`
+- `NotificationDeliveryWorker`
+- `NotificationDeliveryRecoverer`
+- `NotificationDeliveryRepository`
+- `NotificationRecipientResolver`
+
+### 可靠性表达已经到位，不建议继续加机制
+
+`lease_token` 已经把 ownership 说清楚了：claim 时生成 UUID，finalize 时比较 token，
+recoverer 仍按 `next_attempt_at <= now` 扫描超时 PROCESSING row。此时再往 Notification 加更多
+调度字段、分布式锁或二级队列，收益会很低。
+
+后续如果要动，优先是删外围包装或补真实 provider adapter；不要再扩展可靠性骨架。
+
+---
+
+## 11. interview 口径
+
+可以这样讲：
+
+> Notification 在这个项目里不是同步副作用。上游业务只产生 integration event，经 Outbox/Kafka 到
+> Notification listener；listener 只翻译成 `RequestNotificationCommand`。`RequestNotificationService`
+> 用 Inbox 保证 consumer idempotency，然后在一个本地事务里创建 notification intent 和 per-channel
+> delivery rows。真正调 push/email provider 是后台 claimable job：短事务 claim，事务外调用 provider，
+> finalize 时重新锁 row 并校验 lease，失败退避重试，超过次数进 DEAD。Provider side effect 不能和 MySQL
+> 做一个本地事务，所以端到端不是严格 exactly-once，而是 at-least-once 加 provider idempotency key 去重，
+> 逼近 effectively-once。
+
+常见追问：
+
+| 追问 | 回答要点 |
+| --- | --- |
+| 为什么不在业务事务里直接发通知？ | 避免 provider 失败/慢调用 rollback 或拖住核心金融事务；通知失败可异步 retry/DLT |
+| 为什么 `Notification` 不直接有 `SENT/FAILED`？ | 多渠道投递状态不同，一条 intent 对多条 delivery |
+| 为什么需要 Inbox？ | Kafka at-least-once，offset replay 会重复投递；Inbox 让同 eventId 只创建一次 intent |
+| 为什么 provider 仍可能重复？ | provider side effect 和 MySQL 状态更新不在同一事务；崩溃窗口不可消灭 |
+| 怎么降低重复影响？ | delivery id 作为 provider idempotency key，下游按键去重 |
+| 为什么要 recoverer？ | worker/pod 在 PROCESSING 后宕机，否则 row 永远不可见 |
+| 现在最可缩的地方？ | 模板接口、sender facade、模拟 push/email wrapper；不要缩 claim/worker/recoverer 骨架 |
+
+---
+
+## 12. 最终判断
+
+当前 Notification 机制整体是**偏完整、偏重，但有学习价值**。
+
+它适合学习：
+
+- `Outbox -> Kafka -> Inbox` 的异步边界
+- external side effect 不进 DB transaction
+- claimable job 的短事务 claim / worker / recoverer
+- `at-least-once` 和 provider idempotency 的真实 trade-off
+- 为什么 intent 和 per-channel delivery 要拆开
+
+它不适合继续无限加功能。
+
+当前最好的路线是：
+
+```text
+先消化当前机制
+  -> 再决定是否缩外围类
+  -> 不要动可靠性骨架
+  -> lease_token 已经补齐，后续重点是少加功能、讲清 trade-off
+```
