@@ -42,7 +42,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * "GET 在 commit 前读到旧值、evict 后才写回 L2"的迟到写（delete 把可比的版本也删了，迟到写落在空 key 上）。
  * 这里 evict 不再 delete，而是写一个带版本的<strong>墓碑</strong>(版本地板)；读回填和墓碑写都走同一段
  * Lua CAS（仅当 incoming.version >= stored.version 或不存在才写），于是旧版本的迟到写被地板挡下。
- * 版本取 paidAmount 的 minor units（本域单调非减）。详见 docs/caching-and-rate-limiting-cn.md 第三部分。</p>
+ * 版本取 statements.version，而不是 paidAmount 这种业务金额字段。详见 docs/caching-and-rate-limiting-cn.md
+ * 第三部分。</p>
  *
  * <p><strong>热点 key 重建锁防缓存击穿(cache breakdown / stampede)</strong>：当一个热点 statement 的 L2
  * entry 过期，每个 pod 都会有线程同时 miss 并回源 MySQL 重建同一份 read model——Caffeine 的 single-flight
@@ -57,9 +58,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Slf4j
 public class StatementReadService {
 
-    // cache name 带版本号。L2 value contract 从 v1 的"纯 JSON"变成 v2 的"<version>|<payload>"信封，
-    // 不兼容，所以 bump 到 v2；旧 v1 key 让它自然按 TTL 过期，避免新代码误读旧格式。
-    private static final String CACHE_NAME = "statement-read-model-v2";
+    // cache name 带版本号。v3 的 <version>|<payload> 信封仍然保留，但 version 来源从 paidAmount
+    // 派生值换成 statements.version；语义不兼容，所以 bump cache name，让旧 v2 key 自然过期。
+    private static final String CACHE_NAME = "statement-read-model-v3";
     private static final String REDIS_KEY_PREFIX = "mini-card:cache:" + CACHE_NAME + ":";
     // 重建锁 key 与缓存 value 分开命名，避免占用同一个 key、互相覆盖。
     private static final String REBUILD_LOCK_KEY_PREFIX = "mini-card:cache:" + CACHE_NAME + ":rebuild-lock:";
@@ -144,12 +145,9 @@ public class StatementReadService {
 
     public void evictAfterCommit(Statement statement) {
         UUID statementId = statement.id();
-        // 墓碑的版本 = 还款后新的 paidAmount minor units。还款 transaction 已经把 statement 推进到新状态，
-        // 所以这里取到的就是"地板该有多高"。旧 reader 的版本一定低于它，于是迟到写会被 CAS 拒绝。
-        long version = StatementReadModel.minorUnits(
-                statement.paidAmount().amount(),
-                statement.paidAmount().currency().getCurrencyCode()
-        );
+        // 墓碑的版本 = transaction 内已经推进后的 statement.version。
+        // 如果仍用 paidAmount 计算版本，将来 status/dueDate/展示字段变化但金额不变时，旧 reader 会被误判为同版本。
+        long version = statement.version();
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             // 没有 Spring transaction 时直接 evict，通常用于测试或未来非事务调用。
             evict(statementId, version);
@@ -163,7 +161,7 @@ public class StatementReadService {
         //   1) GET 线程在还款 commit 之前读到旧 DB 快照（MySQL RR 下是事务开始时的一致性快照），但写得慢；
         //   2) 还款 commit，afterCommit 失效 Redis；
         //   3) GET 线程"迟到"地写回旧值——如果只是 delete，旧值会落在空 key 上、活到 remoteTtl。
-        // 本实现用墓碑根治这一步：evict 写一个 version=新paidAmount 的墓碑作为版本地板，第 3) 步的迟到写
+        // 本实现用墓碑根治这一步：evict 写一个 version=statements.version 的墓碑作为版本地板，第 3) 步的迟到写
         // （旧版本）会被 CAS 的 "stored.version > incoming 则拒绝" 挡下。详见 evict / writeViaCas。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override

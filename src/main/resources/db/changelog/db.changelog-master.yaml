@@ -17,3 +17,5 @@ databaseChangeLog:
       file: db/changelog/changes/0008-statement-job-claim-token.sql
   - include:
       file: db/changelog/changes/0009-align-claimable-job-lease-token.sql
+  - include:
+      file: db/changelog/changes/0010-statement-read-model-version.sql

@@ -370,7 +370,7 @@ StatementReadService
 
 | cache name | key | value | 用途 |
 | --- | --- | --- | --- |
-| `statement-read-model-v1` | statement id | `StatementReadModel` | `GET /api/statements/{id}` 查询快照 |
+| `statement-read-model-v3` | statement id | `StatementReadModel` | `GET /api/statements/{id}` 查询快照；L2 信封使用 `statements.version` |
 
 已删除设计：
 
@@ -978,7 +978,7 @@ NoSQL 会放在 read model/projection，不会替代核心 MySQL transaction。
 强回答：
 
 > repayment 是还款入账，它会减少持卡人的应还款，同时恢复可用额度。
-> 在项目里，这体现为 `Statement.paidAmount/status` 前进，同时 `CreditAccount.postedBalance` 减少。
+> 在项目里，这体现为 `Statement.paidAmount/status/version` 前进，同时 `CreditAccount.postedBalance` 减少。
 > 这两个变化必须在同一个 transaction boundary 内提交，否则会出现账单显示已还但额度没恢复，或反过来的不一致。
 
 项目锚点：
@@ -1697,8 +1697,8 @@ NoSQL 会放在 read model/projection，不会替代核心 MySQL transaction。
 
 强回答：
 
-> 项目 cache name 带版本，例如 `statement-read-model-v1`。
-> 如果 value schema 不兼容，升级 cache name 到 v2，让旧 key 自然过期。
+> 项目 cache name 带版本，例如当前 `statement-read-model-v3`。
+> 如果 value schema 或 version 语义不兼容，升级 cache name，让旧 key 自然过期。
 > 如果只是兼容新增字段，可以用默认值或兼容 reader。
 
 追问方向：
@@ -4631,7 +4631,7 @@ Distributed lock 是跨实例协调执行权的工具，但不是 transaction，
 
 答：
 
-> 优先通过 versioned cache name 切换，例如 `statement-read-model-v2`，让旧 key 自然过期。
+> 优先通过 versioned cache name 切换，例如 `statement-read-model-v2` → `statement-read-model-v3`，让旧 key 自然过期。
 > 不建议在生产高峰 `KEYS` 全量扫描删除。
 > 如需清理，用 `SCAN` 分批、限速、可中断。
 

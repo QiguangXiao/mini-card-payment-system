@@ -523,19 +523,19 @@ transactionOperations.executeWithoutResult(status -> {
 
 位置：`StatementReadService.evictAfterCommit`
 
-写路径改了 MySQL 后，缓存删除要等事务 commit 后执行：
+写路径改了 MySQL 后，缓存失效要等事务 commit 后执行：
 
 ```text
 DB update in transaction
 register afterCommit cache evict
 commit succeeds
-evict cache
+evict cache（当前是写 tombstone 版本地板，不是裸 DELETE）
 ```
 
 如果事务中先删缓存：
 
 ```text
-delete cache
+evict cache
 other GET reads old DB value
 other GET writes old value back to Redis
 original transaction commits
@@ -545,7 +545,7 @@ cache now contains stale snapshot
 如果事务 rollback：
 
 ```text
-delete cache
+evict cache
 DB change does not happen
 next GET unnecessarily rebuilds cache
 ```
@@ -1171,7 +1171,7 @@ log.warn("failed " + event.id() + exception);
 | `@Qualifier` | 字符串噪音 | 多 bean 精确选择 | ambiguous bean 或注错线程池 |
 | `@ConditionalOnProperty` | 多余开关 | 控制后台副作用 | 测试/本地启动自动消费 backlog |
 | `TransactionOperations` | 不如 `@Transactional` 简洁 | 同一 worker 方法内拆事务 | self-invocation、长事务、finalize 边界不清 |
-| `afterCommit` evict | 延后一步 | 避免旧 DB 值回填 cache | stale snapshot |
+| `afterCommit` evict | 延后一步 | commit 后写 tombstone，避免旧 DB 值回填 cache | stale snapshot |
 | `DefaultErrorHandler` + DLT | Kafka 配置复杂 | 坏消息隔离和 replay 入口 | partition 被坏消息卡住或错误被吞 |
 | `EventContractException` not retryable | 少重试 | malformed message 重试不会自愈 | 无意义 retry 占用 consumer |
 | `Thread.currentThread().interrupt()` | 奇怪的固定写法 | 恢复中断信号 | shutdown 语义被吞 |

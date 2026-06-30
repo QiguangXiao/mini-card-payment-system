@@ -52,7 +52,7 @@ public interface StatementMapper {
     StatementRow findByIdForUpdate(@Param("id") String id);
 
     /**
-     * 更新 statement 还款状态和 paidAmount。
+     * 更新 statement 还款状态、paidAmount 和 read-model version。
      */
     int updatePayment(StatementRow statement);
 

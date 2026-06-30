@@ -38,6 +38,7 @@ class StatementTest {
         assertThat(statement.minimumPaymentAmount().amount()).isEqualByComparingTo("1000.00");
         assertThat(statement.paidAmount().amount()).isEqualByComparingTo("0.00");
         assertThat(statement.transactionCount()).isEqualTo(2);
+        assertThat(statement.version()).isZero();
         assertThat(statement.items())
                 .hasSize(2)
                 .allSatisfy(item -> assertThat(item.statementId()).isEqualTo(statement.id()));
@@ -146,12 +147,14 @@ class StatementTest {
         assertThat(statement.status()).isEqualTo(StatementStatus.PARTIALLY_PAID);
         assertThat(statement.paidAmount().amount()).isEqualByComparingTo("500.00");
         assertThat(statement.remainingAmount().amount()).isEqualByComparingTo("1000.00");
+        assertThat(statement.version()).isEqualTo(1);
 
         statement.applyRepayment(money("1000.00"), NOW.plusSeconds(2));
 
         assertThat(statement.status()).isEqualTo(StatementStatus.PAID);
         assertThat(statement.paidAmount().amount()).isEqualByComparingTo("1500.00");
         assertThat(statement.remainingAmount().amount()).isEqualByComparingTo("0.00");
+        assertThat(statement.version()).isEqualTo(2);
     }
 
     @Test

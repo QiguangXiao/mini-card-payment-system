@@ -28,7 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 入金処理(にゅうきんしょり)。</p>
  *
  * <p>interview重点：Repayment 同时影响 repayment row、credit account postedBalance、
- * statement paidAmount/status 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
+ * statement paidAmount/status/version 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -109,7 +109,7 @@ public class RepaymentService {
 
         validateCanApply(statement, account, amount);
         // 这两个 aggregate state changes 在同一个 transaction boundary 内提交：
-        // account.postedBalance 释放额度，statement.paidAmount/status 推进账单生命周期。
+        // account.postedBalance 释放额度，statement.paidAmount/status/version 推进账单生命周期。
         account.applyRepayment(amount);
         statement.applyRepayment(amount, now);
         repayment.markReceived(
@@ -123,8 +123,9 @@ public class RepaymentService {
         statementRepository.updatePayment(statement);
         // 写路径不"顺手更新 cache"，而是更新 MySQL source of truth 后失效 cache。
         // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
-        // 传整个 statement（而不是只传 id）：StatementReadService 要用还款后的新 paidAmount 算出墓碑的版本地板，
-        // 让"迟到写"(旧版本)被 L2 的 CAS 拒绝。失效只在 DB commit 后触发（见 evictAfterCommit）。
+        // 传整个 statement（而不是只传 id）：Statement.applyRepayment 已经推进正式 version，
+        // StatementReadService 用它写墓碑版本地板，让"迟到写"(旧版本)被 L2 的 CAS 拒绝。
+        // 失效只在 DB commit 后触发（见 evictAfterCommit）。
         // 跨 pod L1 仍最长 stale 一个 localTtl（除非开启 Pub/Sub 广播），这是刻意接受的 tradeoff：
         // 账单查询容忍秒级 stale；要强一致就直接读 DB。
         statementReadService.evictAfterCommit(statement);

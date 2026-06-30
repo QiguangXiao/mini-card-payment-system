@@ -78,7 +78,7 @@ shape to ECS/Fargate, ALB, RDS, MSK, ElastiCache, CloudWatch, CloudFormation,
 CodePipeline, AWS resource naming, and small/medium/large production sizing.
 See [MyBatis, SQL & Migration Notes](docs/mybatis-sql-and-migration-cn.md) for
 MyBatis XML mapper usage, batching, SQL indexes, locking, transactions, and the
-Liquibase schema-migration workflow (the current 0001-0009 changesets, drift
+Liquibase schema-migration workflow (the current 0001-0010 changesets, drift
 fixes, and data backfill). (Merged from the former mybatis-sql-learning and
 database-migration-liquibase notes, now archived under docs/archive/.)
 See [Domain State Flow Notes](docs/domain-state-flow-cn.md) for the full
@@ -179,9 +179,11 @@ append-only internal accounting entries.
 `GET /api/statements/{id}` uses a small statement read-model cache: Caffeine is
 the per-JVM L1 and Redis is the cross-instance L2. Repayment updates the MySQL
 source of truth first, then evicts the statement read cache after transaction
-commit. Card lookup remains direct MyBatis because card snapshot stale data can
-affect authorization decisions and the real hot-path bottleneck is still the
-locked credit account row. Redis is also used for the risk velocity
+commit; Redis CAS/tombstone ordering uses the explicit `statements.version`
+instead of deriving a cache version from `paid_amount`. Card lookup remains
+direct MyBatis because card snapshot stale data can affect authorization
+decisions and the real hot-path bottleneck is still the locked credit account
+row. Redis is also used for the risk velocity
 sliding-window counter, where every authorization request benefits from avoiding
 a recent-count query on MySQL.
 

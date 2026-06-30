@@ -42,6 +42,7 @@ public final class Statement {
     private Money paidAmount;
     private final int transactionCount;
     private StatementStatus status;
+    private long version;
     private final Instant generatedAt;
     private final Instant createdAt;
     private Instant updatedAt;
@@ -61,6 +62,7 @@ public final class Statement {
             Money paidAmount,
             int transactionCount,
             StatementStatus status,
+            long version,
             Instant generatedAt,
             Instant createdAt,
             Instant updatedAt,
@@ -76,6 +78,7 @@ public final class Statement {
         this.paidAmount = Objects.requireNonNull(paidAmount);
         this.transactionCount = transactionCount;
         this.status = Objects.requireNonNull(status);
+        this.version = version;
         this.generatedAt = Objects.requireNonNull(generatedAt);
         this.createdAt = Objects.requireNonNull(createdAt);
         this.updatedAt = Objects.requireNonNull(updatedAt);
@@ -110,6 +113,7 @@ public final class Statement {
                 zero(currency),
                 snapshotLines.size(),
                 StatementStatus.CLOSED,
+                0L,
                 generatedAt,
                 generatedAt,
                 generatedAt,
@@ -143,6 +147,7 @@ public final class Statement {
             Money paidAmount,
             int transactionCount,
             StatementStatus status,
+            long version,
             Instant generatedAt,
             Instant createdAt,
             Instant updatedAt,
@@ -159,6 +164,7 @@ public final class Statement {
                 paidAmount,
                 transactionCount,
                 status,
+                version,
                 generatedAt,
                 createdAt,
                 updatedAt,
@@ -207,12 +213,20 @@ public final class Statement {
         updatedAt = actualPaidAt;
         if (paidAmount.equals(totalAmount)) {
             status = StatementStatus.PAID;
+            bumpVersion();
             return;
         }
         // OVERDUE 账单部分还款后仍然逾期；CLOSED 账单部分还款才进入 PARTIALLY_PAID。
         if (status != StatementStatus.OVERDUE) {
             status = StatementStatus.PARTIALLY_PAID;
         }
+        bumpVersion();
+    }
+
+    private void bumpVersion() {
+        // version 是 statement read model 的正式单调版本，供 Redis L2 的 CAS/tombstone 使用。
+        // 如果用 paidAmount 代替 version，将来状态/到期日/展示字段变化但金额不变时，迟到写会被误判为同版本。
+        version++;
     }
 
     private void validateState() {
@@ -237,6 +251,9 @@ public final class Statement {
         }
         if (transactionCount <= 0 || transactionCount != lines.size()) {
             throw new IllegalArgumentException("statement transactionCount must match lines");
+        }
+        if (version < 0) {
+            throw new IllegalArgumentException("statement version must not be negative");
         }
         Money itemTotal = sum(lines);
         if (!itemTotal.equals(totalAmount)) {

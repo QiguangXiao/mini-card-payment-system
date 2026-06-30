@@ -19,6 +19,7 @@
             <!-- MyBatis 的 _int 表示 primitive int；这里 transaction_count 不允许为 null。 -->
             <arg column="transaction_count" javaType="_int"/>
             <arg column="status" javaType="java.lang.String"/>
+            <arg column="version" javaType="_long"/>
             <arg column="generated_at" javaType="java.time.Instant"/>
             <arg column="created_at" javaType="java.time.Instant"/>
             <arg column="updated_at" javaType="java.time.Instant"/>
@@ -45,7 +46,7 @@
     <sql id="statementColumns">
         id, credit_account_id, period_start, period_end, due_date,
         total_amount, minimum_payment_amount, paid_amount, currency,
-        transaction_count, status, generated_at, created_at, updated_at
+        transaction_count, status, version, generated_at, created_at, updated_at
     </sql>
 
     <sql id="statementItemColumns">
@@ -68,6 +69,7 @@
             #{currency},
             #{transactionCount},
             #{status},
+            #{version},
             #{generatedAt},
             #{createdAt},
             #{updatedAt}
@@ -118,6 +120,7 @@
         UPDATE statements
         SET paid_amount = #{paidAmount},
             status = #{status},
+            version = #{version},
             updated_at = #{updatedAt}
         WHERE id = #{id}
     </update>

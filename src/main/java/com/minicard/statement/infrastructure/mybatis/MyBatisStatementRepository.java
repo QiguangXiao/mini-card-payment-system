@@ -74,7 +74,8 @@ public class MyBatisStatementRepository implements StatementRepository {
 
     @Override
     public void updatePayment(Statement statement) {
-        // Repayment 只推进 paidAmount/status，不允许重写 totalAmount 或 statement_lines 快照。
+        // Repayment 只推进 paidAmount/status/version，不允许重写 totalAmount 或 statement_lines 快照。
+        // version 跟业务状态同事务写入，避免 cache tombstone 用到的版本和 DB source of truth 脱节。
         mapper.updatePayment(toRow(statement));
     }
 
@@ -95,6 +96,7 @@ public class MyBatisStatementRepository implements StatementRepository {
                 new Money(row.paidAmount(), currency),
                 row.transactionCount(),
                 StatementStatus.valueOf(row.status()),
+                row.version(),
                 row.generatedAt(),
                 row.createdAt(),
                 row.updatedAt(),
@@ -115,6 +117,7 @@ public class MyBatisStatementRepository implements StatementRepository {
                 statement.totalAmount().currency().getCurrencyCode(),
                 statement.transactionCount(),
                 statement.status().name(),
+                statement.version(),
                 statement.generatedAt(),
                 statement.createdAt(),
                 statement.updatedAt()

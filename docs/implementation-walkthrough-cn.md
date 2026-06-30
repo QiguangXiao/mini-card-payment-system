@@ -137,6 +137,8 @@ repayment 阶段减少 `postedBalance`，恢复可用额度。
 - `paid_amount`：还款阶段累计已经还入这张账单的金额；生成账单时为 0。
 - `transaction_count`：本期收录的 posted transactions 数量。
 - `status`：生成后为 `CLOSED`，还款后进入 `PARTIALLY_PAID` 或 `PAID`，未来逾期阶段会使用 `OVERDUE`。
+- `version`：statement read model 的正式单调版本，生成时为 0；还款等会改变 GET 展示快照的状态变化会递增它，
+  用于 Redis L2 的 CAS/tombstone。
 
 幂等键：
 
@@ -183,7 +185,7 @@ credit_account_id + period_start + period_end
 
 - 只支持支付一张已生成 statement。
 - 不支持 overpayment，也不做多张账单之间的自动分摊。
-- 还款成功后同时减少 `credit_accounts.posted_balance`，推进 `statements.paid_amount/status`。
+- 还款成功后同时减少 `credit_accounts.posted_balance`，推进 `statements.paid_amount/status/version`。
 
 ### `ledger_entries`
 
@@ -1024,7 +1026,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 也保留客户/API 主动还款入口，方便学习和测试。
 - 银行扣款成功后，针对一张已生成 statement 入账。
 - 还款成功后减少 `credit_accounts.posted_balance`，恢复可用额度。
-- 同时推进 `statements.paid_amount/status`。
+- 同时推进 `statements.paid_amount/status/version`。
 - 发布 `repayment.received`，让 Notification 和 Ledger 可以异步消费；未来 Reconciliation 也可以基于它对账。
 
 当前刻意不做：
@@ -1249,6 +1251,7 @@ credit account row lock -> statement row lock
 - `credit_accounts.posted_balance` 减少，还款金额重新释放为可用额度。
 - `statements.paid_amount` 增加。
 - `statements.status` 变为 `PARTIALLY_PAID` 或 `PAID`。
+- `statements.version` 递增，作为 statement cache 的新版本地板。
 - `outbox_events` 新增 `repayment.received/PENDING`。
 - Outbox 发布后，`ledger_entries` 会异步新增 `REPAYMENT_RECEIVED/CREDIT`。
 
@@ -1270,7 +1273,7 @@ credit account row lock -> statement row lock
 - 自动扣款使用确定性 `auto-debit:{statementId}` 幂等键，避免 DelayJob retry 造成 double repayment。
 - 银行扣款成功/失败和 repayment 入账要分清：失败不能创建 `repayments/RECEIVED`。
 - 锁顺序保持 `credit account -> statement`，是为了和账单生成保持一致，避免死锁。
-- `Statement` 负责保护 `paidAmount/status`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
+- `Statement` 负责保护 `paidAmount/status/version`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
 - `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification row` 让通知失败不影响还款主事务。
 
 ## 7. 核心流程五：Outbox 发布消息
@@ -1673,17 +1676,19 @@ StatementController.get(id)
 
 为什么还需要 evict：
 
-- `statement_lines` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status` 会被还款更新。
+- `statement_lines` 和 `total_amount` 是稳定账单快照，但 `paid_amount/status/version` 会被还款更新。
 - 只靠 TTL 会让用户在还款成功后短时间看到旧的 `paidAmount/status`。
 - `RepaymentService.applyToStatementAndAccount(...)` 在同一 transaction boundary 内更新 account 和
-  statement 后，调用 `StatementReadService.evictAfterCommit(statement.id())`。
+  statement 后，调用 `StatementReadService.evictAfterCommit(statement)`。
+- `Statement.applyRepayment(...)` 会同步递增 `statements.version`；L2 Redis 的 `<version>|<payload>`
+  和墓碑都使用这个正式 version，而不是从 `paidAmount` 推导。
 - after-commit 很重要：如果事务提交前 evict，另一个 GET 可能读到尚未提交的旧 DB 值并重新写回 Redis，
   造成 stale read model。
 
 仍然可能出现的不一致：
 
 - 其他 pod 的 Caffeine L1 不会被本 pod 直接删除，可能在 `local-ttl` 内读到旧 statement read model。
-- 如果 DB commit 成功但 Redis delete 失败，本 pod L1 已删，但 Redis L2 可能保留旧值到 `remote-ttl`。
+- 如果 DB commit 成功但 Redis tombstone 写失败，本 pod L1 已删，但 Redis L2 可能保留旧值到 `remote-ttl`。
 - 如果还款事务提交前有 GET 请求，它读到旧状态是正常的，因为旧状态当时仍是已提交事实。
 
 ### 9.2 已删除的 Card snapshot cache 设计

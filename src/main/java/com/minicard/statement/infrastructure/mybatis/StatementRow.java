@@ -36,6 +36,8 @@ public record StatementRow(
         int transactionCount,
         /** StatementStatus 的字符串形式。 */
         String status,
+        /** read model 单调版本；每次账单展示状态变化都递增，用于 Redis CAS/tombstone。 */
+        long version,
         /** statement 生成时间。 */
         Instant generatedAt,
         /** 数据库创建时间。 */

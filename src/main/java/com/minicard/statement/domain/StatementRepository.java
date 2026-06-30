@@ -28,7 +28,7 @@ public interface StatementRepository {
     Optional<Statement> findByIdForUpdate(UUID id);
 
     /**
-     * 只更新还款进度字段，账单金额和 line items 仍保持生成时的审计快照。
+     * 只更新还款进度字段和 statement version，账单金额和 line items 仍保持生成时的审计快照。
      */
     void updatePayment(Statement statement);
 }

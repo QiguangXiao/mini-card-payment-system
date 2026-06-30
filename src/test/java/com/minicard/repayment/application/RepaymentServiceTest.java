@@ -86,6 +86,7 @@ class RepaymentServiceTest {
         assertThat(account.postedBalance().amount()).isEqualByComparingTo("1000.00");
         assertThat(statement.status()).isEqualTo(StatementStatus.PARTIALLY_PAID);
         assertThat(statement.paidAmount().amount()).isEqualByComparingTo("500.00");
+        assertThat(statement.version()).isEqualTo(1);
         InOrder lockOrder = inOrder(statementRepository, creditAccountRepository);
         lockOrder.verify(statementRepository).findById(command.statementId());
         lockOrder.verify(creditAccountRepository).findByIdForUpdate(ACCOUNT_ID);

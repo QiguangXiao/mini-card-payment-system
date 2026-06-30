@@ -103,10 +103,33 @@ class StatementReadServiceTest {
         verify(redisTemplate).execute(any(RedisScript.class), eq(List.of(redisKey)),
                 casArgs.capture(), casArgs.capture(), casArgs.capture());
         List<Object> args = casArgs.getAllValues();
-        assertThat((String) args.get(0)).isEqualTo("0");                 // version = paidAmount minor units = 0
+        assertThat((String) args.get(0)).isEqualTo("0");                 // new statement starts at row version 0
         assertThat((String) args.get(1)).startsWith("0|").contains("\"id\"");  // 真实值信封，非墓碑
         long ttlMillis = Long.parseLong((String) args.get(2));
         assertThat(ttlMillis).isBetween(REMOTE_TTL.toMillis(), REMOTE_TTL.plus(REMOTE_TTL_JITTER).toMillis());
+    }
+
+    @Test
+    void redisEnvelopeUsesStatementVersionInsteadOfPaidAmount() {
+        Statement statement = statement();
+        statement.applyRepayment(
+                new Money(new BigDecimal("500"), Currency.getInstance("JPY")),
+                Instant.parse("2026-07-10T00:00:00Z")
+        );
+        String redisKey = redisKey(statement.id());
+        when(valueOperations.get(redisKey)).thenReturn(null);
+        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+
+        StatementReadModel readModel = service.get(statement.id());
+
+        assertThat(readModel.paidAmount()).isEqualByComparingTo("500");
+        assertThat(readModel.version()).isEqualTo(1);
+        ArgumentCaptor<Object> casArgs = ArgumentCaptor.forClass(Object.class);
+        verify(redisTemplate).execute(any(RedisScript.class), eq(List.of(redisKey)),
+                casArgs.capture(), casArgs.capture(), casArgs.capture());
+        List<Object> args = casArgs.getAllValues();
+        assertThat((String) args.get(0)).isEqualTo("1");
+        assertThat((String) args.get(1)).startsWith("1|").contains("\"paidAmount\":500");
     }
 
     @Test
@@ -140,7 +163,11 @@ class StatementReadServiceTest {
 
     @Test
     void evictInsideTransactionWritesTombstoneAndBroadcastsAfterCommit() {
-        Statement statement = statement();   // 新关账 statement，paid=0 → version 0
+        Statement statement = statement();
+        statement.applyRepayment(
+                new Money(new BigDecimal("500"), Currency.getInstance("JPY")),
+                Instant.parse("2026-07-10T00:00:00Z")
+        );
         String key = redisKey(statement.id());
         TransactionSynchronizationManager.initSynchronization();
 
@@ -153,11 +180,12 @@ class StatementReadServiceTest {
         TransactionSynchronizationManager.getSynchronizations()
                 .forEach(synchronization -> synchronization.afterCommit());
 
-        // afterCommit：写"版本地板"墓碑（CAS，信封 "0|" 末尾为空 = tombstone）+ 广播给其他 pod。
+        // afterCommit：写"版本地板"墓碑（CAS，信封 "1|" 末尾为空 = tombstone）+ 广播给其他 pod。
         ArgumentCaptor<Object> casArgs = ArgumentCaptor.forClass(Object.class);
         verify(redisTemplate).execute(any(RedisScript.class), eq(List.of(key)),
                 casArgs.capture(), casArgs.capture(), casArgs.capture());
-        assertThat((String) casArgs.getAllValues().get(1)).isEqualTo("0|");
+        assertThat((String) casArgs.getAllValues().get(0)).isEqualTo("1");
+        assertThat((String) casArgs.getAllValues().get(1)).isEqualTo("1|");
         verify(broadcaster).broadcastEvict(statement.id());
     }
 
@@ -255,10 +283,10 @@ class StatementReadServiceTest {
     }
 
     private String redisKey(UUID statementId) {
-        return "mini-card:cache:statement-read-model-v2:" + statementId;
+        return "mini-card:cache:statement-read-model-v3:" + statementId;
     }
 
     private String rebuildLockKey(UUID statementId) {
-        return "mini-card:cache:statement-read-model-v2:rebuild-lock:" + statementId;
+        return "mini-card:cache:statement-read-model-v3:rebuild-lock:" + statementId;
     }
 }
