@@ -38,7 +38,7 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
         try {
             // INSERT-first idempotency claim：由 DB unique constraint 选择 winner，
             // 而不是靠内存 check，因此多线程/多实例下也成立。
-            authorizationMapper.insert(idempotencyKey, toRow(authorization));
+            authorizationMapper.insert(toRow(idempotencyKey, authorization));
             return true;
         } catch (DuplicateKeyException exception) {
             // DuplicateKeyException 在这里是幂等键已被占用的正常分支。
@@ -66,13 +66,14 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     public void update(Authorization authorization) {
         // Mapper XML 只更新 decision columns。request identity 保持 immutable，
         // 方便 idempotency audit 和问题排查。
-        authorizationMapper.update(toRow(authorization));
+        authorizationMapper.update(toRow(null, authorization));
     }
 
-    private AuthorizationRow toRow(Authorization authorization) {
+    private AuthorizationRow toRow(String idempotencyKey, Authorization authorization) {
         // Infrastructure adapter 做 mapping，避免 domain object 暴露数据库列名/字符串状态。
         return new AuthorizationRow(
                 authorization.id().toString(),
+                idempotencyKey,
                 authorization.requestFingerprint(),
                 authorization.cardId(),
                 authorization.requestedAmount().amount(),
@@ -88,6 +89,8 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     }
 
     private Authorization toDomain(AuthorizationRow row) {
+        // idempotencyKey 是 API/persistence 层的请求身份；Authorization aggregate
+        // 只恢复授权生命周期需要的不变量和状态，避免把重试协议混进 domain state machine。
         return Authorization.restore(
                 UUID.fromString(row.id()),
                 row.requestFingerprint(),

@@ -12,6 +12,7 @@
         -->
         <constructor>
             <arg column="id" javaType="java.lang.String"/>
+            <arg column="idempotency_key" javaType="java.lang.String"/>
             <arg column="request_fingerprint" javaType="java.lang.String"/>
             <arg column="card_id" javaType="java.lang.String"/>
             <arg column="amount" javaType="java.math.BigDecimal"/>
@@ -27,7 +28,7 @@
     </resultMap>
 
     <sql id="authorizationColumns">
-        id, request_fingerprint, card_id, amount, currency, status,
+        id, idempotency_key, request_fingerprint, card_id, amount, currency, status,
         decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
     </sql>
 
@@ -51,7 +52,7 @@
             status, decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
         ) VALUES (
             #{authorization.id},
-            #{idempotencyKey},
+            #{authorization.idempotencyKey},
             #{authorization.requestFingerprint},
             #{authorization.cardId},
             #{authorization.amount},

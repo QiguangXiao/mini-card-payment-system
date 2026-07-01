@@ -23,10 +23,7 @@ public interface AuthorizationMapper {
     /**
      * 插入 authorization，同时写入 idempotency key 唯一索引。
      */
-    int insert(
-            @Param("idempotencyKey") String idempotencyKey,
-            @Param("authorization") AuthorizationRow authorization
-    );
+    int insert(@Param("authorization") AuthorizationRow authorization);
 
     /**
      * 按 idempotency key 加 FOR UPDATE，等待首个请求完成后返回同一结果。

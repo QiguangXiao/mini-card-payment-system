@@ -15,6 +15,8 @@ import java.time.Instant;
 public record AuthorizationRow(
         /** authorization id。 */
         String id,
+        /** API retry 的幂等键；DB unique constraint 用它保证同一请求只被一个 winner 处理。 */
+        String idempotencyKey,
         /** 幂等请求 fingerprint，用于检测同 key 不同 payload。 */
         String requestFingerprint,
         /** 业务 card id。 */
