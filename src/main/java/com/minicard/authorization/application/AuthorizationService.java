@@ -85,10 +85,13 @@ public class AuthorizationService {
     @Transactional
     public Authorization authorize(AuthorizationCommand command) {
         Instant now = Instant.now(clock);
+        // 本次请求的 fingerprint 在 transaction boundary 内只计算一次，并作为稳定业务输入传递。
+        // 如果到处调用 command.requestFingerprint()，虽然 SHA-256 很便宜，但会让幂等校验看起来像多个独立判断。
+        String requestFingerprint = command.requestFingerprint();
         // 先创建 PENDING aggregate：每次请求都先落一条可审计(auditable)记录，
         // 再进入风控、卡状态和额度检查，符合真实发卡行 issuer flow。
         Authorization pending = Authorization.request(
-                command.requestFingerprint(),
+                requestFingerprint,
                 command.cardId(),
                 command.requestedAmount(),
                 now
@@ -106,7 +109,7 @@ public class AuthorizationService {
                 ));
         // FOR UPDATE 会锁住已 claim 的 authorization row，确保并发 duplicate 等到最终状态后再返回。
         // assertSameIdempotentRequest() 校验 fingerprint，防止同一个幂等键隐藏了不同交易。
-        assertSameIdempotentRequest(persisted, command);
+        assertSameIdempotentRequest(persisted, requestFingerprint);
 
         if (!claimed) {
             // claimed=false 表示这是 retry 或并发 duplicate；直接返回能避免 double reservation。
@@ -245,11 +248,11 @@ public class AuthorizationService {
 
     private void assertSameIdempotentRequest(
             Authorization existing,
-            AuthorizationCommand command
+            String requestFingerprint
     ) {
         // 这个 guard 是 idempotency 的安全边界：相同 key + 不同请求必须拒绝，
         // 否则客户端 bug 可能把一笔新交易错误地当成旧交易结果。
-        if (!command.matches(existing)) {
+        if (!requestFingerprint.equals(existing.requestFingerprint())) {
             throw new IdempotencyConflictException();
         }
     }

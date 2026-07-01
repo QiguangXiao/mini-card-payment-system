@@ -8,7 +8,6 @@ import java.util.Currency;
 import java.util.HexFormat;
 import java.util.Locale;
 
-import com.minicard.authorization.domain.Authorization;
 import com.minicard.shared.domain.Money;
 import com.minicard.risk.domain.RiskAssessmentRequest;
 
@@ -65,11 +64,6 @@ public record AuthorizationCommand(
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is not available", exception);
         }
-    }
-
-    public boolean matches(Authorization authorization) {
-        // Retry 请求必须和已保存 authorization 的 fingerprint 一致，否则说明复用了错误的幂等键。
-        return requestFingerprint().equals(authorization.requestFingerprint());
     }
 
     private static String normalizeCountry(String country) {

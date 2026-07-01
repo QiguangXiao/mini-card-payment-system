@@ -61,9 +61,15 @@ where they do not improve clarity.
   defects. If current work exposes clearly unreasonable domain, infrastructure,
   mapper, or database design, fix it proactively when the fix is related and
   improves correctness, safety, or clarity.
-- After code, configuration, schema, mapper XML, or behavior-affecting
-  modifications, ensure `./gradlew test` passes, or clearly explain why it
-  could not be run.
+- After code or behavior-affecting modifications, run the most relevant fast
+  JUnit tests by default, for example `./gradlew test --tests
+  "com.minicard.authorization.application.AuthorizationServiceTest"`. `./gradlew
+  test` is the fast suite and intentionally excludes `*IT` integration tests.
+- Run `./gradlew integrationTest` or the specific `*IT` class when a change
+  touches schema, mapper XML, SQL semantics, transaction boundaries, row-level
+  locking, Kafka, Outbox, Inbox, DelayJob leasing/recovery, or other behavior
+  that only a real MySQL/Kafka/Testcontainers environment can validate. Use
+  `./gradlew check` before a release-style full verification.
 - Documentation-only modifications, such as Markdown docs, `README.md`, or
   repository guidance files, do not require running `./gradlew test`; mention
   that tests were skipped because the change was docs-only.
