@@ -50,6 +50,8 @@ public class NotificationDeliveryWorker {
     ) {
         this.deliveryRepository = deliveryRepository;
         this.properties = properties;
+        // resolver/renderer/sender 三个端口分开：收件人解析、内容渲染、外部发送是不同失败点，
+        // 分开后日志和 retry 语义更清楚，测试也可以单独替换某一环。
         this.recipientResolver = recipientResolver;
         this.templateRenderer = templateRenderer;
         this.resilientSender = resilientSender;
@@ -59,7 +61,10 @@ public class NotificationDeliveryWorker {
 
     public void handleClaimedDelivery(NotificationDelivery claimed) {
         try {
+            // 第一步：根据 recipientKey 解析收件人。delivery row 持有的是稳定业务 key，
+            // 不是具体 email/device token；这样用户联系方式变化时仍可由 resolver 决定最新地址。
             NotificationRecipient recipient = recipientResolver.resolve(claimed.recipientKey());
+            // 第二步：按渠道取地址。APP_PUSH 和 EMAIL 的缺失地址是业务失败，不是系统 crash。
             String address = recipient.addressFor(claimed.channel());
             if (address == null || address.isBlank()) {
                 // 收件人在该渠道没有地址：当作一次失败，走退避重试，最终 DEAD 等人工处理。
@@ -68,15 +73,24 @@ public class NotificationDeliveryWorker {
                 return;
             }
 
+            // 第三步：用 notificationType/channel/subjectId 渲染本次投递内容。
+            // worker 不回查 Notification aggregate；delivery row 已经保存了发送需要的不可变快照。
             NotificationContent content = templateRenderer.render(
                     claimed.notificationType(), claimed.channel(), claimed.subjectId());
+            // 第四步：组装发给 sender 的自洽请求。idempotencyKey 来自 delivery id，
+            // 跨 retry 保持不变，方便 provider 按同一 key 去重。
             NotificationDispatch dispatch = new NotificationDispatch(
                     claimed.channel(), address, content, claimed.idempotencyKey());
 
+            // 第五步：真正调用外部 provider。这里故意在 DB transaction 外执行，
+            // 避免等待网络 timeout/retry 时占住 notification_deliveries row lock。
             // provider 调用在事务外，由 ResilientNotificationSender 套 timeout/retry/circuit breaker。
             ProviderReceipt receipt = resilientSender.send(dispatch);
+            // 第六步：provider 返回成功回执后，才在短事务里校验 lease 并标 SENT。
             markSent(claimed, receipt);
         } catch (RuntimeException exception) {
+            // 任一环失败都走统一失败 finalize：记录 lastError、attempts 和下一次 retry 时间。
+            // 不在这里吞异常后直接返回，否则 PROCESSING lease 会一直等 recoverer 才能释放。
             markFailed(
                     claimed,
                     exception.getMessage() == null
@@ -89,15 +103,18 @@ public class NotificationDeliveryWorker {
 
     public void markRejectedForRetry(NotificationDelivery claimed, RuntimeException exception) {
         // worker pool 拒绝也按失败处理，把投递从 PROCESSING 放回 retry/DEAD，避免一直卡到 lease 过期。
+        // 这类失败发生在 provider 调用前，但 DB row 已经是 PROCESSING，所以仍然需要短事务 finalize。
         markFailed(claimed, "notification delivery worker pool rejected", exception);
     }
 
     private void markSent(NotificationDelivery claimed, ProviderReceipt receipt) {
+        // 成功 finalize 单独开短事务：只做 lease revalidation 和状态更新，不包住 provider 网络调用。
         transactionOperations.executeWithoutResult(status -> {
             NotificationDelivery delivery = lockCurrentLease(claimed);
             if (delivery == null) {
                 return;
             }
+            // SENT 记录 providerMessageId 作为已送达证据；同时释放 leaseToken，避免后续 worker 误判仍可处理。
             delivery.markSent(Instant.now(clock), receipt.providerMessageId());
             deliveryRepository.updateDeliveryState(delivery);
             log.info(
@@ -109,11 +126,14 @@ public class NotificationDeliveryWorker {
     }
 
     private void markFailed(NotificationDelivery claimed, String error, RuntimeException exception) {
+        // 失败 finalize 也要独立落库；否则 provider exception 只留在线程日志里，retry/backoff 状态不会推进。
         transactionOperations.executeWithoutResult(status -> {
             NotificationDelivery delivery = lockCurrentLease(claimed);
             if (delivery == null) {
                 return;
             }
+            // markFailed() 会释放本轮 lease，并按 attempts 决定回 PENDING 还是进入 DEAD。
+            // 这保证临时 provider 故障可以 retry，而永久坏数据不会无限发送。
             delivery.markFailed(error, Instant.now(clock), properties.maxAttempts());
             deliveryRepository.updateDeliveryState(delivery);
             log.warn(
@@ -125,11 +145,15 @@ public class NotificationDeliveryWorker {
     }
 
     private NotificationDelivery lockCurrentLease(NotificationDelivery claimed) {
+        // provider 调用在事务外，可能慢到超过 lease timeout。finalize 前重新 FOR UPDATE 读当前 row，
+        // 确认它还属于本 worker，避免迟到回执把 recoverer/新 worker 的结果覆盖掉。
         NotificationDelivery delivery = deliveryRepository.findByIdForUpdate(claimed.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed notification delivery disappeared " + claimed.id()));
-        // 用 lease_token(UUID, CHAR(36) 精确比较) 判定"还是本 worker 持有"，不用 nextAttemptAt：
-        // 后者是 Instant，纳秒精度经 TIMESTAMP(6) round-trip 后被截断，会把已成功投递误判为 lease changed。
+        // 三个条件逐一保护：
+        // 1) status 仍为 PROCESSING，表示还处在可 finalize 的租约状态。
+        // 2) claimed snapshot 必须有 leaseToken；没有 token 的对象不能证明自己来自合法 claim。
+        // 3) DB 当前 token 必须等于 claimed token；nextAttemptAt 是 deadline/retry 时间，不能当 owner identity。
         if (delivery.status() != NotificationDeliveryStatus.PROCESSING
                 || claimed.leaseToken() == null
                 || !claimed.leaseToken().equals(delivery.leaseToken())) {

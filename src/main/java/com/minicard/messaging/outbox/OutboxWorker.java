@@ -15,6 +15,10 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>关键词：消息发布, ack 等待, lease 校验, outbox worker,
  * Kafka acknowledgement, finalize, 発行ワーカー(はっこうワーカー),
  * リース検証(リースけんしょう)。</p>
+ *
+ * <p>流程与 DelayJobWorker 对称：claimer 先在短事务内把 PENDING event 改成 PROCESSING lease；
+ * worker 在事务外等待 Kafka ack；最后再开短事务校验 lease 并写 PUBLISHED/PENDING/DEAD。
+ * 这样不会因为等 broker 回包而长时间占用 outbox row lock。</p>
  */
 @Service
 @Slf4j
@@ -37,14 +41,20 @@ public class OutboxWorker {
      */
     public void publishClaimedEvent(OutboxEvent claimedEvent) {
         try {
+            // 第一步：把已 claim 的 event 发给 Kafka，并等待 broker ack。
+            // claimedEvent 只是本轮 lease 的快照；真正的最终状态稍后还要回 DB 校验。
             // publish() 会等待 broker acknowledgement。成功后才能 markPublished。
             // 如果不等 ack 就标 PUBLISHED，broker 实际失败时事件会永久丢失。
             messagePublisher.publish(
                     claimedEvent,
                     Duration.ofMillis(properties.sendTimeoutMs())
             );
+            // 第二步：Kafka 已确认写入后，才尝试把 outbox row finalize 为 PUBLISHED。
+            // 如果此时 lease 已变，lockCurrentLease 会跳过，避免旧 worker 覆盖新处理结果。
             markPublished(claimedEvent);
         } catch (RuntimeException exception) {
+            // 第三步：发送失败也要持久化 retry/backoff 信息。
+            // 如果只把异常打日志，event 会停留在 PROCESSING，直到 recoverer 超时才重新可见。
             markFailed(
                     claimedEvent,
                     exception.getMessage() == null
@@ -69,6 +79,8 @@ public class OutboxWorker {
             if (event == null) {
                 return;
             }
+            // markPublished() 是 Outbox 的成功终态：代表 Kafka broker 已 ack。
+            // 它不是 consumer 已处理完成；consumer 仍要靠 Inbox 做 at-least-once 去重。
             event.markPublished(Instant.now(clock));
             outboxEventRepository.updateDeliveryState(event);
             log.info(
@@ -91,6 +103,8 @@ public class OutboxWorker {
             if (event == null) {
                 return;
             }
+            // markFailed() 会记录失败原因并计算下一次 publish 时间；达到 maxAttempts 后进入 DEAD。
+            // 这样 poison event 不会无限压住 worker，也保留人工排查的 lastError。
             event.markFailed(error, Instant.now(clock), properties.maxAttempts());
             outboxEventRepository.updateDeliveryState(event);
             log.warn(
@@ -105,15 +119,19 @@ public class OutboxWorker {
     }
 
     private OutboxEvent lockCurrentLease(OutboxEvent claimedEvent) {
+        // publish Kafka ack 发生在事务外；回来 finalize 前必须重读当前 row 并加 FOR UPDATE。
+        // 否则 recoverer 或新 worker 已接管时，旧 worker 仍可能用过期快照标 PUBLISHED/FAILED。
         OutboxEvent event = outboxEventRepository.findByIdForUpdate(claimedEvent.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed outbox event disappeared " + claimedEvent.id()
         ));
+        // 条件语义和 DelayJobWorker 一样：
+        // status 必须仍是 PROCESSING；claimedEvent 必须有本轮 claim 的 leaseToken；
+        // DB 当前 token 必须等于 claimed token。nextAttemptAt 只是 deadline，不是 owner identity。
         if (event.status() != OutboxEventStatus.PROCESSING
                 || claimedEvent.leaseToken() == null
                 || !claimedEvent.leaseToken().equals(event.leaseToken())) {
-            // 老 worker 返回太晚时不能覆盖新 lease 的处理结果，这是防并发覆盖的关键保护。
-            // leaseToken 是本轮 claim 的 owner identity；nextAttemptAt 只是 deadline，不能再兼任 token。
+            // lease 已变时跳过 finalize：新 lease 的 worker/recoverer 才有权决定这条 outbox event 的后续状态。
             log.warn(
                     "outbox_lease_changed eventId={} claimedToken={} currentStatus={} currentToken={} currentLease={}",
                     claimedEvent.id(),
