@@ -148,6 +148,10 @@ public class AuthorizationService {
 
     /**
      * 执行授权决策链路，并在批准时锁定 credit account row 完成额度预占。
+     *
+     * <p>事务归属：只由 {@link #authorize(AuthorizationCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；这里的 account reserve 和 authorization decision
+     * 必须一起 commit/rollback。</p>
      */
     private void decideAndReserve(
             Authorization authorization,
@@ -210,6 +214,9 @@ public class AuthorizationService {
 
     /**
      * 将 Card aggregate 的拒绝原因翻译成 Authorization 对外可见的 decline reason。
+     *
+     * <p>事务归属：纯映射方法，不依赖事务；当前由 {@link #decideAndReserve(Authorization,
+     * AuthorizationCommand, Instant)} 在授权写事务中调用。</p>
      */
     private AuthorizationDeclineReason mapCardFailure(CardAuthorizationFailure failure) {
         return switch (failure) {
@@ -220,6 +227,9 @@ public class AuthorizationService {
 
     /**
      * 执行本地单笔金额上限检查，尽早拒绝不需要锁账户的请求。
+     *
+     * <p>事务归属：纯内存 policy check；当前由 {@link #decideAndReserve(Authorization,
+     * AuthorizationCommand, Instant)} 在授权写事务中调用，但它本身不读写数据库。</p>
      */
     private AuthorizationDeclineReason checkSingleTransactionLimit(Authorization authorization) {
         Money limit = singleTransactionLimits.get(authorization.requestedAmount().currency());
@@ -234,6 +244,9 @@ public class AuthorizationService {
 
     /**
      * 将 CreditAccount reserve 失败原因翻译成 Authorization decline reason。
+     *
+     * <p>事务归属：纯映射方法，不依赖事务；当前由 {@link #decideAndReserve(Authorization,
+     * AuthorizationCommand, Instant)} 在授权写事务中调用。</p>
      */
     private AuthorizationDeclineReason mapFailure(CreditReservationFailure failure) {
         return switch (failure) {
@@ -246,6 +259,9 @@ public class AuthorizationService {
 
     /**
      * 将 Risk bounded context 的拒绝原因翻译成 Authorization decline reason。
+     *
+     * <p>事务归属：纯映射方法，不依赖事务；当前由 {@link #decideAndReserve(Authorization,
+     * AuthorizationCommand, Instant)} 在授权写事务中调用。</p>
      */
     private AuthorizationDeclineReason mapRiskFailure(RiskDeclineReason failure) {
         return switch (failure) {
@@ -261,6 +277,9 @@ public class AuthorizationService {
 
     /**
      * 把 Authorization 状态转换产生的领域事件追加到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #authorize(AuthorizationCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；Outbox row 必须和 authorization/account 状态一起提交。</p>
      */
     private void publishDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
@@ -272,6 +291,9 @@ public class AuthorizationService {
 
     /**
      * 校验同一个 idempotency key 是否仍代表同一份请求内容。
+     *
+     * <p>事务归属：当前由 {@link #authorize(AuthorizationCommand)} 在锁住 idempotency winner row
+     * 后调用；它本身是纯校验，但校验对象来自同一事务内的 {@code SELECT ... FOR UPDATE}。</p>
      */
     private void assertSameIdempotentRequest(
             Authorization existing,

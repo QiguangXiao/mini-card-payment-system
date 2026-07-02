@@ -106,6 +106,9 @@ public class NotificationDeliveryWorker {
 
     /**
      * worker pool 拒绝执行时，把已领取投递放回 retry/DEAD 状态机。
+     *
+     * <p>事务归属：本方法本身不加 {@code @Transactional}；它委托
+     * {@link #markFailed(NotificationDelivery, String, RuntimeException)} 开启 finalize 短事务。</p>
      */
     public void markRejectedForRetry(NotificationDelivery claimed, RuntimeException exception) {
         // worker pool 拒绝也按失败处理，把投递从 PROCESSING 放回 retry/DEAD，避免一直卡到 lease 过期。
@@ -115,6 +118,9 @@ public class NotificationDeliveryWorker {
 
     /**
      * 在独立短事务中重新校验 lease，并把 provider 已确认的投递标记为 SENT。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；provider 调用和 retry/circuit breaker 都已经在事务外完成。</p>
      */
     private void markSent(NotificationDelivery claimed, ProviderReceipt receipt) {
         // 成功 finalize 单独开短事务：只做 lease revalidation 和状态更新，不包住 provider 网络调用。
@@ -136,6 +142,9 @@ public class NotificationDeliveryWorker {
 
     /**
      * 在独立短事务中记录投递失败，并推进 attempts、lastError 和下一次 retry 时间。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；它不和 provider 网络调用共用事务。</p>
      */
     private void markFailed(NotificationDelivery claimed, String error, RuntimeException exception) {
         // 失败 finalize 也要独立落库；否则 provider exception 只留在线程日志里，retry/backoff 状态不会推进。
@@ -158,6 +167,10 @@ public class NotificationDeliveryWorker {
 
     /**
      * 重新锁定当前 delivery row 并确认本 worker 仍持有 PROCESSING lease。
+     *
+     * <p>事务归属：只能在 {@link #markSent(NotificationDelivery, ProviderReceipt)}
+     * 或 {@link #markFailed(NotificationDelivery, String, RuntimeException)}
+     * 创建的 finalize 短事务内部调用。</p>
      */
     private NotificationDelivery lockCurrentLease(NotificationDelivery claimed) {
         // provider 调用在事务外，可能慢到超过 lease timeout。finalize 前重新 FOR UPDATE 读当前 row，

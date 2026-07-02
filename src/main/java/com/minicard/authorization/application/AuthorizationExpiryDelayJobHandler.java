@@ -35,6 +35,10 @@ public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 
     /**
      * 校验 DelayJob contract，并把 aggregateId 分发给授权过期 use case。
+     *
+     * <p>事务归属：本 handler 自己不开事务；它调用的
+     * {@link AuthorizationExpiryService#expire(UUID)} 是另一个 Spring bean 的 public
+     * {@code @Transactional} 方法，会通过 proxy 开启授权过期事务。</p>
      */
     @Override
     public void handle(DelayJob job) {

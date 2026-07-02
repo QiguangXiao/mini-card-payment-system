@@ -39,7 +39,12 @@ public class StatementCycleService {
 
     /**
      * 用当前日期（按 billing timezone）判断是否需要创建本期 jobs。
+     *
+     * <p>事务归属：scheduler 实际调用这个入口，所以这里也必须带 {@code @Transactional}。
+     * 如果只给 {@link #createDueJobs(LocalDate)} 加事务，同类内部调用不会经过 Spring proxy，
+     * 事务不会自动打开。</p>
      */
+    @Transactional
     public int createDueJobs() {
         LocalDate runDate = LocalDate.now(clock.withZone(batchZone()));
         return createDueJobs(runDate);
@@ -51,6 +56,9 @@ public class StatementCycleService {
      * <p>daily scheduler 每天触发；只有“昨天”是 close date 时才创建。
      * 创建是幂等的（INSERT IGNORE + cycle/shard 唯一键），重复触发不会产生重复分片。
      * 如果不幂等，scheduler 多实例或当天重跑会把同一周期的分片创建多份。</p>
+     *
+     * <p>事务归属：外部测试或手工入口可以直接调用本方法，因此也保留 {@code @Transactional}；
+     * 从 {@link #createDueJobs()} 内部调用时，则加入外层已打开的同一个事务。</p>
      *
      * @return 本期分片数；非 close date 返回 0。
      */
@@ -93,6 +101,9 @@ public class StatementCycleService {
 
     /**
      * 根据本期待出账账户数决定分片数量，控制每个 job 的账户规模。
+     *
+     * <p>事务归属：纯计算方法；当前由 {@link #createDueJobs(LocalDate)} 在 job creation
+     * 事务中调用，但不依赖事务能力。</p>
      */
     private int shardCount(long accountCount) {
         if (accountCount == 0) {
@@ -104,6 +115,9 @@ public class StatementCycleService {
 
     /**
      * 根据关账日推导账期开始日、结束日和还款到期日。
+     *
+     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)} 在 job creation
+     * 事务中调用。</p>
      */
     private BillingCycle billingCycle(LocalDate periodEnd) {
         YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
@@ -117,6 +131,9 @@ public class StatementCycleService {
 
     /**
      * 判断某一天是否是配置中的关账日。
+     *
+     * <p>事务归属：纯日期判断；当前由 {@link #createDueJobs(LocalDate)} 在事务开始后调用，
+     * 但它本身不访问数据库。</p>
      */
     private boolean isCloseDate(LocalDate date) {
         return date.equals(dayInMonth(YearMonth.from(date), properties.batch().closeDayOfMonth()));
@@ -124,6 +141,9 @@ public class StatementCycleService {
 
     /**
      * 计算严格晚于关账日的还款到期日，并按营业日规则顺延。
+     *
+     * <p>事务归属：纯日期计算方法；当前由 {@link #billingCycle(LocalDate)}
+     * 在 job creation 事务中间接调用。</p>
      */
     private LocalDate paymentDateAfter(LocalDate periodEnd) {
         YearMonth candidateMonth = YearMonth.from(periodEnd);
@@ -141,6 +161,9 @@ public class StatementCycleService {
 
     /**
      * 取某个月的配置日；短月份会落到当月最后一天。
+     *
+     * <p>事务归属：纯日期计算方法；当前由 {@link #billingCycle(LocalDate)}
+     * 和 {@link #isCloseDate(LocalDate)} 间接服务 job creation 事务。</p>
      */
     private LocalDate dayInMonth(YearMonth month, int configuredDay) {
         return month.atDay(Math.min(configuredDay, month.lengthOfMonth()));
@@ -148,6 +171,9 @@ public class StatementCycleService {
 
     /**
      * 返回账单批处理使用的业务时区。
+     *
+     * <p>事务归属：纯配置读取方法，不依赖事务；当前由 {@link #createDueJobs()} 和
+     * {@link #createDueJobs(LocalDate)} 调用。</p>
      */
     private ZoneId batchZone() {
         return ZoneId.of(properties.batch().zone());

@@ -10,6 +10,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.minicard.repayment.application.ReceiveRepaymentCommand;
+import com.minicard.repayment.application.RepaymentService;
 import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -148,6 +150,10 @@ public class StatementReadService {
 
     /**
      * 在写事务成功提交后失效 statement read cache，并写版本墓碑挡住迟到旧值。
+     *
+     * <p>事务归属：通常由写事务中的 {@link RepaymentService#receive(ReceiveRepaymentCommand)}
+     * 间接调用，但真正执行 {@link #evict(UUID, long)} 会排到 afterCommit；如果当前线程没有事务，
+     * 则直接执行失效，主要服务测试或未来非事务调用。</p>
      */
     public void evictAfterCommit(Statement statement) {
         UUID statementId = statement.id();
@@ -377,6 +383,9 @@ public class StatementReadService {
 
     /**
      * 执行实际 cache 失效：清本地 L1、写 Redis 墓碑、广播跨 pod L1 失效。
+     *
+     * <p>事务归属：应在写事务 commit 之后调用，通常由 {@link #evictAfterCommit(Statement)}
+     * 的 afterCommit 回调触发；不要在业务写入尚未提交时直接调用。</p>
      */
     private void evict(UUID statementId, long version) {
         // 写路径不更新 cache，而是写一个"版本地板"墓碑让下一次读回源重建。三步顺序：

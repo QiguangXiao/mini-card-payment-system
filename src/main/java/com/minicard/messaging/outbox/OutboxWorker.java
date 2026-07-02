@@ -67,6 +67,9 @@ public class OutboxWorker {
 
     /**
      * worker pool 没能接收任务时，把已领取事件放回 retry/DEAD 状态机。
+     *
+     * <p>事务归属：本方法本身不加 {@code @Transactional}；它委托
+     * {@link #markFailed(OutboxEvent, String, RuntimeException)} 开启 finalize 短事务。</p>
      */
     public void markRejectedForRetry(OutboxEvent claimedEvent, RuntimeException exception) {
         // worker pool 拒绝时，必须把 PROCESSING 事件放回 retry/DEAD，避免 lease 到期前一直不可见。
@@ -76,6 +79,9 @@ public class OutboxWorker {
 
     /**
      * 在独立短事务中重新校验 lease，并把 Kafka ack 后的事件标记为 PUBLISHED。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；Kafka publish 已经在事务外完成。</p>
      */
     private void markPublished(OutboxEvent claimedEvent) {
         // finalize 使用 TransactionOperations，而不是在 publishClaimedEvent 外层包 @Transactional。
@@ -100,6 +106,9 @@ public class OutboxWorker {
 
     /**
      * 在独立短事务中记录发布失败，推进 attempts、lastError 和下一次 retry 时间。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；它不和 Kafka send 等待过程共用事务。</p>
      */
     private void markFailed(
             OutboxEvent claimedEvent,
@@ -129,6 +138,9 @@ public class OutboxWorker {
 
     /**
      * 重新锁定当前 outbox row 并确认本 worker 仍持有 lease。
+     *
+     * <p>事务归属：只能在 {@link #markPublished(OutboxEvent)} 或
+     * {@link #markFailed(OutboxEvent, String, RuntimeException)} 创建的 finalize 短事务内部调用。</p>
      */
     private OutboxEvent lockCurrentLease(OutboxEvent claimedEvent) {
         // publish Kafka ack 发生在事务外；回来 finalize 前必须重读当前 row 并加 FOR UPDATE。

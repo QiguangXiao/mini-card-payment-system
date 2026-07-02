@@ -73,6 +73,9 @@ public class RecordLedgerEntryService {
 
     /**
      * 按事件类型构造对应方向的 ledger entry。
+     *
+     * <p>事务归属：只由 {@link #record(RecordLedgerEntryCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；它本身只是构造 domain object，不读写数据库。</p>
      */
     private LedgerEntry toEntry(RecordLedgerEntryCommand command, Instant now) {
         if (command.entryType() == LedgerEntryType.CARD_TRANSACTION_POSTED) {

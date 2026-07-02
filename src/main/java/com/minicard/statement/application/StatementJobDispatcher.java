@@ -113,6 +113,9 @@ public class StatementJobDispatcher {
 
     /**
      * 在短事务里批量 claim PENDING statement jobs，并写入 PROCESSING lease。
+     *
+     * <p>事务归属：由 {@link #dispatch()} 通过 {@code TransactionOperations.execute(...)}
+     * 调用，不依赖 {@code @Transactional} 注解；claim 完成 commit 后才提交 worker pool。</p>
      */
     private List<StatementJob> claimJobs() {
         Instant now = Instant.now(clock);
@@ -131,6 +134,10 @@ public class StatementJobDispatcher {
 
     /**
      * 执行已领取的分片出账任务，并根据账户级结果 finalize 为 DONE 或失败重试。
+     *
+     * <p>事务归属：本方法运行在线程池中，外层没有 job row 事务；真正的账单生成事务在
+     * {@link StatementJobHandler#handle(StatementJob)} 内部逐账户调用
+     * {@link StatementGenerationService#generate(GenerateStatementCommand)} 打开。</p>
      */
     private void handleClaimedJob(StatementJob claimedJob) {
         try {
@@ -152,6 +159,9 @@ public class StatementJobDispatcher {
 
     /**
      * 在短事务中重新校验 lease，并把成功完成的分片任务标记为 DONE。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启 finalize 短事务；不要把整个 handler 执行包进这个事务。</p>
      */
     private void markDone(StatementJob claimedJob, StatementJobExecutionResult result) {
         transactionOperations.executeWithoutResult(status -> {
@@ -173,6 +183,9 @@ public class StatementJobDispatcher {
 
     /**
      * 在短事务中重新校验 lease，并保存失败统计、错误原因和 retry/DEAD 状态。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启 finalize 短事务；它和账单生成事务是分开的。</p>
      */
     private void markFailed(
             StatementJob claimedJob,
@@ -199,6 +212,10 @@ public class StatementJobDispatcher {
 
     /**
      * 重新锁定当前 job row 并确认本 dispatcher worker 仍持有 claim token。
+     *
+     * <p>事务归属：只能在 {@link #markDone(StatementJob, StatementJobExecutionResult)}
+     * 或 {@link #markFailed(StatementJob, StatementJobExecutionResult, String, RuntimeException)}
+     * 创建的 finalize 短事务内部调用；否则 {@code FOR UPDATE} 锁不会覆盖后续状态更新。</p>
      */
     private StatementJob lockCurrentLease(StatementJob claimedJob) {
         StatementJob job = jobRepository.findByIdForUpdate(claimedJob.id())

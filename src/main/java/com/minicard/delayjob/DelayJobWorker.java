@@ -92,6 +92,9 @@ public class DelayJobWorker {
 
     /**
      * worker pool 拒绝执行时，把已领取 job 放回 retry/DEAD 状态机。
+     *
+     * <p>事务归属：本方法本身不加 {@code @Transactional}；它委托
+     * {@link #markFailed(DelayJob, String, RuntimeException)} 开启 finalize 短事务。</p>
      */
     public void markRejectedForRetry(DelayJob claimedJob, RuntimeException exception) {
         // worker pool 拒绝也按失败处理，把 job 从 PROCESSING 放回 retry/DEAD。
@@ -101,6 +104,9 @@ public class DelayJobWorker {
 
     /**
      * 在独立短事务中重新校验 lease，并把业务已完成的 job 标记为 DONE。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；业务 handler 已经在外层、通常是另一个事务里完成。</p>
      */
     private void markDone(DelayJob claimedJob) {
         // finalize 单独开短事务：handler 可能做外部/跨 aggregate 业务，不能让 job row lock 跟着长时间持有。
@@ -126,6 +132,9 @@ public class DelayJobWorker {
 
     /**
      * 在独立短事务中记录 handler 失败，并推进 retry/backoff/DEAD。
+     *
+     * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
+     * 自己开启短事务；它不和 handler 的业务事务合并。</p>
      */
     private void markFailed(
             DelayJob claimedJob,
@@ -156,6 +165,9 @@ public class DelayJobWorker {
 
     /**
      * 重新锁定当前 job row 并确认本 worker 仍持有 PROCESSING lease。
+     *
+     * <p>事务归属：只能在 {@link #markDone(DelayJob)} 或
+     * {@link #markFailed(DelayJob, String, RuntimeException)} 创建的 finalize 短事务内部调用。</p>
      */
     private DelayJob lockCurrentLease(DelayJob claimedJob) {
         // worker 收到的是 claim 事务提交后的内存快照。finalize 前必须重新 SELECT ... FOR UPDATE，

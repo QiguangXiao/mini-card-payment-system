@@ -84,6 +84,10 @@ public class StatementGenerationService {
 
     /**
      * 创建新 statement、冻结明细快照、标记交易已出账，并安排自动扣款和通知事件。
+     *
+     * <p>事务归属：只由 {@link #generate(GenerateStatementCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；statement、line、BILLED 标记、DelayJob 和 Outbox
+     * 必须一起 commit/rollback。</p>
      */
     private Statement createStatement(
             GenerateStatementCommand command,
@@ -158,6 +162,9 @@ public class StatementGenerationService {
 
     /**
      * 把 statement.closed 领域事件追加到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #createStatement(GenerateStatementCommand, CreditAccount, Instant)}
+     * 调用，因此属于 {@link #generate(GenerateStatementCommand)} 的写事务；幂等命中已有账单时不会调用。</p>
      */
     private void publishDomainEvents(Statement statement) {
         for (StatementDomainEvent event : statement.pullDomainEvents()) {
@@ -167,6 +174,9 @@ public class StatementGenerationService {
 
     /**
      * 汇总本期待出账交易金额，作为 statement totalAmount。
+     *
+     * <p>事务归属：纯计算方法；当前由 {@link #createStatement(GenerateStatementCommand,
+     * CreditAccount, Instant)} 在账单生成事务中调用，但不依赖事务能力。</p>
      */
     private Money totalAmount(List<StatementLineSource> transactions) {
         // getFirst() 是 Java 21 SequencedCollection API；前面已经保证 transactions 非空。
@@ -181,6 +191,9 @@ public class StatementGenerationService {
 
     /**
      * 按配置计算最低还款额，并限制不超过本期总额。
+     *
+     * <p>事务归属：纯计算方法；当前由 {@link #createStatement(GenerateStatementCommand,
+     * CreditAccount, Instant)} 在账单生成事务中调用。</p>
      */
     private Money minimumPayment(Money totalAmount) {
         BigDecimal floor = properties.policy().minimumPaymentFloors()
@@ -201,6 +214,9 @@ public class StatementGenerationService {
 
     /**
      * 把账期开始日转换为 billing timezone 下的闭区间起点。
+     *
+     * <p>事务归属：纯时间转换方法，不依赖事务；当前由
+     * {@link #createStatement(GenerateStatementCommand, CreditAccount, Instant)} 调用。</p>
      */
     private Instant periodStartInstant(LocalDate periodStart) {
         // 账单日切必须用 billing timezone。当前项目使用全局 Asia/Tokyo；
@@ -210,6 +226,9 @@ public class StatementGenerationService {
 
     /**
      * 把账期结束日转换为 billing timezone 下的开区间终点。
+     *
+     * <p>事务归属：纯时间转换方法，不依赖事务；当前由
+     * {@link #createStatement(GenerateStatementCommand, CreditAccount, Instant)} 调用。</p>
      */
     private Instant periodEndExclusiveInstant(LocalDate periodEnd) {
         return periodEnd.plusDays(1).atStartOfDay(ZoneId.of(properties.batch().zone())).toInstant();

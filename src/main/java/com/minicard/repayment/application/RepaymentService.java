@@ -95,6 +95,10 @@ public class RepaymentService {
 
     /**
      * 在同一 transaction boundary 内把还款同时应用到账单和信用账户。
+     *
+     * <p>事务归属：只由 {@link #receive(ReceiveRepaymentCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；statement、credit account、repayment 和 cache afterCommit
+     * 注册必须基于同一次提交结果。</p>
      */
     private void applyToStatementAndAccount(
             Repayment repayment,
@@ -142,6 +146,9 @@ public class RepaymentService {
 
     /**
      * 校验还款金额、币种、账单状态和账户余额是否允许本次入账。
+     *
+     * <p>事务归属：由 {@link #applyToStatementAndAccount(Repayment, Statement, Money, Instant)}
+     * 在锁住 account 与 statement row 后调用；它本身不写库，但依赖同一事务内的最新锁定快照。</p>
      */
     private void validateCanApply(
             Statement statement,
@@ -174,6 +181,9 @@ public class RepaymentService {
 
     /**
      * 把 repayment.received 领域事件追加到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #receive(ReceiveRepaymentCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；Outbox row 必须和 repayment/account/statement 状态一起提交。</p>
      */
     private void publishDomainEvents(Repayment repayment) {
         for (RepaymentDomainEvent event : repayment.pullDomainEvents()) {
@@ -185,6 +195,9 @@ public class RepaymentService {
 
     /**
      * 校验同一个 idempotency key 是否仍代表同一笔还款请求。
+     *
+     * <p>事务归属：当前由 {@link #receive(ReceiveRepaymentCommand)} 在锁住 repayment winner row
+     * 后调用；它本身是纯校验，但校验对象来自同一事务内的 {@code SELECT ... FOR UPDATE}。</p>
      */
     private void assertSameIdempotentRequest(
             ReceiveRepaymentCommand command,

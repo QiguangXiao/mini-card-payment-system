@@ -97,6 +97,9 @@ public class AuthorizationExpiryService {
 
     /**
      * 把 authorization.expired 领域事件追加到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #expire(UUID)} 调用，加入同一个 {@code @Transactional}
+     * 边界；Outbox row 必须和 account release、authorization EXPIRED 状态一起提交。</p>
      */
     private void publishDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {

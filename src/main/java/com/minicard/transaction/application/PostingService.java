@@ -126,6 +126,9 @@ public class PostingService {
     /**
      * 处理已存在的同 networkTransactionId presentment：要么返回幂等的 POSTED 结果，
      * 要么说明它仍在并发入账中（或遗留 orphan pending）而拒绝本次重复处理。
+     *
+     * <p>事务归属：由 {@link #post(PostPresentmentCommand)} 在同一个 {@code @Transactional}
+     * 边界内调用；existing row 已经通过 {@code FOR UPDATE} 锁住，所以这里可以安全判断最终状态。</p>
      */
     private CardTransaction resolveExistingPresentment(
             PostPresentmentCommand command,
@@ -145,6 +148,9 @@ public class PostingService {
 
     /**
      * 校验 authorization 是否仍可被 presentment 入账。
+     *
+     * <p>事务归属：由 {@link #post(PostPresentmentCommand)} 在锁住 authorization row 后调用；
+     * 它本身只做校验，但校验结果决定同一事务后续是否更新 account、authorization 和 transaction。</p>
      */
     private void validateAuthorizationCanBePosted(
             Authorization authorization,
@@ -176,6 +182,9 @@ public class PostingService {
 
     /**
      * 校验同一 networkTransactionId 的重复请求是否代表同一笔 presentment。
+     *
+     * <p>事务归属：当前由 {@link #resolveExistingPresentment(PostPresentmentCommand,
+     * CardTransaction)} 在 posting 写事务中调用；它本身不读写数据库。</p>
      */
     private void assertSamePresentment(
             PostPresentmentCommand command,
@@ -188,6 +197,9 @@ public class PostingService {
 
     /**
      * 追加 authorization.posted 事件到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #post(PostPresentmentCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；Outbox row 必须和 authorization POSTED 状态一起提交。</p>
      */
     private void publishAuthorizationEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
@@ -197,6 +209,9 @@ public class PostingService {
 
     /**
      * 追加 card_transaction.posted 事件到 Outbox。
+     *
+     * <p>事务归属：只由 {@link #post(PostPresentmentCommand)} 调用，加入同一个
+     * {@code @Transactional} 边界；Outbox row 必须和交易 POSTED 状态一起提交。</p>
      */
     private void publishCardTransactionEvents(CardTransaction transaction) {
         for (CardTransactionDomainEvent event : transaction.pullDomainEvents()) {

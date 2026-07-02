@@ -43,6 +43,10 @@ public class AutoRepaymentService {
     /**
      * 对一张到期 statement 执行自动扣款。
      *
+     * <p>事务归属：本方法刻意不加 {@code @Transactional}，因为银行扣款是事务外副作用。
+     * 银行成功后才调用 {@link RepaymentService#receive(ReceiveRepaymentCommand)} 进入还款写事务；
+     * 如果把外部扣款包进数据库事务，银行延迟会放大 MySQL 锁时间，且数据库 rollback 也无法撤销真实扣款。</p>
+     *
      * <p>顺序非常关键：先拿到 bank debit 成功，再调用 repayment posting；
      * 否则会把银行未实际收到的钱错误记入 credit account。</p>
      *
