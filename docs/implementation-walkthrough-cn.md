@@ -747,8 +747,8 @@ PayPay Card interview提示：
 真实主路径（账单批处理已扁平化为 claimable job，机制详见 `claimable-jobs-cn.md`）：
 
 ```text
-BillingCycleScheduler（每天 JST cron，判断是否关账日）
--> StatementCycleService.createDueJobs（算 cycle + 按账户数建分片 statement_jobs）
+BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
+-> StatementCycleService.createDueJobs（扫描最近已过去 close cycles，缺失的周期补建 statement_jobs）
 -> StatementJobDispatcher（claim 分片）
 -> StatementJobHandler（取本片账户：CRC32(account)%shardCount）
 -> StatementGenerationService.generate(...)（逐账户独立小事务出账）
@@ -772,8 +772,19 @@ dueDate     = 7 月 27 日
 为什么是关账日次日执行：
 
 - 如果 6 月 30 日白天刚开始就关账，当天后续 posting 的交易可能变成迟到交易。
-- 当前项目统一用 UTC 日切，先让 6 月 30 日完整结束，再在 7 月 1 日批处理。
+- 当前项目按 billing timezone（默认 Asia/Tokyo）切账期，先让 6 月 30 日完整结束，再在 7 月 1 日批处理。
 - 生产系统通常会把 billing timezone 放在产品或账户配置中。
+
+为什么 scheduler 要做 reconciliation，而不是只看“昨天是不是关账日”：
+
+- Spring `@Scheduled` 默认不会补跑 missed cron。比如 7 月 31 日关账，8 月 1 日 01:00 JST 应该创建 7 月账单分片；
+  如果应用在 8 月 1 日 00:50 到 8 月 3 日 09:00 宕机，这次 tick 就丢了。
+- `StatementCycleService.createDueJobs()` 现在是 level-triggered control loop：每天醒来扫描最近
+  `statement.batch.reconciliation-lookback-cycles` 个已过去 close cycles，先用
+  `StatementJobRepository.existsForCycle(periodStart, periodEnd)` 看该周期是否已经有 `statement_jobs`。
+- 缺失的周期才计算 `dueDate`、账户数和 shardCount，并用 `INSERT IGNORE` 写入
+  `(period_start, period_end, shard_no)` 唯一保护的分片 rows。多实例同时补建也安全，最多一个实例真正插入。
+- `createDueJobs(LocalDate runDate)` 仍保留为 runbook/测试入口，用于人工精确补跑某个账务日。
 
 为什么扣款日用 27 日并顺延到日本营业日：
 
@@ -798,7 +809,7 @@ curl -X POST http://localhost:8080/api/statements/generate \
 入口：
 
 Batch path（claimable job，详见 `claimable-jobs-cn.md`）：
-- `BillingCycleScheduler`（每日 JST cron）-> `StatementCycleService.createDueJobs`（建分片 `statement_jobs`）
+- `BillingCycleScheduler`（每日 JST cron）-> `StatementCycleService.createDueJobs`（reconciliation 补建缺失分片 `statement_jobs`）
 - `StatementJobDispatcher`（claim 分片）-> `StatementJobHandler`（取本片账户）
 
 Backfill/API path + 单账户出账：
@@ -812,9 +823,12 @@ Backfill/API path + 单账户出账：
 
 ### 5.1 触发与分片（claimable job）+ Command 阶段
 
-`BillingCycleScheduler` 是很薄的 scheduler：用 `@Scheduled` 的**每日 JST cron** 醒来，只判断今天是否关账日；不持大事务、不拼 SQL 锁业务表。
+`BillingCycleScheduler` 是很薄的 scheduler：用 `@Scheduled` 的**每日 JST cron** 醒来，只负责触发一次 reconciliation；
+真正的 close-cycle 判断、缺失周期扫描和分片补建都收在 `StatementCycleService` 里，避免 scheduler 知道 billing timezone 和账期规则。
 
-判定关账日后，`StatementCycleService.createDueJobs` 计算 `periodStart/periodEnd/dueDate`、按账户数算 shardCount、`INSERT IGNORE` 建分片 `statement_jobs`；再由 `StatementJobDispatcher` claim 分片、`StatementJobHandler` 取本片账户（`CRC32(account)%shardCount`）逐个调 `StatementGenerationService.generate(...)`。
+`StatementCycleService.createDueJobs` 先扫描最近几个已过去 close cycles；某个周期已经有 `statement_jobs` 就跳过，
+缺失时再计算 `periodStart/periodEnd/dueDate`、按账户数算 shardCount、`INSERT IGNORE` 建分片。
+随后由 `StatementJobDispatcher` claim 分片、`StatementJobHandler` 取本片账户（`CRC32(account)%shardCount`）逐个调 `StatementGenerationService.generate(...)`。
 
 刻意不是一个大事务：
 

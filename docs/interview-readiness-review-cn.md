@@ -248,6 +248,17 @@ Kafka consumer lag per group；断路器状态变化。项目里只有 actuator 
 
 修复前的诚实答案是"不会"（见 §6.1）。**这题必须在面试前消灭。**
 
+### Q13. "你的 daily cron 在触发时刻宕机了会怎样？Spring @Scheduled 有 misfire 补偿吗？"
+
+要点：`@Scheduled` 没有 misfire 语义（对比 Quartz 的 JDBC JobStore + FIRE_ONCE_NOW）。
+我的答案分两层：①系统里几乎所有定时工作都是 **level-triggered**——计划落库
+（DelayJob/outbox row），poller 按 `next_attempt_at <= now` 扫表，宕机跨过触发点后
+恢复即自愈；②唯一的 edge-triggered 定时器（账单周期规划的 daily cron）我在自查中
+发现并改成了 **reconciliation**：每天对最近 N 个关账周期做 desired-state 对账，
+缺哪期补哪期，幂等由 INSERT IGNORE + 唯一键兜底（完整经过见 §6.9）。
+加分延伸：补偿机制自己也可能坏 → 独立的"已过关账日但无 jobs / 有 DEAD"告警兜底；
+迟到补建的次生效应（dueDate 已过 → 立即扣款）要主动交底。
+
 ---
 
 ## 6. 最大技术风险 / 弱点（含缺陷时序推演）
@@ -332,7 +343,41 @@ IT 只有 3 个。还款同 key 并发、posting-vs-expiry 竞态、presentment 
 `bin/`、`build/`、`.idea/` 入库；`bin/main` 下有一套可能过期的 schema/mapper 副本，
 评审者可能读错版本。`.gitignore` + `git rm -r --cached`，5 分钟修完。
 
-### 6.9 其他中低风险（一句话备忘）
+### 6.9 【已修复】Daily cron 错过关账日 → 周期永不出账 — 原严重度 High
+
+**发现经过（本身是面试素材）**：两轮 review 都没发现——它是**缺失机制型缺陷（absence bug）**，
+逐行审查 `createDueJobs` 每行都对；直到讨论方法重载、对"错过触发时刻"做推演才暴露。
+事后把全部定时入口按 **edge-triggered（错过即丢）vs level-triggered（扫表自愈）** 分类排查：
+outbox/delayjob/notification/statement dispatcher 的轮询和"与业务同事务落库的 DelayJob 计划"
+都自愈，`BillingCycleScheduler` 是全系统**唯一**的 edge-triggered 定时器。
+
+**原缺陷时序**：
+
+```
+7/31 = 关账日
+8/1 00:50  应用宕机；01:00 cron 该触发，没人在 → 错过
+8/2 01:00  恢复后 cron 醒来：periodEnd = 8/1 不是 close date → 返回 0
+结局       7 月周期的 statement_jobs 永远不会被创建——不是晚出账，是不出账，
+           且比 DEAD job 更隐蔽：表里连一行可观测的尸体都没有
+```
+
+**修复（已实施）**：把 scheduler 从 edge-triggered 改成 **level-triggered reconciliation**：
+每天醒来扫描最近 `reconciliation-lookback-cycles`（默认 2）个已过去的关账日，
+用 `existsForCycle(periodStart, periodEnd)` 找缺失周期并补建。`existsForCycle` 命中
+`uk_statement_jobs_cycle_shard` 最左前缀；它只是 fast path，多实例并发的最终幂等仍由
+`INSERT IGNORE` + cycle/shard 唯一键兜底。`@Transactional` 保持在公共入口，
+reconcile 为私有方法，无 self-invocation 问题；`createDueJobs(LocalDate)` 保留为
+runbook 精确补跑入口。
+
+**修复后残留取舍（要能主动说出）**：
+- **迟到补建的 dueDate 可能已在过去**（极端：7/31 周期 8/28 才补建，dueDate=8/27 已过）
+  → 自动扣款 delay job 立即执行，用户零通知期。完整修法是
+  `dueDate = max(计算值, 补建日 + N 营业日)`；当前作为已接受行为。
+- 全新环境首跑会回填 lookback 窗口内的历史周期（本项目无害；生产需"首个受管周期"配置）。
+- 两 pod 并发补建且账户数恰好变化时，可能合并出混合 shard_count 的分片集——
+  覆盖仍完备，重复扫描被单账户出账幂等吸收，但这依赖下游幂等。
+
+### 6.10 其他中低风险（一句话备忘）
 
 - `credit_accounts`/`cards` 缺 `created_at/updated_at`（全项目唯二没有审计字段的表，偏偏是钱最敏感的）；
   repository update 不校验 affected rows。
@@ -651,6 +696,31 @@ IT 只有 3 个。还款同 key 并发、posting-vs-expiry 竞态、presentment 
 > tolerance is. And I haven't load-tested this at scale — the design choices anticipate scale,
 > but I'd rather say that plainly than imply production mileage I don't have.
 
+### 9.15 自愈调度与一次真实的缺陷发现（Level-triggered Scheduling — 发现→修复故事）
+
+**One-liner:** *Almost every timer in the system is level-triggered — durable plans in MySQL scanned by pollers — and when I found the one edge-triggered cron that could silently skip a billing cycle, I converted it into a reconciliation loop.*
+
+**Full version:**
+
+> One bug I'm genuinely glad I caught: statement cycle planning used to be a daily in-memory
+> cron that asked "was yesterday the closing date?" Spring's @Scheduled has no misfire
+> compensation, so if the app happened to be down at that one moment — say a deploy gone wrong
+> on the first of the month — the answer would be "no" forever after, and that month's
+> statements would silently never be planned. Not delayed — never created, and with no dead
+> row in any table to alert on. What made it interesting is that every line of the code was
+> correct; the defect was an *absence* — nothing owned the missed tick. I only found it by
+> classifying every timed entry point as edge-triggered or level-triggered: the outbox,
+> delay jobs, and notification pollers all scan durable state, so a crash across the trigger
+> moment self-heals; this cron was the single edge-triggered exception. The fix follows the
+> control-loop idea: instead of reacting to "today", the scheduler now reconciles desired
+> state — it scans the last few closed billing cycles, finds any cycle with no planned jobs,
+> and back-fills it. Idempotency needs no new machinery: an existence check is just a fast
+> path, and the real guarantee stays with INSERT IGNORE on the cycle-and-shard unique key,
+> so even two pods reconciling concurrently can't double-plan. And I'd volunteer the residual
+> trade-off: a cycle recovered very late can carry a due date that's already passed, which
+> would trigger an immediate auto-debit — in production I'd floor the due date at
+> recovery-date-plus-N-business-days.
+
 ---
 
 ## 附：背诵优先级建议
@@ -658,6 +728,6 @@ IT 只有 3 个。还款同 key 并发、posting-vs-expiry 竞态、presentment 
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
 | 必背 | 9.1, 9.2, 9.3, 9.5, 9.6 | 开场 + JD 核心（并发/幂等/事件驱动）必问 |
-| 高 | 9.8, 9.11, 9.14 | 竞态故事、生产思维、主动交底——区分度最高的三条 |
+| 高 | 9.8, 9.11, 9.14, 9.15 | 竞态故事、生产思维、主动交底、缺陷发现→修复故事——区分度最高的四条 |
 | 中 | 9.4, 9.7, 9.12, 9.13 | 被追问时展开 |
 | 低 | 9.9, 9.10 | 缓存/金额只在对应话题出现时使用 |

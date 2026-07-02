@@ -74,7 +74,7 @@
 | --- | --- | --- |
 | `paypay-card-jd-fit-cn.md` + `paypay-card-backend-interview-guide-cn.md` | ⏳ | 拟重度去重，合并为一份更精炼的"JD 对照 + 题库"（保留有价值的深挖 Q&A） |
 | [`paypay-card-jd-alignment-review-cn.md`](paypay-card-jd-alignment-review-cn.md) | ✅ | 独立评审（已对齐最新代码），保留 |
-| [`interview-readiness-review-cn.md`](interview-readiness-review-cn.md) | ✅ | 面试就绪评审（2026-07-02，基线 `e7b5e73`）：优秀设计证据、JD 对齐评分 78%、展示排序、题库答题要点、两个缺陷时序推演、过度工程清单、ROI 改进计划，**文末附 14 条英文背诵材料** |
+| [`interview-readiness-review-cn.md`](interview-readiness-review-cn.md) | ✅ | 面试就绪评审（2026-07-02）：优秀设计证据、JD 对齐评分 78%、展示排序、题库答题要点（含 Q13 missed-cron）、三个缺陷时序推演（missed-cron 已按 reconciliation 修复，见 §6.9）、过度工程清单、ROI 改进计划，**文末附 15 条英文背诵材料** |
 
 ### 9. 参考（Reference）
 

@@ -66,6 +66,16 @@
         )
     </insert>
 
+    <select id="existsForCycle" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM statement_jobs
+            WHERE period_start = #{periodStart}
+              AND period_end = #{periodEnd}
+            LIMIT 1
+        )
+    </select>
+
     <!-- 多个 worker/pod 并发 claim 时，SKIP LOCKED 会跳过别人已锁住的 job row。 -->
     <select id="findClaimableBatchForUpdate" resultMap="statementJobRowMap">
         SELECT <include refid="statementJobColumns"/>

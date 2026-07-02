@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -38,27 +39,28 @@ public class StatementCycleService {
     private final Clock clock;
 
     /**
-     * 用当前日期（按 billing timezone）判断是否需要创建本期 jobs。
+     * 用当前日期（按 billing timezone）对最近几个已过去关账周期做 reconciliation。
      *
-     * <p>事务归属：scheduler 实际调用这个入口，所以这里也必须带 {@code @Transactional}。
-     * 如果只给 {@link #createDueJobs(LocalDate)} 加事务，同类内部调用不会经过 Spring proxy，
-     * 事务不会自动打开。</p>
+     * <p>事务归属：scheduler 实际调用这个入口，所以这里是 job creation 的事务入口。
+     * 这里不再只看“昨天是不是关账日”，而是做 level-triggered catch-up scan：
+     * 最近几个已过去 close cycle 缺哪个 {@code statement_jobs} 就补哪个，避免应用错过某次
+     * cron tick 后该周期永远不出账。</p>
      */
     @Transactional
     public int createDueJobs() {
-        LocalDate runDate = LocalDate.now(clock.withZone(batchZone()));
-        return createDueJobs(runDate);
+        LocalDate today = LocalDate.now(clock.withZone(batchZone()));
+        return reconcileDueCycles(today);
     }
 
     /**
-     * 为某个 runDate 对应的 billing cycle 创建 sharded jobs。
+     * 为某个 runDate 对应的 billing cycle 创建 sharded jobs，作为测试和 runbook 精确补跑入口。
      *
-     * <p>daily scheduler 每天触发；只有“昨天”是 close date 时才创建。
+     * <p>只有“runDate 的昨天”是 close date 时才创建。
      * 创建是幂等的（INSERT IGNORE + cycle/shard 唯一键），重复触发不会产生重复分片。
-     * 如果不幂等，scheduler 多实例或当天重跑会把同一周期的分片创建多份。</p>
+     * 如果不幂等，scheduler 多实例、手工补跑或当天重跑会把同一周期的分片创建多份。</p>
      *
-     * <p>事务归属：外部测试或手工入口可以直接调用本方法，因此也保留 {@code @Transactional}；
-     * 从 {@link #createDueJobs()} 内部调用时，则加入外层已打开的同一个事务。</p>
+     * <p>事务归属：外部测试或手工入口可以直接调用本方法，因此保留 {@code @Transactional}。
+     * scheduler 的自动补偿入口是 {@link #createDueJobs()}，不会依赖本方法的 self-invocation。</p>
      *
      * @return 本期分片数；非 close date 返回 0。
      */
@@ -69,7 +71,50 @@ public class StatementCycleService {
             return 0;
         }
 
+        LocalDate periodStart = periodStartFor(periodEnd);
+        if (jobRepository.existsForCycle(periodStart, periodEnd)) {
+            return 0;
+        }
         BillingCycle cycle = billingCycle(periodEnd);
+        return createJobsForCycle(cycle);
+    }
+
+    /**
+     * 对最近几个已过去的关账周期做 desired-state reconciliation，缺失的周期会被补建分片。
+     *
+     * <p>事务归属：只由 {@link #createDueJobs()} 调用，加入 scheduler 心跳的同一个事务。
+     * 多实例同时扫描也安全：{@link StatementJobRepository#existsForCycle(LocalDate, LocalDate)}
+     * 只是减少无谓计算，最终幂等性仍由 {@code INSERT IGNORE} 和 cycle/shard 唯一键兜底。</p>
+     */
+    private int reconcileDueCycles(LocalDate today) {
+        int created = 0;
+        LocalDate latestClosedDate = today.minusDays(1);
+        for (LocalDate closeDate : recentCloseDatesOnOrBefore(
+                latestClosedDate,
+                properties.batch().reconciliationLookbackCycles()
+        )) {
+            LocalDate periodStart = periodStartFor(closeDate);
+            if (jobRepository.existsForCycle(periodStart, closeDate)) {
+                log.debug(
+                        "statement_cycle_jobs_already_exist periodStart={} periodEnd={}",
+                        periodStart,
+                        closeDate
+                );
+                continue;
+            }
+            BillingCycle cycle = billingCycle(closeDate);
+            created += createJobsForCycle(cycle);
+        }
+        return created;
+    }
+
+    /**
+     * 为一个确定的 billing cycle 创建分片 jobs。
+     *
+     * <p>事务归属：由 {@link #createDueJobs(LocalDate)} 或 {@link #reconcileDueCycles(LocalDate)}
+     * 在各自已打开的 job creation 事务中调用。</p>
+     */
+    private int createJobsForCycle(BillingCycle cycle) {
         Instant periodStartInclusive = cycle.periodStart().atStartOfDay(batchZone()).toInstant();
         Instant periodEndExclusive = cycle.periodEnd().plusDays(1).atStartOfDay(batchZone()).toInstant();
         long accountCount = billingRepository.countBillableAccounts(periodStartInclusive, periodEndExclusive);
@@ -100,10 +145,29 @@ public class StatementCycleService {
     }
 
     /**
+     * 从 latestDate 所在月份往前找最近几个已经到达的 close dates。
+     *
+     * <p>事务归属：纯日期计算方法；当前由 {@link #reconcileDueCycles(LocalDate)}
+     * 在 scheduler reconciliation 事务中调用。</p>
+     */
+    private List<LocalDate> recentCloseDatesOnOrBefore(LocalDate latestDate, int maxCycles) {
+        List<LocalDate> closeDates = new ArrayList<>();
+        YearMonth month = YearMonth.from(latestDate);
+        while (closeDates.size() < maxCycles) {
+            LocalDate closeDate = dayInMonth(month, properties.batch().closeDayOfMonth());
+            if (!closeDate.isAfter(latestDate)) {
+                closeDates.add(closeDate);
+            }
+            month = month.minusMonths(1);
+        }
+        return closeDates;
+    }
+
+    /**
      * 根据本期待出账账户数决定分片数量，控制每个 job 的账户规模。
      *
-     * <p>事务归属：纯计算方法；当前由 {@link #createDueJobs(LocalDate)} 在 job creation
-     * 事务中调用，但不依赖事务能力。</p>
+     * <p>事务归属：纯计算方法；当前由 {@link #createJobsForCycle(BillingCycle)}
+     * 在 job creation 事务中调用，但不依赖事务能力。</p>
      */
     private int shardCount(long accountCount) {
         if (accountCount == 0) {
@@ -116,17 +180,27 @@ public class StatementCycleService {
     /**
      * 根据关账日推导账期开始日、结束日和还款到期日。
      *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)} 在 job creation
-     * 事务中调用。</p>
+     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}
+     * 或 {@link #reconcileDueCycles(LocalDate)} 在 job creation 事务中调用。</p>
      */
     private BillingCycle billingCycle(LocalDate periodEnd) {
-        YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
-        LocalDate previousCloseDate = dayInMonth(previousMonth, properties.batch().closeDayOfMonth());
         return new BillingCycle(
-                previousCloseDate.plusDays(1),
+                periodStartFor(periodEnd),
                 periodEnd,
                 paymentDateAfter(periodEnd)
         );
+    }
+
+    /**
+     * 根据关账日推导账期开始日，供 existsForCycle 在计算 due date 前先判断是否已经规划过。
+     *
+     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}、
+     * {@link #reconcileDueCycles(LocalDate)} 和 {@link #billingCycle(LocalDate)}
+     * 在 job creation 事务中调用。</p>
+     */
+    private LocalDate periodStartFor(LocalDate periodEnd) {
+        YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
+        return dayInMonth(previousMonth, properties.batch().closeDayOfMonth()).plusDays(1);
     }
 
     /**
@@ -172,8 +246,8 @@ public class StatementCycleService {
     /**
      * 返回账单批处理使用的业务时区。
      *
-     * <p>事务归属：纯配置读取方法，不依赖事务；当前由 {@link #createDueJobs()} 和
-     * {@link #createDueJobs(LocalDate)} 调用。</p>
+     * <p>事务归属：纯配置读取方法，不依赖事务；当前服务 {@link #createDueJobs()}、
+     * {@link #createDueJobs(LocalDate)} 和 {@link #createJobsForCycle(BillingCycle)}。</p>
      */
     private ZoneId batchZone() {
         return ZoneId.of(properties.batch().zone());

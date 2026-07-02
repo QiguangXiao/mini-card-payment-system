@@ -162,7 +162,7 @@ authorization:
 statement:
   batch:
     enabled: true
-    # BillingCycleScheduler 每天按 JST 醒来一次，只负责创建 statement_batch 和 statement_jobs。
+    # BillingCycleScheduler 每天按 JST 醒来一次，只负责对账式补建缺失的 statement_jobs。
     cron: "0 0 1 * * *"
     zone: Asia/Tokyo
     # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
@@ -170,6 +170,8 @@ statement:
     close-day-of-month: 31
     # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
     payment-base-day-of-month: 27
+    # 每天醒来时对最近几个已过去关账周期做 reconciliation，防止 missed cron 导致账单分片永远不创建。
+    reconciliation-lookback-cycles: 2
     # 每个 durable statement_job 目标账户数；百万账户会被拆成约 1000 个分片任务。
     target-accounts-per-job: 1000
   jobs:

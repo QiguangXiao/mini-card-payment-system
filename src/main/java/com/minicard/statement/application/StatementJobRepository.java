@@ -1,6 +1,7 @@
 package com.minicard.statement.application;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -16,6 +17,8 @@ import com.minicard.statement.domain.StatementJob;
 public interface StatementJobRepository {
 
     void insertAll(List<StatementJob> jobs);
+
+    boolean existsForCycle(LocalDate periodStart, LocalDate periodEnd);
 
     List<StatementJob> findClaimableBatchForUpdate(Instant now, int limit);
 

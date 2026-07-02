@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -83,6 +84,52 @@ class StatementCycleServiceTest {
     }
 
     @Test
+    void skipsCloseCycleWhenStatementJobsAlreadyExist() {
+        when(jobRepository.existsForCycle(LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30")))
+                .thenReturn(true);
+
+        int shardCount = service.createDueJobs(LocalDate.parse("2026-07-01"));
+
+        assertThat(shardCount).isZero();
+        verify(billingRepository, never()).countBillableAccounts(any(), any());
+        verify(jobRepository, never()).insertAll(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void schedulerEntryReconcilesRecentClosedCyclesAndCreatesOnlyMissingOnes() {
+        // CLOCK 的 JST 日期是 2026-07-01；lookback=2 会检查 6/30 和 5/31 两个已过去关账日。
+        when(jobRepository.existsForCycle(LocalDate.parse("2026-05-01"), LocalDate.parse("2026-05-31")))
+                .thenReturn(true);
+        when(jobRepository.existsForCycle(LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30")))
+                .thenReturn(false);
+        when(billingRepository.countBillableAccounts(any(), any())).thenReturn(1200L);
+        when(businessDayCalendar.nextBusinessDayOnOrAfter(LocalDate.parse("2026-06-27")))
+                .thenReturn(LocalDate.parse("2026-06-29"));
+        when(businessDayCalendar.nextBusinessDayOnOrAfter(LocalDate.parse("2026-07-27")))
+                .thenReturn(LocalDate.parse("2026-07-27"));
+
+        int shardCount = service.createDueJobs();
+
+        assertThat(shardCount).isEqualTo(2);
+        verify(jobRepository).existsForCycle(
+                eq(LocalDate.parse("2026-06-01")),
+                eq(LocalDate.parse("2026-06-30"))
+        );
+        verify(jobRepository).existsForCycle(
+                eq(LocalDate.parse("2026-05-01")),
+                eq(LocalDate.parse("2026-05-31"))
+        );
+        ArgumentCaptor<List<StatementJob>> captor = ArgumentCaptor.forClass(List.class);
+        verify(jobRepository).insertAll(captor.capture());
+        assertThat(captor.getValue()).hasSize(2);
+        assertThat(captor.getValue()).allSatisfy(job -> {
+            assertThat(job.periodStart()).isEqualTo(LocalDate.parse("2026-06-01"));
+            assertThat(job.periodEnd()).isEqualTo(LocalDate.parse("2026-06-30"));
+        });
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void dueDateFollowsBusinessDayCalendarWhenBaseDayIsWeekend() {
         // 0 账户仍创建 1 个空分片，便于单独断言 due date。
@@ -104,7 +151,7 @@ class StatementCycleServiceTest {
 
     private StatementProperties statementProperties() {
         return new StatementProperties(
-                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 1000),
+                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 2, 1000),
                 new StatementProperties.Jobs(true, 1000, 10000, 10, 3, 300, 4, 20),
                 new StatementProperties.Policy(
                         new BigDecimal("0.10"),

@@ -1,6 +1,7 @@
 package com.minicard.statement.infrastructure.mybatis;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,6 +33,14 @@ public class MyBatisStatementJobRepository implements StatementJobRepository {
         for (StatementJob job : jobs) {
             mapper.insert(toRow(job));
         }
+    }
+
+    @Override
+    /**
+     * 判断某个 billing cycle 是否已经规划过 statement job 分片。
+     */
+    public boolean existsForCycle(LocalDate periodStart, LocalDate periodEnd) {
+        return mapper.existsForCycle(periodStart, periodEnd);
     }
 
     @Override

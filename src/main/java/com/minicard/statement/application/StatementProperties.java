@@ -33,6 +33,7 @@ public record StatementProperties(
             String zone,
             int closeDayOfMonth,
             int paymentBaseDayOfMonth,
+            int reconciliationLookbackCycles,
             int targetAccountsPerJob
     ) {
         public Batch {
@@ -40,6 +41,9 @@ public record StatementProperties(
             requireText(zone, "zone");
             validateDay(closeDayOfMonth, "closeDayOfMonth");
             validateDay(paymentBaseDayOfMonth, "paymentBaseDayOfMonth");
+            if (reconciliationLookbackCycles <= 0) {
+                throw new IllegalArgumentException("reconciliationLookbackCycles must be positive");
+            }
             if (targetAccountsPerJob <= 0) {
                 throw new IllegalArgumentException("targetAccountsPerJob must be positive");
             }
