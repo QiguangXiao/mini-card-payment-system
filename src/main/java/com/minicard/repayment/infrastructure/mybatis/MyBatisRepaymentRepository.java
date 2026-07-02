@@ -25,6 +25,9 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
     private final RepaymentMapper mapper;
 
     @Override
+    /**
+     * 通过 INSERT-first 抢占 idempotency key，决定本请求是否是 repayment winner。
+     */
     public boolean claim(Repayment pendingRepayment) {
         try {
             // INSERT-first claim 依赖 repayments.idempotency_key 唯一索引。
@@ -38,23 +41,35 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
     }
 
     @Override
+    /**
+     * 按 idempotency key 锁定 winner row，让 duplicate request 等待并读取最终结果。
+     */
     public Optional<Repayment> findByIdempotencyKeyForUpdate(String idempotencyKey) {
         return Optional.ofNullable(mapper.findByIdempotencyKeyForUpdate(idempotencyKey))
                 .map(this::toDomain);
     }
 
     @Override
+    /**
+     * 普通读取 repayment，用于查询 API。
+     */
     public Optional<Repayment> findById(UUID id) {
         return Optional.ofNullable(mapper.findById(id.toString()))
                 .map(this::toDomain);
     }
 
     @Override
+    /**
+     * 更新 repayment 入账状态字段。
+     */
     public void update(Repayment repayment) {
         // 只推进 status/creditAccountId/receivedAt/updatedAt；request identity 保持 immutable。
         mapper.update(toRow(repayment));
     }
 
+    /**
+     * 将 Repayment domain object 转成数据库 row DTO。
+     */
     private RepaymentRow toRow(Repayment repayment) {
         return new RepaymentRow(
                 repayment.id().toString(),
@@ -71,6 +86,9 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
         );
     }
 
+    /**
+     * 将数据库 row DTO 还原成带状态机校验的 Repayment。
+     */
     private Repayment toDomain(RepaymentRow row) {
         return Repayment.restore(
                 UUID.fromString(row.id()),
@@ -86,6 +104,9 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
         );
     }
 
+    /**
+     * 将可空数据库 UUID 字符串转回 domain 可空字段。
+     */
     private UUID optionalUuid(String value) {
         return value == null ? null : UUID.fromString(value);
     }

@@ -140,6 +140,9 @@ public final class Authorization {
         );
     }
 
+    /**
+     * 将一笔待决授权批准为 APPROVED，并记录可发布的 authorization.approved 领域事件。
+     */
     public void approve(Instant decisionTime) {
         // ensurePending() 防止重复决策，保护 audit trail，并禁止 DECLINED -> APPROVED 这类非法跳转。
         ensurePending("approve");
@@ -159,6 +162,9 @@ public final class Authorization {
         ));
     }
 
+    /**
+     * 将一笔待决授权拒绝为 DECLINED，并保留拒绝原因供 API、审计和通知使用。
+     */
     public void decline(AuthorizationDeclineReason reason, Instant decisionTime) {
         // decline reason 必填，后续 API、客服和审计都需要知道失败原因。
         ensurePending("decline");
@@ -178,6 +184,9 @@ public final class Authorization {
         ));
     }
 
+    /**
+     * 将已批准但未入账的授权过期，表达额度 hold 已被释放的业务事实。
+     */
     public void expire(Instant expiryTime) {
         // expire() 只允许 APPROVED -> EXPIRED。释放额度前后要保持 authorization 状态可追踪。
         ensureApproved("expire");
@@ -197,6 +206,9 @@ public final class Authorization {
         ));
     }
 
+    /**
+     * 将已批准授权标记为 POSTED，表示 presentment 已到达并进入入账流程。
+     */
     public void post(Instant postingTime) {
         // POSTED 是 issuer 视角：presentment 到达后，这笔授权从“占额度”变成“已入账交易”。
         ensureApproved("post");
@@ -216,10 +228,16 @@ public final class Authorization {
         ));
     }
 
+    /**
+     * 判断授权是否仍处于可决策状态，主要用于 idempotency winner 的后续处理。
+     */
     public boolean isPending() {
         return status == AuthorizationStatus.PENDING;
     }
 
+    /**
+     * 取出并清空本次状态转换产生的领域事件，交给 application service 写入 Outbox。
+     */
     public List<AuthorizationDomainEvent> pullDomainEvents() {
         // Application service 在同一 transaction 内保存 aggregate 后调用这里。
         // 返回 copy 并清空，避免同一个对象被重复 append 到 Outbox。
@@ -228,18 +246,27 @@ public final class Authorization {
         return events;
     }
 
+    /**
+     * 保护只能从 PENDING 发起的状态转换，避免重复决策或非法回退。
+     */
     private void ensurePending(String action) {
         if (status != AuthorizationStatus.PENDING) {
             throw new IllegalStateException("cannot " + action + " authorization in status " + status);
         }
     }
 
+    /**
+     * 保护只能从 APPROVED 发起的后续动作，例如 posting 或 expiry。
+     */
     private void ensureApproved(String action) {
         if (status != AuthorizationStatus.APPROVED) {
             throw new IllegalStateException("cannot " + action + " authorization in status " + status);
         }
     }
 
+    /**
+     * 校验状态和时间/原因字段是否成组出现，防止 DB restore 出半截生命周期对象。
+     */
     private void validateDecisionState() {
         // restore() 从 DB 还原时也会跑这段 validation，避免脏数据绕过 domain invariant。
         if (status == AuthorizationStatus.PENDING

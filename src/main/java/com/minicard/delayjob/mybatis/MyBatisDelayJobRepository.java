@@ -26,6 +26,9 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     private final DelayJobMapper mapper;
 
     @Override
+    /**
+     * 幂等写入一条 delay job；已存在同一 logical job 时返回 false。
+     */
     public boolean insertIfAbsent(DelayJob job) {
         try {
             // insertIfAbsent 支持业务方重复 schedule 同一个 logical job 时保持幂等。
@@ -38,6 +41,9 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     }
 
     @Override
+    /**
+     * 锁定一批当前可执行的 PENDING jobs，供 claimer 写入 PROCESSING lease。
+     */
     public List<DelayJob> findRunnableBatchForUpdate(Instant now, int limit) {
         // FOR UPDATE SKIP LOCKED 让多个 scheduler pod 可以横向扩展；这里只 claim PENDING。
         return mapper.findRunnableBatchForUpdate(now, limit)
@@ -48,6 +54,9 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     }
 
     @Override
+    /**
+     * 锁定一批 lease 已超时的 PROCESSING jobs，供 recoverer 恢复。
+     */
     public List<DelayJob> findStuckProcessingBatchForUpdate(Instant now, int limit) {
         // PROCESSING 超时恢复单独处理，避免正常 poller 同时承担 recovery 语义。
         return mapper.findStuckProcessingBatchForUpdate(now, limit)
@@ -57,16 +66,25 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
     }
 
     @Override
+    /**
+     * 按 id 锁定当前 job row，供 worker finalize 前重新校验 lease。
+     */
     public Optional<DelayJob> findByIdForUpdate(UUID id) {
         return Optional.ofNullable(mapper.findByIdForUpdate(id.toString()))
                 .map(this::toDomain);
     }
 
     @Override
+    /**
+     * 更新 DelayJob 执行状态字段。
+     */
     public void updateExecutionState(DelayJob job) {
         mapper.updateExecutionState(toRow(job));
     }
 
+    /**
+     * 将 DelayJob domain object 转成数据库 row DTO。
+     */
     private DelayJobRow toRow(DelayJob job) {
         return new DelayJobRow(
                 job.id().toString(),
@@ -84,6 +102,9 @@ public class MyBatisDelayJobRepository implements DelayJobRepository {
         );
     }
 
+    /**
+     * 将数据库 row DTO 还原成带状态机校验的 DelayJob。
+     */
     private DelayJob toDomain(DelayJobRow row) {
         return DelayJob.restore(
                 UUID.fromString(row.id()),

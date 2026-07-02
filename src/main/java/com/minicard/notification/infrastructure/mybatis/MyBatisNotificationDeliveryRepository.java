@@ -26,6 +26,9 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
     private final NotificationDeliveryMapper mapper;
 
     @Override
+    /**
+     * 批量写入 Notification 分渠道投递记录。
+     */
     public void insertAll(List<NotificationDelivery> deliveries) {
         if (deliveries.isEmpty()) {
             // 空列表直接返回，避免 <foreach> 生成非法的 INSERT ... VALUES（空）。
@@ -35,6 +38,9 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
     }
 
     @Override
+    /**
+     * 锁定一批可投递记录，供 claimer 写入 PROCESSING lease。
+     */
     public List<NotificationDelivery> findDispatchableBatchForUpdate(Instant now, int limit) {
         return mapper.findDispatchableBatchForUpdate(now, limit)
                 .stream()
@@ -43,6 +49,9 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
     }
 
     @Override
+    /**
+     * 锁定一批 lease 已超时的 PROCESSING 投递，供 recoverer 恢复。
+     */
     public List<NotificationDelivery> findStuckProcessingBatchForUpdate(Instant now, int limit) {
         return mapper.findStuckProcessingBatchForUpdate(now, limit)
                 .stream()
@@ -51,15 +60,24 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
     }
 
     @Override
+    /**
+     * 按 id 锁定当前投递行，供 worker finalize 前重新校验 lease。
+     */
     public Optional<NotificationDelivery> findByIdForUpdate(UUID id) {
         return Optional.ofNullable(mapper.findByIdForUpdate(id.toString())).map(this::toDomain);
     }
 
     @Override
+    /**
+     * 更新投递状态字段，不修改通知意图快照。
+     */
     public void updateDeliveryState(NotificationDelivery delivery) {
         mapper.updateDeliveryState(toRow(delivery));
     }
 
+    /**
+     * 将 NotificationDelivery domain object 转成数据库 row DTO。
+     */
     private NotificationDeliveryRow toRow(NotificationDelivery delivery) {
         return new NotificationDeliveryRow(
                 delivery.id().toString(),
@@ -80,6 +98,9 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
         );
     }
 
+    /**
+     * 将数据库 row DTO 还原成带状态机校验的 NotificationDelivery。
+     */
     private NotificationDelivery toDomain(NotificationDeliveryRow row) {
         return NotificationDelivery.restore(
                 UUID.fromString(row.id()),

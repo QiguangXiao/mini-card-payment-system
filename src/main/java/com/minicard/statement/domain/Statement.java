@@ -187,17 +187,26 @@ public final class Statement {
         );
     }
 
+    /**
+     * 返回账单明细快照；保留 items 命名是为了兼容 API/DTO 的既有表达。
+     */
     public List<StatementLine> items() {
         // API 暂时仍叫 items，但 domain 内部已经是 statement line。
         // 保留这个 alias 可以降低 controller/read model 的无关 churn。
         return lines;
     }
 
+    /**
+     * 计算账单剩余应还金额，用于还款校验和展示读模型。
+     */
     public Money remainingAmount() {
         // remaining amount 是账单还款阶段的派生值，不单独落库，避免 total/paid/remaining 三者漂移。
         return totalAmount.subtract(paidAmount);
     }
 
+    /**
+     * 取出并清空账单生成时产生的领域事件，交给 application service 写入 Outbox。
+     */
     public List<StatementDomainEvent> pullDomainEvents() {
         // Application service 在同一 transaction 内保存账单后调用这里。
         // 返回 copy 并清空，避免同一张账单的 statement.closed 被重复 append 到 Outbox。
@@ -206,6 +215,9 @@ public final class Statement {
         return events;
     }
 
+    /**
+     * 将还款应用到 statement，推进 PAID/PARTIALLY_PAID 等账单支付状态。
+     */
     public void applyRepayment(Money amount, Instant paidAt) {
         Objects.requireNonNull(amount);
         Instant actualPaidAt = Objects.requireNonNull(paidAt);
@@ -238,12 +250,18 @@ public final class Statement {
         bumpVersion();
     }
 
+    /**
+     * 推进 statement read model 版本，帮助 Redis/local cache 区分新旧账单状态。
+     */
     private void bumpVersion() {
         // version 是 statement read model 的正式单调版本，供 Redis L2 的 CAS/tombstone 使用。
         // 如果用 paidAmount 代替 version，将来状态/到期日/展示字段变化但金额不变时，迟到写会被误判为同版本。
         version++;
     }
 
+    /**
+     * 校验账单周期、金额、明细和支付状态是否互相一致。
+     */
     private void validateState() {
         if (periodEnd.isBefore(periodStart)) {
             throw new IllegalArgumentException("statement periodEnd must not be before periodStart");
@@ -278,6 +296,9 @@ public final class Statement {
         validatePaymentState();
     }
 
+    /**
+     * 校验每条 statement line 是否属于本账单且落在本 billing cycle 内。
+     */
     private void validateItemOwnership() {
         for (StatementLine line : lines) {
             if (!line.statementId().equals(id)) {
@@ -295,6 +316,9 @@ public final class Statement {
         }
     }
 
+    /**
+     * 校验 paidAmount 与 StatementStatus 的组合，避免 PAID/CLOSED 等状态和金额冲突。
+     */
     private void validatePaymentState() {
         int paidComparison = paidAmount.amount().compareTo(totalAmount.amount());
         if (paidComparison > 0) {
@@ -326,6 +350,9 @@ public final class Statement {
         }
     }
 
+    /**
+     * 汇总账单明细金额，生成 statement totalAmount 的唯一来源。
+     */
     private static Money sum(List<StatementLine> lines) {
         if (lines == null || lines.isEmpty()) {
             throw new IllegalArgumentException("statement requires at least one posted transaction");

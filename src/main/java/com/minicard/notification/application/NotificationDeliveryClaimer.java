@@ -28,6 +28,9 @@ public class NotificationDeliveryClaimer {
     private final NotificationDeliveryProperties properties;
     private final Clock clock;
 
+    /**
+     * 领取可投递记录并写入 PROCESSING lease，随后交给 worker 在事务外调用 provider。
+     */
     @Transactional
     public List<NotificationDelivery> claimDispatchableDeliveries() {
         Instant now = Instant.now(clock);

@@ -161,6 +161,9 @@ public final class OutboxEvent {
         );
     }
 
+    /**
+     * 在 Kafka broker ack 后把事件推进到 PUBLISHED，表示自动发布流程结束。
+     */
     public void markPublished(Instant publishedAt) {
         // PUBLISHED 表示 broker 已确认，Outbox scheduler 不再自动重发。
         status = OutboxEventStatus.PUBLISHED;
@@ -169,6 +172,9 @@ public final class OutboxEvent {
         leaseToken = null;
     }
 
+    /**
+     * 领取待发布事件并写入 PROCESSING lease，防止多个 publisher 同时发布同一行。
+     */
     public void markProcessing(Instant startedAt, long processingTimeoutSeconds, String leaseToken) {
         Instant actualStartedAt = Objects.requireNonNull(startedAt);
         if (processingTimeoutSeconds <= 0) {
@@ -181,6 +187,9 @@ public final class OutboxEvent {
         this.leaseToken = requireText(leaseToken, "leaseToken");
     }
 
+    /**
+     * 记录一次发布失败，并按 retry policy 决定回到 PENDING 还是进入 DEAD。
+     */
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         attempts++;
         // lastError 长度先在 domain object 截断，避免 DB varchar 长度异常覆盖掉真正的发布失败原因。
@@ -204,18 +213,27 @@ public final class OutboxEvent {
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
+    /**
+     * 将超时 PROCESSING lease 当作一次失败恢复，交回统一 retry/DEAD 状态机。
+     */
     public void markProcessingTimedOut(Instant recoveredAt, int maxAttempts) {
         // PROCESSING lease 超时通常表示 publisher worker 宕机或卡住。
         // 恢复路径按一次失败处理，让 retry/backoff/DEAD 状态机统一承接故障。
         markFailed("outbox processing lease expired", recoveredAt, maxAttempts);
     }
 
+    /**
+     * 裁剪错误信息，避免记录失败原因时反而被数据库列长度拒绝。
+     */
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH
                 ? value
                 : value.substring(0, MAX_ERROR_LENGTH);
     }
 
+    /**
+     * 校验 status 与 leaseToken 的组合是否合法，避免 restore 出脏 ownership 状态。
+     */
     private void validateLeaseState() {
         if (leaseToken != null && leaseToken.isBlank()) {
             throw new IllegalArgumentException("lease token must not be blank");

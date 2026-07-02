@@ -34,6 +34,9 @@ public class RecordLedgerEntryService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final Clock clock;
 
+    /**
+     * 消费 integration event 并追加 ledger entry projection，带 Inbox 和唯一键双重幂等。
+     */
     @Transactional
     public void record(RecordLedgerEntryCommand command) {
         Instant now = Instant.now(clock);
@@ -68,6 +71,9 @@ public class RecordLedgerEntryService {
         );
     }
 
+    /**
+     * 按事件类型构造对应方向的 ledger entry。
+     */
     private LedgerEntry toEntry(RecordLedgerEntryCommand command, Instant now) {
         if (command.entryType() == LedgerEntryType.CARD_TRANSACTION_POSTED) {
             return LedgerEntry.recordPurchasePosted(

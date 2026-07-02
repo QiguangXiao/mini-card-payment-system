@@ -33,6 +33,9 @@ public class NotificationDeliveryRecoverer {
     private final NotificationDeliveryProperties properties;
     private final Clock clock;
 
+    /**
+     * 周期性恢复 lease 超时的 PROCESSING 投递，避免 provider 调用卡死后永久不可见。
+     */
     @Scheduled(
             fixedDelayString = "${notification.delivery.recovery-fixed-delay-ms:5000}",
             scheduler = "notificationDeliveryTaskScheduler"

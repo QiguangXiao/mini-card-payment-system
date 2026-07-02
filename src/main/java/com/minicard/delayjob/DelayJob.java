@@ -142,6 +142,9 @@ public final class DelayJob {
         );
     }
 
+    /**
+     * 在业务 handler 成功后把 job 标记为 DONE，表示未来动作已经完成。
+     */
     public void markDone(Instant doneAt) {
         // DONE 表示业务动作已成功执行，scheduler 不会再次自动处理。
         status = DelayJobStatus.DONE;
@@ -150,6 +153,9 @@ public final class DelayJob {
         leaseToken = null;
     }
 
+    /**
+     * 领取到期 job 并写入 PROCESSING lease，防止多个 worker 同时执行同一 future business action。
+     */
     public void markProcessing(Instant startedAt, long processingTimeoutSeconds, String leaseToken) {
         Instant actualStartedAt = Objects.requireNonNull(startedAt);
         if (processingTimeoutSeconds <= 0) {
@@ -163,6 +169,9 @@ public final class DelayJob {
         this.leaseToken = requireText(leaseToken, "leaseToken");
     }
 
+    /**
+     * 记录一次执行失败，并按 retry policy 决定重新排队或进入 DEAD。
+     */
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         attempts++;
         updatedAt = Objects.requireNonNull(failedAt);
@@ -187,18 +196,27 @@ public final class DelayJob {
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
+    /**
+     * 将超时 PROCESSING lease 恢复为一次失败，避免 worker 宕机后 job 永久卡住。
+     */
     public void markProcessingTimedOut(Instant recoveredAt, int maxAttempts) {
         // PROCESSING lease 超时说明 worker 可能宕机或卡住。
         // 这里把它当作一次失败记录，交回 PENDING/DEAD 状态机，避免长期占用任务。
         markFailed("processing lease expired", recoveredAt, maxAttempts);
     }
 
+    /**
+     * 裁剪 lastError，保证失败状态本身可以可靠落库。
+     */
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH
                 ? value
                 : value.substring(0, MAX_ERROR_LENGTH);
     }
 
+    /**
+     * 校验 status 与 leaseToken 的组合，防止非 PROCESSING 状态残留旧 lease。
+     */
     private void validateLeaseState() {
         if (leaseToken != null && leaseToken.isBlank()) {
             throw new IllegalArgumentException("lease token must not be blank");

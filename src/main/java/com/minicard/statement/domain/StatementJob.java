@@ -187,6 +187,9 @@ public final class StatementJob {
         );
     }
 
+    /**
+     * 领取一个 PENDING 分片任务并写入 PROCESSING lease，供 worker pool 异步执行。
+     */
     public void markProcessing(String workerId, Instant now, long leaseSeconds) {
         // 只有 PENDING 能被 claim。claim 在短事务内提交，commit 后才把 job 交给 worker pool 处理。
         if (status != StatementJobStatus.PENDING) {
@@ -204,6 +207,9 @@ public final class StatementJob {
         lastError = null;
     }
 
+    /**
+     * 在分片出账成功后标记 DONE，并保存本轮处理统计。
+     */
     public void markDone(StatementJobExecutionResult result, Instant now) {
         requireProcessing();
         applyResult(result);
@@ -213,6 +219,9 @@ public final class StatementJob {
         lastError = null;
     }
 
+    /**
+     * 在分片处理失败后保存统计和错误，并按 attemptCount 决定重试或 DEAD。
+     */
     public void markFailed(
             StatementJobExecutionResult result,
             String error,
@@ -230,6 +239,9 @@ public final class StatementJob {
         lastError = requireText(error, "error");
     }
 
+    /**
+     * 把 handler 返回的处理统计复制到 job，方便之后按 job row 观测批处理结果。
+     */
     private void applyResult(StatementJobExecutionResult result) {
         processedAccountCount = result.processedAccountCount();
         generatedStatementCount = result.generatedStatementCount();
@@ -237,12 +249,18 @@ public final class StatementJob {
         failedAccountCount = result.failedAccountCount();
     }
 
+    /**
+     * 保护 DONE/FAILED 只能从 PROCESSING lease finalize，避免未领取 job 被直接结束。
+     */
     private void requireProcessing() {
         if (status != StatementJobStatus.PROCESSING) {
             throw new IllegalStateException("statement job is not PROCESSING");
         }
     }
 
+    /**
+     * 释放本轮 claim 信息，使 PENDING/DONE/DEAD 不再携带过期 ownership。
+     */
     private void clearClaim() {
         claimedBy = null;
         claimedAt = null;
@@ -250,6 +268,9 @@ public final class StatementJob {
         claimToken = null;
     }
 
+    /**
+     * 校验分片、计数器和 lease 字段组合，防止 restore 出 partial claim。
+     */
     private void validateState() {
         if (periodEnd.isBefore(periodStart) || !dueDate.isAfter(periodEnd)) {
             throw new IllegalArgumentException("statement job cycle dates are invalid");

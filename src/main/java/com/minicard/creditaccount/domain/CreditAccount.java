@@ -76,6 +76,9 @@ public final class CreditAccount {
         return new CreditAccount(id, creditLimit, reservedAmount, postedBalance, status);
     }
 
+    /**
+     * 尝试为一笔 authorization 预占额度，返回可解释的拒绝原因而不是直接抛业务异常。
+     */
     public CreditReservationResult reserve(Money amount) {
         Objects.requireNonNull(amount);
         // ACTIVE check 是账户级开关：blocked account 会拒绝该账户下所有卡，区别于单张 Card blocked。
@@ -98,6 +101,9 @@ public final class CreditAccount {
         return CreditReservationResult.success();
     }
 
+    /**
+     * 释放一笔已批准但最终未入账的 authorization hold。
+     */
     public void release(Money amount) {
         Objects.requireNonNull(amount);
         // release() 是 expiry 对已存在 reservation 的补偿动作(compensating action)。
@@ -111,6 +117,9 @@ public final class CreditAccount {
         reservedAmount = reservedAmount.subtract(amount);
     }
 
+    /**
+     * 将 authorization hold 转成 posted balance，表达 presentment 已经入账。
+     */
     public void postAuthorized(Money amount) {
         Objects.requireNonNull(amount);
         // Posting 是 issuer 入账动作：把 authorization hold 从 reservedAmount 移到 postedBalance。
@@ -125,6 +134,9 @@ public final class CreditAccount {
         postedBalance = postedBalance.add(amount);
     }
 
+    /**
+     * 应用客户还款，降低 posted balance 并释放相应可用额度。
+     */
     public void applyRepayment(Money amount) {
         Objects.requireNonNull(amount);
         // Repayment 是持卡人还款入账：它释放已入账消费占用的信用额度。
@@ -141,12 +153,18 @@ public final class CreditAccount {
         postedBalance = postedBalance.subtract(amount);
     }
 
+    /**
+     * 计算当前可用额度，供 authorization 决策和 interview 解释 row lock 后的额度判断。
+     */
     public Money availableCredit() {
         // available credit 是派生值，不单独落库，避免 creditLimit/reserved/posted/available 多字段不一致。
         // issuer 视角下，reserved hold 和 posted balance 都会占用信用额度。
         return creditLimit.subtract(reservedAmount).subtract(postedBalance);
     }
 
+    /**
+     * 校验账户金额字段之间的 invariant，防止 DB restore 出不可解释的额度状态。
+     */
     private void validateState() {
         // invariant 同时保护 DB restore 和未来 factory method，避免 impossible balance 进入领域模型。
         if (!creditLimit.currency().equals(reservedAmount.currency())

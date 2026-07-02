@@ -65,12 +65,18 @@ public class OutboxWorker {
         }
     }
 
+    /**
+     * worker pool 没能接收任务时，把已领取事件放回 retry/DEAD 状态机。
+     */
     public void markRejectedForRetry(OutboxEvent claimedEvent, RuntimeException exception) {
         // worker pool 拒绝时，必须把 PROCESSING 事件放回 retry/DEAD，避免 lease 到期前一直不可见。
         // 如果直接吞掉 rejection，事件会停在 PROCESSING，直到 recoverer 扫描前下游都收不到消息。
         markFailed(claimedEvent, "outbox worker pool rejected event", exception);
     }
 
+    /**
+     * 在独立短事务中重新校验 lease，并把 Kafka ack 后的事件标记为 PUBLISHED。
+     */
     private void markPublished(OutboxEvent claimedEvent) {
         // finalize 使用 TransactionOperations，而不是在 publishClaimedEvent 外层包 @Transactional。
         // 这样等待 Kafka ack 的时间不会占用 DB transaction，只在更新 delivery state 时短暂开事务。
@@ -92,6 +98,9 @@ public class OutboxWorker {
         });
     }
 
+    /**
+     * 在独立短事务中记录发布失败，推进 attempts、lastError 和下一次 retry 时间。
+     */
     private void markFailed(
             OutboxEvent claimedEvent,
             String error,
@@ -118,6 +127,9 @@ public class OutboxWorker {
         });
     }
 
+    /**
+     * 重新锁定当前 outbox row 并确认本 worker 仍持有 lease。
+     */
     private OutboxEvent lockCurrentLease(OutboxEvent claimedEvent) {
         // publish Kafka ack 发生在事务外；回来 finalize 前必须重读当前 row 并加 FOR UPDATE。
         // 否则 recoverer 或新 worker 已接管时，旧 worker 仍可能用过期快照标 PUBLISHED/FAILED。

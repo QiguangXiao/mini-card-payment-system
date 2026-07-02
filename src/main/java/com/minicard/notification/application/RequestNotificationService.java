@@ -39,6 +39,9 @@ public class RequestNotificationService {
     private final NotificationRecipientResolver recipientResolver;
     private final Clock clock;
 
+    /**
+     * 消费业务事件并创建 Notification 意图，再按收件人渠道扇出 delivery rows。
+     */
     @Transactional
     public void request(RequestNotificationCommand command) {
         Instant now = Instant.now(clock);

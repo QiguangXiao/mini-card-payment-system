@@ -135,6 +135,9 @@ public class StatementReadService {
                 .build();
     }
 
+    /**
+     * 读取 statement read model，按 L1 Caffeine -> L2 Redis -> DB rebuild 的顺序加载。
+     */
     public StatementReadModel get(UUID id) {
         // 入口只问 L1。L1 miss 时，Caffeine 才调用 loadThroughRedis。
         // Cache.get(key, mappingFunction) 自带同 JVM per-key single-flight：
@@ -143,6 +146,9 @@ public class StatementReadService {
         return localCache.get(id, this::loadThroughRedis);
     }
 
+    /**
+     * 在写事务成功提交后失效 statement read cache，并写版本墓碑挡住迟到旧值。
+     */
     public void evictAfterCommit(Statement statement) {
         UUID statementId = statement.id();
         // 墓碑的版本 = transaction 内已经推进后的 statement.version。
@@ -171,6 +177,9 @@ public class StatementReadService {
         });
     }
 
+    /**
+     * L1 miss 后尝试读取 Redis；Redis miss 时再决定是否用跨 pod single-flight 回源 DB。
+     */
     private StatementReadModel loadThroughRedis(UUID id) {
         // L2 Redis 是跨实例共享 cache。先查 Redis，可以让 pod A 回源 DB 后，pod B 也复用同一份 read model。
         StatementReadModel remote = readRedis(id);
@@ -246,6 +255,9 @@ public class StatementReadService {
         return rebuildFromDb(id);
     }
 
+    /**
+     * 用 Lua 只释放自己持有的 Redis rebuild lock。
+     */
     private void releaseRebuildLock(String lockKey, String token) {
         try {
             redisTemplate.execute(RELEASE_REBUILD_LOCK_SCRIPT, List.of(lockKey), token);
@@ -266,10 +278,16 @@ public class StatementReadService {
         }
     }
 
+    /**
+     * 生成单个 statement 的 Redis rebuild lock key。
+     */
     private String rebuildLockKey(UUID id) {
         return REBUILD_LOCK_KEY_PREFIX + Objects.requireNonNull(id, "statement id must not be null");
     }
 
+    /**
+     * 从 Redis 读取版本化 read model；miss、墓碑、坏值和 Redis 故障都返回 null。
+     */
     private StatementReadModel readRedis(UUID id) {
         String key = redisKey(id);
         try {
@@ -304,6 +322,9 @@ public class StatementReadService {
         }
     }
 
+    /**
+     * 将 DB rebuild 出来的 read model 通过版本化 CAS 写回 Redis。
+     */
     private void writeRedis(UUID id, StatementReadModel value) {
         String key = redisKey(id);
         try {
@@ -354,6 +375,9 @@ public class StatementReadService {
         localCache.invalidate(statementId);
     }
 
+    /**
+     * 执行实际 cache 失效：清本地 L1、写 Redis 墓碑、广播跨 pod L1 失效。
+     */
     private void evict(UUID statementId, long version) {
         // 写路径不更新 cache，而是写一个"版本地板"墓碑让下一次读回源重建。三步顺序：
         // 先清本 pod L1 → 在 L2 写墓碑(版本地板) → 广播让其他 pod 清各自 L1。
@@ -375,10 +399,16 @@ public class StatementReadService {
         broadcaster.broadcastEvict(statementId);
     }
 
+    /**
+     * 生成 statement read model 的 Redis value key。
+     */
     private String redisKey(UUID id) {
         return REDIS_KEY_PREFIX + Objects.requireNonNull(id, "statement id must not be null");
     }
 
+    /**
+     * 尝试删除 Redis 中无法解析的旧值或坏值，随后让调用方回源 DB。
+     */
     private void deleteCorruptRedisValue(String key) {
         try {
             redisTemplate.delete(key);
@@ -388,6 +418,9 @@ public class StatementReadService {
         }
     }
 
+    /**
+     * 计算带随机抖动的 Redis TTL，降低批量 key 同时过期造成的 DB 峰值。
+     */
     private Duration remoteTtlWithJitter() {
         Duration jitter = properties.remoteTtlJitter();
         if (jitter == null || jitter.isZero() || jitter.isNegative()) {

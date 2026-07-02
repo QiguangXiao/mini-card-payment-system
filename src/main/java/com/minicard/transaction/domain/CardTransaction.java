@@ -158,6 +158,9 @@ public final class CardTransaction {
         );
     }
 
+    /**
+     * 将 presentment 创建的交易标记为 POSTED，并产生 card_transaction.posted 领域事件。
+     */
     public void markPosted(Instant postingTime) {
         // PENDING -> POSTED 是用户可见交易入账事实。
         // 因为 Notification 未来可能是独立微服务，后续通知应消费这个 CardTransaction event，
@@ -179,6 +182,9 @@ public final class CardTransaction {
         ));
     }
 
+    /**
+     * 把已入账交易归属到某张 statement，防止同一交易被重复出账。
+     */
     public void assignToStatement(UUID statementId, Instant assignedAt) {
         // POSTED -> billed-to-statement 不是新的交易状态，而是账单归属关系。
         // 这里放在 aggregate 内部，防止同一笔交易被两个 statement 重复收录。
@@ -207,6 +213,9 @@ public final class CardTransaction {
         return Optional.ofNullable(statementAssignedAt);
     }
 
+    /**
+     * 取出并清空本次交易状态变化产生的领域事件，供 service 写入 Outbox。
+     */
     public List<CardTransactionDomainEvent> pullDomainEvents() {
         // Application service 在同一 transaction 内保存 aggregate 后调用这里。
         // 返回 copy 并清空，避免同一个对象被重复 append 到 Outbox。
@@ -215,6 +224,9 @@ public final class CardTransaction {
         return events;
     }
 
+    /**
+     * 判断重复 presentment 是否和已存在交易表达同一个业务事实。
+     */
     public boolean samePresentment(
             UUID expectedAuthorizationId,
             Money expectedAmount
@@ -224,6 +236,9 @@ public final class CardTransaction {
                 && amount.equals(expectedAmount);
     }
 
+    /**
+     * 校验交易状态、出账状态和时间字段是否一致，防止 restore 出重复出账风险。
+     */
     private void validateState() {
         if (status == CardTransactionStatus.PENDING && postedAt != null) {
             throw new IllegalArgumentException("pending transaction cannot have postedAt");

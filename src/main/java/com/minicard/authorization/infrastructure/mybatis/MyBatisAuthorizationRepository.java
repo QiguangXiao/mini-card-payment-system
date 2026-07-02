@@ -28,12 +28,18 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     private final AuthorizationMapper authorizationMapper;
 
     @Override
+    /**
+     * 普通读取 authorization，用于查询 API。
+     */
     public Optional<Authorization> findById(UUID id) {
         return Optional.ofNullable(authorizationMapper.findById(id.toString()))
                 .map(this::toDomain);
     }
 
     @Override
+    /**
+     * 通过 INSERT-first 抢占 idempotency key，决定本请求是否是 authorization winner。
+     */
     public boolean claim(String idempotencyKey, Authorization authorization) {
         try {
             // INSERT-first idempotency claim：由 DB unique constraint 选择 winner，
@@ -48,6 +54,9 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     }
 
     @Override
+    /**
+     * 按 idempotency key 锁定 winner row，让 duplicate request 等待并读取最终结果。
+     */
     public Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey) {
         // locking read 会让 duplicate request 等待 winner 完成，
         // 然后在同一个 transaction 里读取最终结果。
@@ -57,18 +66,27 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
     }
 
     @Override
+    /**
+     * 按 id 锁定 authorization row，供 posting/expiry 等状态转换使用。
+     */
     public Optional<Authorization> findByIdForUpdate(UUID id) {
         return Optional.ofNullable(authorizationMapper.findByIdForUpdate(id.toString()))
                 .map(this::toDomain);
     }
 
     @Override
+    /**
+     * 更新 authorization 决策/生命周期字段。
+     */
     public void update(Authorization authorization) {
         // Mapper XML 只更新 decision columns。request identity 保持 immutable，
         // 方便 idempotency audit 和问题排查。
         authorizationMapper.update(toRow(null, authorization));
     }
 
+    /**
+     * 将 Authorization domain object 转成数据库 row DTO。
+     */
     private AuthorizationRow toRow(String idempotencyKey, Authorization authorization) {
         // Infrastructure adapter 做 mapping，避免 domain object 暴露数据库列名/字符串状态。
         return new AuthorizationRow(
@@ -88,6 +106,9 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
         );
     }
 
+    /**
+     * 将数据库 row DTO 还原成带状态机校验的 Authorization。
+     */
     private Authorization toDomain(AuthorizationRow row) {
         // idempotencyKey 是 API/persistence 层的请求身份；Authorization aggregate
         // 只恢复授权生命周期需要的不变量和状态，避免把重试协议混进 domain state machine。
@@ -106,6 +127,9 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
         );
     }
 
+    /**
+     * 将可空数据库枚举字符串转回 decline reason。
+     */
     private AuthorizationDeclineReason optionalDeclineReason(String value) {
         return value == null ? null : AuthorizationDeclineReason.valueOf(value);
     }

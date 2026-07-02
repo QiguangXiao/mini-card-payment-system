@@ -181,6 +181,9 @@ public final class NotificationDelivery {
         return id.toString();
     }
 
+    /**
+     * 领取待投递记录并写入 PROCESSING lease，随后 worker 才能在事务外调用 provider。
+     */
     public void markProcessing(Instant startedAt, long processingTimeoutSeconds, String leaseToken) {
         Instant actualStartedAt = Objects.requireNonNull(startedAt);
         if (processingTimeoutSeconds <= 0) {
@@ -194,6 +197,9 @@ public final class NotificationDelivery {
         updatedAt = actualStartedAt;
     }
 
+    /**
+     * 在 provider 确认成功后把 delivery 标记为 SENT，并记录 provider 回执。
+     */
     public void markSent(Instant sentAt, String providerMessageId) {
         // SENT 是终态：provider 已确认。记录 providerMessageId 作为成功证据与对账线索；释放 lease。
         status = NotificationDeliveryStatus.SENT;
@@ -204,6 +210,9 @@ public final class NotificationDelivery {
         updatedAt = sentAt;
     }
 
+    /**
+     * 记录一次投递失败，并按 retry policy 决定继续排队还是进入 DEAD。
+     */
     public void markFailed(String error, Instant failedAt, int maxAttempts) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts must be positive");
@@ -226,15 +235,24 @@ public final class NotificationDelivery {
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
     }
 
+    /**
+     * 将超时的 PROCESSING delivery 视作一次失败，交回 retry/DEAD 状态机。
+     */
     public void markProcessingTimedOut(Instant recoveredAt, int maxAttempts) {
         // PROCESSING lease 超时通常意味着 worker 宕机或卡住，按一次失败处理，统一走 retry/backoff/DEAD。
         markFailed("notification delivery lease expired", recoveredAt, maxAttempts);
     }
 
+    /**
+     * 裁剪 provider 错误信息，避免 last_error 列长度成为新的失败点。
+     */
     private String truncate(String value) {
         return value.length() <= MAX_ERROR_LENGTH ? value : value.substring(0, MAX_ERROR_LENGTH);
     }
 
+    /**
+     * 校验 delivery 状态和 leaseToken 是否匹配，避免迟到 worker 误判所有权。
+     */
     private void validateLeaseState() {
         if (leaseToken != null && leaseToken.isBlank()) {
             throw new IllegalArgumentException("lease token must not be blank");

@@ -44,6 +44,9 @@ public class StatementGenerationService {
     private final StatementProperties properties;
     private final Clock clock;
 
+    /**
+     * 为一个 credit account 和 billing cycle 生成 statement，或返回已存在的幂等结果。
+     */
     @Transactional
     public Statement generate(GenerateStatementCommand command) {
         Instant now = Instant.now(clock);
@@ -70,12 +73,18 @@ public class StatementGenerationService {
                 .orElseGet(() -> createStatement(command, account, now));
     }
 
+    /**
+     * 查询单张 statement，不改变账单状态。
+     */
     @Transactional(readOnly = true)
     public Statement get(UUID id) {
         return statementRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("statement not found: " + id));
     }
 
+    /**
+     * 创建新 statement、冻结明细快照、标记交易已出账，并安排自动扣款和通知事件。
+     */
     private Statement createStatement(
             GenerateStatementCommand command,
             CreditAccount account,
@@ -147,12 +156,18 @@ public class StatementGenerationService {
         return statement;
     }
 
+    /**
+     * 把 statement.closed 领域事件追加到 Outbox。
+     */
     private void publishDomainEvents(Statement statement) {
         for (StatementDomainEvent event : statement.pullDomainEvents()) {
             eventPublisher.append(event);
         }
     }
 
+    /**
+     * 汇总本期待出账交易金额，作为 statement totalAmount。
+     */
     private Money totalAmount(List<StatementLineSource> transactions) {
         // getFirst() 是 Java 21 SequencedCollection API；前面已经保证 transactions 非空。
         // 如果没有非空保护，这里会抛 NoSuchElementException，比金额计算错误更早暴露输入问题。
@@ -164,6 +179,9 @@ public class StatementGenerationService {
         return total;
     }
 
+    /**
+     * 按配置计算最低还款额，并限制不超过本期总额。
+     */
     private Money minimumPayment(Money totalAmount) {
         BigDecimal floor = properties.policy().minimumPaymentFloors()
                 .get(totalAmount.currency().getCurrencyCode());
@@ -181,12 +199,18 @@ public class StatementGenerationService {
         return minimum.isGreaterThan(totalAmount) ? totalAmount : minimum;
     }
 
+    /**
+     * 把账期开始日转换为 billing timezone 下的闭区间起点。
+     */
     private Instant periodStartInstant(LocalDate periodStart) {
         // 账单日切必须用 billing timezone。当前项目使用全局 Asia/Tokyo；
         // 如果这里继续用 UTC，JST 月末 00:00 附近的交易会被分到错误账期。
         return periodStart.atStartOfDay(ZoneId.of(properties.batch().zone())).toInstant();
     }
 
+    /**
+     * 把账期结束日转换为 billing timezone 下的开区间终点。
+     */
     private Instant periodEndExclusiveInstant(LocalDate periodEnd) {
         return periodEnd.plusDays(1).atStartOfDay(ZoneId.of(properties.batch().zone())).toInstant();
     }

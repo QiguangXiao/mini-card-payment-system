@@ -53,6 +53,9 @@ public class StatementJobDispatcher {
     private final TaskExecutor statementJobWorkerExecutor;
     private final String workerId = "statement-worker-" + UUID.randomUUID();
 
+    /**
+     * 周期性领取可执行的账单分片任务，并提交给 worker pool。
+     */
     @Scheduled(
             fixedDelayString = "${statement.jobs.fixed-delay-ms:1000}",
             scheduler = "statementJobTaskScheduler"
@@ -74,6 +77,9 @@ public class StatementJobDispatcher {
         }
     }
 
+    /**
+     * 周期性恢复 PROCESSING lease 超时的账单分片任务。
+     */
     @Scheduled(
             fixedDelayString = "${statement.jobs.recovery-fixed-delay-ms:10000}",
             scheduler = "statementJobTaskScheduler"
@@ -105,6 +111,9 @@ public class StatementJobDispatcher {
         });
     }
 
+    /**
+     * 在短事务里批量 claim PENDING statement jobs，并写入 PROCESSING lease。
+     */
     private List<StatementJob> claimJobs() {
         Instant now = Instant.now(clock);
         List<StatementJob> jobs = jobRepository.findClaimableBatchForUpdate(
@@ -120,6 +129,9 @@ public class StatementJobDispatcher {
         return jobs;
     }
 
+    /**
+     * 执行已领取的分片出账任务，并根据账户级结果 finalize 为 DONE 或失败重试。
+     */
     private void handleClaimedJob(StatementJob claimedJob) {
         try {
             StatementJobExecutionResult result = handler.handle(claimedJob);
@@ -138,6 +150,9 @@ public class StatementJobDispatcher {
         }
     }
 
+    /**
+     * 在短事务中重新校验 lease，并把成功完成的分片任务标记为 DONE。
+     */
     private void markDone(StatementJob claimedJob, StatementJobExecutionResult result) {
         transactionOperations.executeWithoutResult(status -> {
             StatementJob job = lockCurrentLease(claimedJob);
@@ -156,6 +171,9 @@ public class StatementJobDispatcher {
         });
     }
 
+    /**
+     * 在短事务中重新校验 lease，并保存失败统计、错误原因和 retry/DEAD 状态。
+     */
     private void markFailed(
             StatementJob claimedJob,
             StatementJobExecutionResult result,
@@ -179,6 +197,9 @@ public class StatementJobDispatcher {
         });
     }
 
+    /**
+     * 重新锁定当前 job row 并确认本 dispatcher worker 仍持有 claim token。
+     */
     private StatementJob lockCurrentLease(StatementJob claimedJob) {
         StatementJob job = jobRepository.findByIdForUpdate(claimedJob.id())
                 .orElseThrow(() -> new IllegalStateException(

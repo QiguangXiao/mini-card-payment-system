@@ -41,6 +41,9 @@ public class RepaymentService {
     private final StatementReadService statementReadService;
     private final Clock clock;
 
+    /**
+     * 处理还款 API 写路径：幂等 claim、锁账户和账单、入账、失效账单读缓存、写 Outbox。
+     */
     @Transactional
     public Repayment receive(ReceiveRepaymentCommand command) {
         Instant now = Instant.now(clock);
@@ -81,12 +84,18 @@ public class RepaymentService {
         return repayment;
     }
 
+    /**
+     * 查询单笔 repayment，不改变业务状态。
+     */
     @Transactional(readOnly = true)
     public Repayment get(UUID id) {
         return repaymentRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("repayment not found: " + id));
     }
 
+    /**
+     * 在同一 transaction boundary 内把还款同时应用到账单和信用账户。
+     */
     private void applyToStatementAndAccount(
             Repayment repayment,
             Statement statementSnapshot,
@@ -131,6 +140,9 @@ public class RepaymentService {
         statementReadService.evictAfterCommit(statement);
     }
 
+    /**
+     * 校验还款金额、币种、账单状态和账户余额是否允许本次入账。
+     */
     private void validateCanApply(
             Statement statement,
             CreditAccount account,
@@ -160,6 +172,9 @@ public class RepaymentService {
         }
     }
 
+    /**
+     * 把 repayment.received 领域事件追加到 Outbox。
+     */
     private void publishDomainEvents(Repayment repayment) {
         for (RepaymentDomainEvent event : repayment.pullDomainEvents()) {
             // Outbox row 和 repayment/account/statement 状态一起 commit。
@@ -168,6 +183,9 @@ public class RepaymentService {
         }
     }
 
+    /**
+     * 校验同一个 idempotency key 是否仍代表同一笔还款请求。
+     */
     private void assertSameIdempotentRequest(
             ReceiveRepaymentCommand command,
             Repayment repayment

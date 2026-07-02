@@ -91,6 +91,9 @@ public class StatementCycleService {
         return shardCount;
     }
 
+    /**
+     * 根据本期待出账账户数决定分片数量，控制每个 job 的账户规模。
+     */
     private int shardCount(long accountCount) {
         if (accountCount == 0) {
             // 仍创建 1 个空分片，让本期有完整生命周期；worker 处理 0 个账户后直接标 DONE。
@@ -99,6 +102,9 @@ public class StatementCycleService {
         return (int) Math.ceil((double) accountCount / properties.batch().targetAccountsPerJob());
     }
 
+    /**
+     * 根据关账日推导账期开始日、结束日和还款到期日。
+     */
     private BillingCycle billingCycle(LocalDate periodEnd) {
         YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
         LocalDate previousCloseDate = dayInMonth(previousMonth, properties.batch().closeDayOfMonth());
@@ -109,10 +115,16 @@ public class StatementCycleService {
         );
     }
 
+    /**
+     * 判断某一天是否是配置中的关账日。
+     */
     private boolean isCloseDate(LocalDate date) {
         return date.equals(dayInMonth(YearMonth.from(date), properties.batch().closeDayOfMonth()));
     }
 
+    /**
+     * 计算严格晚于关账日的还款到期日，并按营业日规则顺延。
+     */
     private LocalDate paymentDateAfter(LocalDate periodEnd) {
         YearMonth candidateMonth = YearMonth.from(periodEnd);
         LocalDate candidate = businessDayCalendar.nextBusinessDayOnOrAfter(
@@ -127,10 +139,16 @@ public class StatementCycleService {
         return candidate;
     }
 
+    /**
+     * 取某个月的配置日；短月份会落到当月最后一天。
+     */
     private LocalDate dayInMonth(YearMonth month, int configuredDay) {
         return month.atDay(Math.min(configuredDay, month.lengthOfMonth()));
     }
 
+    /**
+     * 返回账单批处理使用的业务时区。
+     */
     private ZoneId batchZone() {
         return ZoneId.of(properties.batch().zone());
     }

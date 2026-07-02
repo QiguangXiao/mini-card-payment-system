@@ -52,6 +52,9 @@ public class DelayJobWorker {
         this.transactionOperations = transactionOperations;
     }
 
+    /**
+     * 执行一条已领取的 DelayJob，并在成功/失败后由 worker 自己 finalize。
+     */
     public void handleClaimedJob(DelayJob claimedJob) {
         // claimedJob 是 claimer 在短事务里从 PENDING 改成 PROCESSING 后返回的快照。
         // worker 从这里开始只负责"执行业务动作 + finalize"，不再做扫描/抢任务。
@@ -87,12 +90,18 @@ public class DelayJobWorker {
         }
     }
 
+    /**
+     * worker pool 拒绝执行时，把已领取 job 放回 retry/DEAD 状态机。
+     */
     public void markRejectedForRetry(DelayJob claimedJob, RuntimeException exception) {
         // worker pool 拒绝也按失败处理，把 job 从 PROCESSING 放回 retry/DEAD。
         // 这是 submit 阶段的失败：handler 根本没开始执行，但 lease 已经写入 DB，所以仍要 finalize。
         markFailed(claimedJob, "worker pool rejected job", exception);
     }
 
+    /**
+     * 在独立短事务中重新校验 lease，并把业务已完成的 job 标记为 DONE。
+     */
     private void markDone(DelayJob claimedJob) {
         // finalize 单独开短事务：handler 可能做外部/跨 aggregate 业务，不能让 job row lock 跟着长时间持有。
         // 如果 handler 执行期间一直锁着 delay_jobs，同一批 scheduler 会被不必要地串行化。
@@ -115,6 +124,9 @@ public class DelayJobWorker {
         });
     }
 
+    /**
+     * 在独立短事务中记录 handler 失败，并推进 retry/backoff/DEAD。
+     */
     private void markFailed(
             DelayJob claimedJob,
             String error,
@@ -142,6 +154,9 @@ public class DelayJobWorker {
         });
     }
 
+    /**
+     * 重新锁定当前 job row 并确认本 worker 仍持有 PROCESSING lease。
+     */
     private DelayJob lockCurrentLease(DelayJob claimedJob) {
         // worker 收到的是 claim 事务提交后的内存快照。finalize 前必须重新 SELECT ... FOR UPDATE，
         // 读取当前 DB row；否则 recoverer/新 worker 已经接管时，旧快照仍可能把状态写回 DONE/FAILED。

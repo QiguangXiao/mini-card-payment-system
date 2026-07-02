@@ -80,6 +80,9 @@ public class AuthorizationService {
         this.clock = clock;
     }
 
+    /**
+     * 处理授权 API 写路径：幂等 claim、卡/风控/额度决策、额度预占、Outbox 事件和过期 DelayJob。
+     */
     // @Transactional 通过 Spring proxy 生效，适合从 Controller 调用的 public use case。
     // 如果把核心写路径拆成同类 private/self-invocation 方法再加注解，事务不会按预期打开。
     @Transactional
@@ -131,6 +134,9 @@ public class AuthorizationService {
         return persisted;
     }
 
+    /**
+     * 查询单笔 authorization，不改变业务状态，也不产生领域事件。
+     */
     // readOnly=true 是给事务管理器和读者的信号：这里不应 flush 写入，也不应产生领域事件。
     // 如果查询方法和写方法都混用默认事务，review 时更难看出哪条路径会改变状态。
     @Transactional(readOnly = true)
@@ -140,6 +146,9 @@ public class AuthorizationService {
                 .orElseThrow(() -> new NoSuchElementException("authorization not found: " + id));
     }
 
+    /**
+     * 执行授权决策链路，并在批准时锁定 credit account row 完成额度预占。
+     */
     private void decideAndReserve(
             Authorization authorization,
             AuthorizationCommand command,
@@ -199,6 +208,9 @@ public class AuthorizationService {
         authorization.approve(now);
     }
 
+    /**
+     * 将 Card aggregate 的拒绝原因翻译成 Authorization 对外可见的 decline reason。
+     */
     private AuthorizationDeclineReason mapCardFailure(CardAuthorizationFailure failure) {
         return switch (failure) {
             case CARD_BLOCKED -> AuthorizationDeclineReason.CARD_BLOCKED;
@@ -206,6 +218,9 @@ public class AuthorizationService {
         };
     }
 
+    /**
+     * 执行本地单笔金额上限检查，尽早拒绝不需要锁账户的请求。
+     */
     private AuthorizationDeclineReason checkSingleTransactionLimit(Authorization authorization) {
         Money limit = singleTransactionLimits.get(authorization.requestedAmount().currency());
         if (limit == null) {
@@ -217,6 +232,9 @@ public class AuthorizationService {
         return null;
     }
 
+    /**
+     * 将 CreditAccount reserve 失败原因翻译成 Authorization decline reason。
+     */
     private AuthorizationDeclineReason mapFailure(CreditReservationFailure failure) {
         return switch (failure) {
             case ACCOUNT_BLOCKED -> AuthorizationDeclineReason.CREDIT_ACCOUNT_BLOCKED;
@@ -226,6 +244,9 @@ public class AuthorizationService {
         };
     }
 
+    /**
+     * 将 Risk bounded context 的拒绝原因翻译成 Authorization decline reason。
+     */
     private AuthorizationDeclineReason mapRiskFailure(RiskDeclineReason failure) {
         return switch (failure) {
             case VELOCITY_EXCEEDED -> AuthorizationDeclineReason.RISK_VELOCITY_EXCEEDED;
@@ -238,6 +259,9 @@ public class AuthorizationService {
         };
     }
 
+    /**
+     * 把 Authorization 状态转换产生的领域事件追加到 Outbox。
+     */
     private void publishDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
             // 这里仍然是同一个 DB transaction：Outbox row 和 authorization 状态一起 commit。
@@ -246,6 +270,9 @@ public class AuthorizationService {
         }
     }
 
+    /**
+     * 校验同一个 idempotency key 是否仍代表同一份请求内容。
+     */
     private void assertSameIdempotentRequest(
             Authorization existing,
             String requestFingerprint

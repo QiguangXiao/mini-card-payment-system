@@ -28,6 +28,9 @@ public record Card(
         Objects.requireNonNull(status);
     }
 
+    /**
+     * 判断这张卡自身是否允许发起授权，不负责账户额度或风控判断。
+     */
     public CardAuthorizationResult checkAuthorizationEligibility() {
         // 先检查 Card lifecycle，再碰 credit account。
         // blocked/expired card 不应该占用账户 row lock 时间。

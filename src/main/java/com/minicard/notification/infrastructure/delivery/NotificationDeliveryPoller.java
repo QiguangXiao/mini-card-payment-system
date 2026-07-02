@@ -43,6 +43,9 @@ public class NotificationDeliveryPoller {
         this.deliveryWorkerExecutor = deliveryWorkerExecutor;
     }
 
+    /**
+     * 周期性领取待投递记录并提交给 worker pool。
+     */
     @Scheduled(
             fixedDelayString = "${notification.delivery.fixed-delay-ms:1000}",
             scheduler = "notificationDeliveryTaskScheduler"

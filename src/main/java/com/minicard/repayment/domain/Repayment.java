@@ -128,6 +128,9 @@ public final class Repayment {
         );
     }
 
+    /**
+     * 将还款 claim 推进为 RECEIVED，并记录 repayment.received 领域事件。
+     */
     public void markReceived(
             UUID creditAccountId,
             Money statementPaidAmount,
@@ -163,6 +166,9 @@ public final class Repayment {
         return Optional.ofNullable(receivedAt);
     }
 
+    /**
+     * 取出并清空本次还款状态变化产生的领域事件，供 service 写入 Outbox。
+     */
     public List<RepaymentDomainEvent> pullDomainEvents() {
         // Application service 在同一 transaction 内保存 aggregate 后调用这里。
         // 返回 copy 并清空，避免同一笔 repayment.received 被重复 append 到 Outbox。
@@ -171,6 +177,9 @@ public final class Repayment {
         return events;
     }
 
+    /**
+     * 校验 PENDING/RECEIVED 与 account/receivedAt 字段是否一致，防止半入账对象被还原。
+     */
     private void validateState() {
         if (status == RepaymentStatus.PENDING
                 && (creditAccountId != null || receivedAt != null)) {

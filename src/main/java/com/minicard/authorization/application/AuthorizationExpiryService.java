@@ -32,6 +32,9 @@ public class AuthorizationExpiryService {
     private final AuthorizationDomainEventPublisher eventPublisher;
     private final Clock clock;
 
+    /**
+     * 执行授权过期 job：锁定授权和账户，释放额度，并发布 authorization.expired。
+     */
     // 每个 expiry job 独立开事务。这样一条坏 job 失败不会回滚同一轮 worker 里的其他 job。
     @Transactional
     public void expire(UUID authorizationId) {
@@ -92,6 +95,9 @@ public class AuthorizationExpiryService {
         );
     }
 
+    /**
+     * 把 authorization.expired 领域事件追加到 Outbox。
+     */
     private void publishDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
             // expire() 产生业务事实，Outbox adapter 负责 durable publish intent。

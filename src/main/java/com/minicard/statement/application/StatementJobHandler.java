@@ -33,6 +33,9 @@ public class StatementJobHandler {
     private final StatementGenerationService statementGenerationService;
     private final StatementProperties properties;
 
+    /**
+     * 执行一个 statement job 分片，为分片内每个账户生成账单并汇总处理结果。
+     */
     public StatementJobExecutionResult handle(StatementJob job) {
         ZoneId zone = ZoneId.of(properties.batch().zone());
         List<UUID> accountIds = billingRepository.findAccountIdsForJob(

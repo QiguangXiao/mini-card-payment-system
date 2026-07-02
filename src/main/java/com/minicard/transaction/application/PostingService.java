@@ -45,6 +45,9 @@ public class PostingService {
     private final CardTransactionDomainEventPublisher transactionEventPublisher;
     private final Clock clock;
 
+    /**
+     * 处理 presentment 入账：幂等 claim、释放 authorization hold、增加 posted balance、写交易事件。
+     */
     @Transactional
     public CardTransaction post(PostPresentmentCommand command) {
         Instant now = Instant.now(clock);
@@ -140,6 +143,9 @@ public class PostingService {
         );
     }
 
+    /**
+     * 校验 authorization 是否仍可被 presentment 入账。
+     */
     private void validateAuthorizationCanBePosted(
             Authorization authorization,
             Money presentmentAmount,
@@ -168,6 +174,9 @@ public class PostingService {
         }
     }
 
+    /**
+     * 校验同一 networkTransactionId 的重复请求是否代表同一笔 presentment。
+     */
     private void assertSamePresentment(
             PostPresentmentCommand command,
             CardTransaction transaction
@@ -177,12 +186,18 @@ public class PostingService {
         }
     }
 
+    /**
+     * 追加 authorization.posted 事件到 Outbox。
+     */
     private void publishAuthorizationEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
             authorizationEventPublisher.append(event);
         }
     }
 
+    /**
+     * 追加 card_transaction.posted 事件到 Outbox。
+     */
     private void publishCardTransactionEvents(CardTransaction transaction) {
         for (CardTransactionDomainEvent event : transaction.pullDomainEvents()) {
             transactionEventPublisher.append(event);

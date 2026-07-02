@@ -59,6 +59,9 @@ public class NotificationDeliveryWorker {
         this.transactionOperations = transactionOperations;
     }
 
+    /**
+     * 执行一条已领取的投递记录，完成收件人解析、模板渲染、provider 调用和状态 finalize。
+     */
     public void handleClaimedDelivery(NotificationDelivery claimed) {
         try {
             // 第一步：根据 recipientKey 解析收件人。delivery row 持有的是稳定业务 key，
@@ -101,12 +104,18 @@ public class NotificationDeliveryWorker {
         }
     }
 
+    /**
+     * worker pool 拒绝执行时，把已领取投递放回 retry/DEAD 状态机。
+     */
     public void markRejectedForRetry(NotificationDelivery claimed, RuntimeException exception) {
         // worker pool 拒绝也按失败处理，把投递从 PROCESSING 放回 retry/DEAD，避免一直卡到 lease 过期。
         // 这类失败发生在 provider 调用前，但 DB row 已经是 PROCESSING，所以仍然需要短事务 finalize。
         markFailed(claimed, "notification delivery worker pool rejected", exception);
     }
 
+    /**
+     * 在独立短事务中重新校验 lease，并把 provider 已确认的投递标记为 SENT。
+     */
     private void markSent(NotificationDelivery claimed, ProviderReceipt receipt) {
         // 成功 finalize 单独开短事务：只做 lease revalidation 和状态更新，不包住 provider 网络调用。
         transactionOperations.executeWithoutResult(status -> {
@@ -125,6 +134,9 @@ public class NotificationDeliveryWorker {
         });
     }
 
+    /**
+     * 在独立短事务中记录投递失败，并推进 attempts、lastError 和下一次 retry 时间。
+     */
     private void markFailed(NotificationDelivery claimed, String error, RuntimeException exception) {
         // 失败 finalize 也要独立落库；否则 provider exception 只留在线程日志里，retry/backoff 状态不会推进。
         transactionOperations.executeWithoutResult(status -> {
@@ -144,6 +156,9 @@ public class NotificationDeliveryWorker {
         });
     }
 
+    /**
+     * 重新锁定当前 delivery row 并确认本 worker 仍持有 PROCESSING lease。
+     */
     private NotificationDelivery lockCurrentLease(NotificationDelivery claimed) {
         // provider 调用在事务外，可能慢到超过 lease timeout。finalize 前重新 FOR UPDATE 读当前 row，
         // 确认它还属于本 worker，避免迟到回执把 recoverer/新 worker 的结果覆盖掉。
