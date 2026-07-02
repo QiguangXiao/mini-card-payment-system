@@ -10,13 +10,21 @@ import java.time.Instant;
  * statement line source row, ledger join, SQL射影(エスキューエルしゃえい)。</p>
  */
 public record StatementLineSourceRow(
+        /** 待出账的 card transaction id。 */
         String cardTransactionId,
+        /** 对应 ledger entry id；证明交易已经形成内部账务事实。 */
         String ledgerEntryId,
+        /** 外部网络交易 id，用于对账和展示。 */
         String networkTransactionId,
+        /** 原始 authorization id。 */
         String authorizationId,
+        /** 消费发生的 card id。 */
         String cardId,
+        /** 待出账金额。 */
         BigDecimal amount,
+        /** 币种代码。 */
         String currency,
+        /** 交易 posted 时间，决定是否落入本 billing cycle。 */
         Instant postedAt
 ) {
 }

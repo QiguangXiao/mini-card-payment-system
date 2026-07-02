@@ -30,19 +30,33 @@ public final class OutboxEvent {
     private static final int MAX_ERROR_LENGTH = 500;
     private static final long MAX_RETRY_DELAY_SECONDS = 60;
 
+    /** Outbox event 主键，同时也是 Kafka header 中的 eventId，供 consumer-side idempotency 去重。 */
     private final UUID id;
+    /** 产生事件的聚合类型，例如 Authorization、CardTransaction、Statement。 */
     private final String aggregateType;
+    /** 产生事件的聚合 id，用于 audit、排查和按业务对象追踪整条异步链路。 */
     private final String aggregateId;
+    /** integration event 类型，例如 authorization.approved；consumer 按它选择 payload 解析规则。 */
     private final String eventType;
+    /** event contract 版本；payload 演进时靠它区分新旧 schema。 */
     private final int eventVersion;
+    /** Kafka partition key，通常用 aggregate id，保证同一聚合事件在同一 partition 内有序。 */
     private final String partitionKey;
+    /** 已序列化 JSON payload；Outbox worker 不理解业务字段，只负责可靠发布。 */
     private final String payload;
+    /** 发布状态机：PENDING、PROCESSING、PUBLISHED、DEAD。 */
     private OutboxEventStatus status;
+    /** 已失败/重试次数；用于 backoff 和超过 maxAttempts 后进入 DEAD。 */
     private int attempts;
+    /** PENDING 时是下次可发布时间；PROCESSING 时是 lease deadline。 */
     private Instant nextAttemptAt;
+    /** PROCESSING lease 的 owner identity；finalize 前必须和数据库当前 token 相等。 */
     private String leaseToken;
+    /** 事件写入 outbox_events 的时间，通常和业务事务同一个 transaction boundary。 */
     private final Instant createdAt;
+    /** Kafka broker ack 后记录的发布时间；非空表示发布副作用已经成功过。 */
     private Instant publishedAt;
+    /** 最近一次发布失败原因；截断后落库，方便排查 poison message 或 Kafka outage。 */
     private String lastError;
 
     private OutboxEvent(

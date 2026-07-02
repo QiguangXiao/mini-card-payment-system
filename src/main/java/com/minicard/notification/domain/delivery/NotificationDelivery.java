@@ -34,20 +34,35 @@ public final class NotificationDelivery {
     private static final int MAX_ERROR_LENGTH = 500;
     private static final long MAX_RETRY_DELAY_SECONDS = 60;
 
+    /** 单渠道投递 id；也作为 provider idempotency key，保证 retry 不重复发送同一渠道消息。 */
     private final UUID id;
+    /** 所属 Notification 意图 id；同一 notification 可以拆出 push/email 等多条 delivery。 */
     private final UUID notificationId;
+    /** 投递渠道，例如 APP_PUSH 或 EMAIL；worker 按它选择 channel sender。 */
     private final NotificationChannel channel;
+    /** 通知类型快照；即使原 Notification 未来扩展，也不影响这条 delivery 的渲染语义。 */
     private final NotificationType notificationType;
+    /** 业务主题 id，例如 authorizationId、cardTransactionId 或 statementId。 */
     private final String subjectId;
+    /** 收件人解析 key；当前项目无 User 模型，所以暂用 cardId/creditAccountId 等业务线索。 */
     private final String recipientKey;
+    /** 投递状态机：PENDING、PROCESSING、SENT、DEAD。 */
     private NotificationDeliveryStatus status;
+    /** 已失败尝试次数；用于 provider 抖动时的 backoff 和 DEAD 判断。 */
     private int attempts;
+    /** PENDING 时是下次可投递时间；PROCESSING 时是 lease deadline。 */
     private Instant nextAttemptAt;
+    /** PROCESSING lease 的 owner token；provider 调用结束后 finalize 必须重新校验。 */
     private String leaseToken;
+    /** 最近一次 provider/渲染/发送失败原因，截断后落库供排查。 */
     private String lastError;
+    /** provider 成功回执 id；用于证明已发送，也可作为后续对账线索。 */
     private String providerMessageId;
+    /** provider 确认成功的时间；只有 SENT 状态才应出现。 */
     private Instant sentAt;
+    /** delivery 创建时间，通常和 Notification 意图在同一事务内写入。 */
     private final Instant createdAt;
+    /** 最近一次状态变化时间，包含 claim、失败重试、发送成功。 */
     private Instant updatedAt;
 
     private NotificationDelivery(

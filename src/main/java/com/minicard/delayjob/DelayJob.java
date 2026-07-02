@@ -30,17 +30,29 @@ public final class DelayJob {
     private static final int MAX_ERROR_LENGTH = 500;
     private static final long MAX_RETRY_DELAY_SECONDS = 60;
 
+    /** DelayJob 主键；业务调度器生成，repository 用唯一键保证同一业务计划不会重复创建。 */
     private final UUID id;
+    /** 业务动作类型，例如 AUTHORIZATION_EXPIRY 或 AUTO_REPAYMENT，用于找到对应 handler。 */
     private final DelayJobType jobType;
+    /** 目标聚合类型，例如 Authorization 或 Statement，防止 jobType 和业务对象被误混用。 */
     private final String aggregateType;
+    /** 目标聚合 id；handler 用它回查业务对象并执行 future business action。 */
     private final String aggregateId;
+    /** 执行状态机：PENDING、PROCESSING、DONE、DEAD。 */
     private DelayJobStatus status;
+    /** 已执行失败次数；claim 本身不算成功，只有失败 finalize 才会推进 retry/backoff。 */
     private int attempts;
+    /** 业务计划时间，例如授权 7 天后过期或账单 due date 自动扣款。 */
     private final Instant scheduledAt;
+    /** PENDING 时是下次可执行时间；PROCESSING 时临时表示 lease deadline。 */
     private Instant nextAttemptAt;
+    /** PROCESSING lease 的 owner token；迟到 worker finalize 时必须重新校验它。 */
     private String leaseToken;
+    /** job 首次写入数据库的时间，用于 audit 和排查 scheduler 是否重复创建。 */
     private final Instant createdAt;
+    /** 最近一次状态变化时间，包含 claim、retry、DONE、DEAD。 */
     private Instant updatedAt;
+    /** 最近一次执行失败原因；进入 DEAD 后它就是人工排查的第一入口。 */
     private String lastError;
 
     private DelayJob(

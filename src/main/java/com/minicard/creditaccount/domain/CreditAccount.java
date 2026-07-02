@@ -25,10 +25,15 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public final class CreditAccount {
 
+    /** CreditAccount 主键；多张 Card 可以共享同一个信用账户。 */
     private final UUID id;
+    /** 总授信额度；available credit 由它减去预占和已入账余额得到。 */
     private final Money creditLimit;
+    /** 已授权但未入账/未过期的预占额度，authorization approve 时增加，posting/expiry 时释放。 */
     private Money reservedAmount;
+    /** 已入账未还清余额；posting 增加，repayment 减少。 */
     private Money postedBalance;
+    /** 账户生命周期状态；BLOCKED 时所有卡的授权都应拒绝。 */
     private CreditAccountStatus status;
 
     private CreditAccount(

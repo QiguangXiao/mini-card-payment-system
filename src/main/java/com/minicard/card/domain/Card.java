@@ -10,8 +10,11 @@ import java.util.UUID;
  * 这个拆分是 PayPay Card interview里很容易被问到的 domain modeling 点。</p>
  */
 public record Card(
+        /** 发卡系统内的卡 id；示例项目中直接作为 API cardId 使用。 */
         String id,
+        /** 所属信用账户 id；额度和余额不放在 Card 上，而是放在 CreditAccount。 */
         UUID creditAccountId,
+        /** 卡片生命周期状态；BLOCKED/EXPIRED 会在授权前快速拒绝。 */
         CardStatus status
 ) {
 

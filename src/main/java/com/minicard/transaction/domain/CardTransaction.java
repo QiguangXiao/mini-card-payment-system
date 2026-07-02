@@ -30,19 +30,33 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public final class CardTransaction {
 
+    /** CardTransaction 主键；代表持卡人账单中可见的一笔入账消费。 */
     private final UUID id;
+    /** 清算/网络侧交易 id；repository 用唯一键把重复 presentment 做成 idempotent。 */
     private final String networkTransactionId;
+    /** 对应的原始 authorization id，用来释放 reservation 并追踪刷卡到入账链路。 */
     private final UUID authorizationId;
+    /** 被消费的卡 id；保留在交易上方便用户侧查询和通知路由。 */
     private final String cardId;
+    /** 所属信用账户 id；入账和出账都围绕 credit account 聚合。 */
     private final UUID creditAccountId;
+    /** 入账金额；方向由业务语义表达，金额本身保持正数。 */
     private final Money amount;
+    /** presentment 到交易入账的状态；当前主要从 PENDING 推进到 POSTED。 */
     private CardTransactionStatus status;
+    /** 账单归属状态；posted 后先 UNBILLED，出账时 assignToStatement 改成 BILLED。 */
     private CardTransactionBillingStatus billingStatus;
+    /** issuer 收到 presentment 的时间，不一定等于最终 postedAt。 */
     private final Instant presentmentReceivedAt;
+    /** 成功入账时间；POSTED 后才有值。 */
     private Instant postedAt;
+    /** 所属 statement id；未出账交易为空。 */
     private UUID statementId;
+    /** 交易被纳入某张 statement 的时间，用于 audit 出账批处理。 */
     private Instant statementAssignedAt;
+    /** 交易记录创建时间。 */
     private final Instant createdAt;
+    /** 最近一次状态变化时间。 */
     private Instant updatedAt;
     // Domain event buffer 只存在于内存中；restore 出来的历史对象不会重新发布事件。
     private final List<CardTransactionDomainEvent> domainEvents = new ArrayList<>();

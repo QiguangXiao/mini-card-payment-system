@@ -30,27 +30,43 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public final class StatementJob {
 
+    /** StatementJob 主键；每个 billing cycle shard 一条 claimable job。 */
     private final UUID id;
-    // cycle 身份直接落在 job 上：worker 处理分片时不需要再去读一个 parent batch 行。
+    /** cycle 身份直接落在 job 上：worker 处理分片时不需要再去读 parent batch 行。 */
     private final LocalDate periodStart;
+    /** 本次出账周期结束日，和 periodStart/shardNo 共同参与唯一性语义。 */
     private final LocalDate periodEnd;
+    /** 本批生成账单的统一还款到期日。 */
     private final LocalDate dueDate;
+    /** 当前分片编号；按账户 id hash/mod 分配要处理的账户集合。 */
     private final int shardNo;
+    /** 总分片数；和 shardNo 一起定义本 job 的处理范围。 */
     private final int shardCount;
+    /** job 状态机：PENDING、PROCESSING、DONE、DEAD。 */
     private StatementJobStatus status;
+    /** 当前领取 job 的 worker id；用于日志排查，不作为唯一 ownership 判断。 */
     private String claimedBy;
+    /** 本轮 claim 发生时间。 */
     private Instant claimedAt;
-    // claim_until 只表达 lease 截止时间；真正的 owner identity 由 claim_token 承担。
+    /** claim_until 只表达 lease 截止时间；真正的 owner identity 由 claim_token 承担。 */
     private Instant claimUntil;
-    // claim_token 是每次 claim 生成的随机 token，finalize 只认这个 token，避免用 timestamp 当 ownership。
+    /** 每次 claim 生成的随机 token；finalize 只认这个 token，避免用 timestamp 当 ownership。 */
     private String claimToken;
+    /** 已领取/尝试次数；每次 claim 自增，达到上限后失败会进入 DEAD。 */
     private int attemptCount;
+    /** 本轮实际扫描的账户数，用于观测 job 是否覆盖了预期分片。 */
     private int processedAccountCount;
+    /** 成功生成账单的账户数。 */
     private int generatedStatementCount;
+    /** 因无可出账交易、已存在账单等原因跳过的账户数。 */
     private int skippedAccountCount;
+    /** 本轮处理失败的账户数；非 0 时通常需要查看 lastError 和日志。 */
     private int failedAccountCount;
+    /** job 创建时间。 */
     private final Instant createdAt;
+    /** 最近一次状态变化时间。 */
     private Instant updatedAt;
+    /** 最近一次失败原因；进入 DEAD 后用于人工 repair/replay 判断。 */
     private String lastError;
 
     private StatementJob(

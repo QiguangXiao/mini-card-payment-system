@@ -19,15 +19,25 @@ import com.minicard.shared.domain.Money;
  */
 public final class StatementLine {
 
+    /** Statement line 主键；代表账单上的一条历史明细快照。 */
     private final UUID id;
+    /** 所属 statement id。 */
     private final UUID statementId;
+    /** 来源 card transaction id；用于从账单明细追回用户可见交易。 */
     private final UUID cardTransactionId;
+    /** 来源 ledger entry id；用于从账单明细追回内部账务事实。 */
     private final UUID ledgerEntryId;
+    /** 外部网络交易 id；方便和 presentment/清算侧排查同一笔交易。 */
     private final String networkTransactionId;
+    /** 原始 authorization id；串起授权预占和最终入账。 */
     private final UUID authorizationId;
+    /** 发生消费的卡 id；用于用户侧展示和排查。 */
     private final String cardId;
+    /** 明细金额；是出账时的快照，不随后续交易对象变化。 */
     private final Money amount;
+    /** 交易入账时间；账单按 posted transaction 归集。 */
     private final Instant postedAt;
+    /** 明细快照创建时间，通常等于 statement generatedAt。 */
     private final Instant createdAt;
 
     private StatementLine(

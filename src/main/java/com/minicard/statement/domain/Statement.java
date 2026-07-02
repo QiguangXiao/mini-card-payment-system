@@ -32,20 +32,35 @@ public final class Statement {
 
     private static final ZoneId JAPAN_BILLING_ZONE = ZoneId.of("Asia/Tokyo");
 
+    /** Statement 主键；代表一个 credit account 在一个 billing cycle 的账单快照。 */
     private final UUID id;
+    /** 账单所属信用账户 id。 */
     private final UUID creditAccountId;
+    /** 账单周期开始日，闭区间起点。 */
     private final LocalDate periodStart;
+    /** 账单周期结束日，闭区间终点。 */
     private final LocalDate periodEnd;
+    /** 到期还款日，按日本营业日规则从 periodEnd 推导。 */
     private final LocalDate dueDate;
+    /** 本期应还总额，由账单明细快照求和得到。 */
     private final Money totalAmount;
+    /** 最低还款额；当前策略由 application service 计算后传入。 */
     private final Money minimumPaymentAmount;
+    /** 已还金额；还款入账时增加，用于判断 PAID/PARTIALLY_PAID。 */
     private Money paidAmount;
+    /** 出账时纳入的交易笔数，和 lines.size() 对齐但单独落库方便查询。 */
     private final int transactionCount;
+    /** 账单状态，例如 CLOSED、PARTIALLY_PAID、PAID。 */
     private StatementStatus status;
+    /** 读模型/cache version；还款更新账单后递增，用于避免 stale cache 覆盖新状态。 */
     private long version;
+    /** 账单生成时间；代表快照切面的业务时间。 */
     private final Instant generatedAt;
+    /** statement row 创建时间。 */
     private final Instant createdAt;
+    /** 最近一次还款或状态变化时间。 */
     private Instant updatedAt;
+    /** 账单明细快照；创建后整体不可变，避免后续交易变化污染历史账单。 */
     private final List<StatementLine> lines;
     // Domain event buffer 只存在于内存中：只有 close() 新生成的账单会记录 statement.closed，
     // restore() 重建历史账单不会重新发布事件，避免 reload 触发重复通知。

@@ -29,15 +29,25 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public final class Repayment {
 
+    /** Repayment 主键；代表一次客户还款请求在系统内的生命周期。 */
     private final UUID id;
+    /** API idempotency key；同一次还款 retry 必须复用它，避免重复入账。 */
     private final String idempotencyKey;
+    /** 请求体指纹；同 key 不同 amount/statementId 会被识别成 idempotency conflict。 */
     private final String requestFingerprint;
+    /** 本次还款要抵扣的 statement id。 */
     private final UUID statementId;
+    /** statement 对应的 credit account id；markReceived 时从账单侧补齐。 */
     private UUID creditAccountId;
+    /** 还款金额；金额保持正数，减少余额的方向由服务编排和 LedgerDirection 表达。 */
     private final Money amount;
+    /** 还款状态；PENDING 表示 claim 已建立，RECEIVED 表示业务入账完成。 */
     private RepaymentStatus status;
+    /** 还款成功入账时间；PENDING 时为空。 */
     private Instant receivedAt;
+    /** repayment 记录创建时间。 */
     private final Instant createdAt;
+    /** 最近一次状态变化时间。 */
     private Instant updatedAt;
     // Domain event buffer 只存在于内存中；restore 历史还款不会重新发布 repayment.received。
     private final List<RepaymentDomainEvent> domainEvents = new ArrayList<>();

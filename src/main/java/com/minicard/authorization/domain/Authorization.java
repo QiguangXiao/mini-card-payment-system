@@ -33,13 +33,21 @@ public final class Authorization {
      */
     private static final Duration HOLD_DURATION = Duration.ofDays(7);
 
+    /** Authorization 主键；本系统内部生命周期都围绕它推进。 */
     private final UUID id;
+    /** API 请求指纹；和 idempotency key 配合，用来发现同 key 不同 body 的冲突请求。 */
     private final String requestFingerprint;
+    /** 被授权的卡号/卡 id；授权先检查 Card lifecycle，再锁 CreditAccount 预占额度。 */
     private final String cardId;
+    /** 本次请求预占的金额；授权金额保持正数，币种由 Money 明确表达。 */
     private final Money requestedAmount;
+    /** 授权生命周期状态：PENDING、APPROVED、DECLINED、POSTED、EXPIRED。 */
     private AuthorizationStatus status;
+    /** 拒绝原因；只有 DECLINED 状态才应出现，用于 API 返回和风控/额度解释。 */
     private AuthorizationDeclineReason declineReason;
+    /** 授权请求进入系统的时间。 */
     private final Instant createdAt;
+    /** approve/decline 做出决定的时间；PENDING 时为空。 */
     private Instant decidedAt;
     // expiresAt 是显式 business deadline，不从 decidedAt 动态重算，方便 audit/replay。
     private Instant expiresAt;
