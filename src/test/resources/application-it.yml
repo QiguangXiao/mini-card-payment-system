@@ -1,10 +1,13 @@
 # Testcontainers 集成测试专用 profile（@ActiveProfiles("it")）。
-# datasource / kafka 连接信息由 @ServiceConnection 在容器启动后注入，这里不写死。
+# datasource 由 MySqlIntegrationTestBase 的 @DynamicPropertySource 注入；Kafka 类测试再用 @ServiceConnection 注入 broker。
 spring:
   # 关闭后台调度，避免 outbox/delay-job/statement poller 与并发测试线程争抢同一批 row，
   # 让“谁在改 DB”在测试里是确定的：只有测试自己驱动的事务。
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
+    # MySQL container 是 JVM singleton，多个 Spring test context 共享同一个数据库进程。
+    # 每个 context 启动时先 drop 再按 changelog 重建，避免上一类测试残留的 outbox/job 行被新 context 的 poller 抢走。
+    drop-first: true
 
 risk:
   velocity:
@@ -21,6 +24,9 @@ statement:
   batch:
     enabled: false
   jobs:
+    enabled: false
+notification:
+  delivery:
     enabled: false
 
 logging:
