@@ -41,6 +41,20 @@ import org.springframework.transaction.support.TransactionOperations;
  *  -&gt; 失败/worker pool 拒绝: finalize 短事务
  *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
  * </pre>
+ *
+ * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
+ * <pre>
+ * t0  worker A claim:  PENDING -&gt; PROCESSING(token=A, lease deadline=t0+30s)
+ * t1  A 在事务外等 provider 回执，provider 响应很慢（timeout/retry 耗时叠加）
+ * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -&gt; PENDING（token 清空）
+ * t3  worker B claim:  PENDING -&gt; PROCESSING(token=B, 新 deadline)，再次调 provider
+ * t4  B 拿到回执 -&gt; finalize: DB token=B 与自己相符 -&gt; SENT(providerMessageId)
+ * t5  A 的回执迟到返回 -&gt; finalize: DB 已非 PROCESSING（或 token=B != A）-&gt; skip
+ * </pre>
+ *
+ * <p>t5 若不 skip，A 会覆盖 B 已写入的 providerMessageId（A 失败时甚至把 SENT 打回
+ * PENDING，触发第三次发送）。且 t1 和 t3 都可能真的发出了推送——所以投递是 at-least-once，
+ * 靠 idempotencyKey（= delivery id，跨 retry 不变）让 provider 侧去重，用户才不会收到两条。</p>
  */
 @Service
 @Slf4j

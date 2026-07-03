@@ -32,6 +32,20 @@ import org.springframework.transaction.support.TransactionOperations;
  *  -&gt; publish 失败/worker pool 拒绝: finalize 短事务
  *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
  * </pre>
+ *
+ * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
+ * <pre>
+ * t0  worker A claim:  PENDING -&gt; PROCESSING(token=A, lease deadline=t0+30s)
+ * t1  A 在事务外等 Kafka ack，broker 迟迟不回（或 GC 停顿/网络分区）
+ * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -&gt; PENDING（token 清空）
+ * t3  worker B claim:  PENDING -&gt; PROCESSING(token=B, 新 deadline)
+ * t4  B publish 成功 -&gt; finalize: DB token=B 与自己相符 -&gt; PUBLISHED
+ * t5  A 的 ack 终于返回 -&gt; finalize: DB 已非 PROCESSING（或 token=B != A）-&gt; skip
+ * </pre>
+ *
+ * <p>t5 若不 skip，A 会把 B 已定稿的状态再写一遍（更糟的是 A 失败时把 PUBLISHED 打回
+ * PENDING，造成第三次发布）。注意 t1 和 t4 都真的发过 Kafka——这正是 Outbox 只承诺
+ * at-least-once 的原因，consumer 侧必须按 eventId 用 Inbox 去重。</p>
  */
 @Service
 @Slf4j

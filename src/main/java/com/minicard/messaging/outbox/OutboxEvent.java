@@ -13,6 +13,19 @@ import lombok.experimental.Accessors;
  * <p>Outbox delivery 是 at-least-once：Kafka ack 后、MySQL commit 前宕机可能导致重复发布。
  * 所以后续 consumer 必须用 eventId 去重(deduplicate)。</p>
  *
+ * <p>状态转换表（方法 / 推动方）：</p>
+ * <pre>
+ * (创建)     -&gt; PENDING     pending()          业务事务：Outbox adapter 与业务变更同事务写入
+ * PENDING    -&gt; PROCESSING  markProcessing()   OutboxClaimer 短事务写 lease（token + deadline）
+ * PROCESSING -&gt; PUBLISHED   markPublished()    OutboxWorker finalize：broker 已 ack（终态）
+ * PROCESSING -&gt; PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -&gt; DEAD        markFailed()       attempts &gt;= maxAttempts（终态，等人工重放）
+ * </pre>
+ *
+ * <p>划分逻辑：API/业务服务只在自己的事务里写入 PENDING 行（这正是 Outbox pattern 的
+ * "同事务落 intent"），之后的所有转换都由后台 publisher（poller/claimer/worker/recoverer）
+ * 推动，业务代码不感知发布进度。</p>
+ *
  * <p>关键词：Outbox, PROCESSING lease, lease token, at-least-once,
  * idempotency, アウトボックス(アウトボックス), リーストークン(リーストークン)。</p>
  *

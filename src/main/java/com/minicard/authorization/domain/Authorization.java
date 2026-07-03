@@ -24,6 +24,19 @@ import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
  *
  * <p>interview重点：状态转换(state transition)放在 domain 内部，service 只能调用
  * approve/decline/expire 这些业务行为，不能绕过 invariant 直接改字段。</p>
+ *
+ * <p>状态转换表（方法 / 推动方）：</p>
+ * <pre>
+ * PENDING  -&gt; APPROVED   approve()   同步 API：AuthorizationService，card/额度/风控检查通过后同事务预占额度
+ * PENDING  -&gt; DECLINED   decline()   同步 API：AuthorizationService，检查失败（终态）
+ * APPROVED -&gt; POSTED     post()      同步 API：PresentmentController/PostingService，清算入账消费掉 hold（终态）
+ * APPROVED -&gt; EXPIRED    expire()    异步 DelayJob：AuthorizationExpiryDelayJobHandler，7 天未 capture 释放额度（终态）
+ * </pre>
+ *
+ * <p>划分逻辑：授权决策和入账必须同步返回给商户/网络，所以由 API 推动；过期释放是
+ * "未来才发生的业务动作"，没有外部请求触发它，所以只能由 DelayJob worker 推动。
+ * POSTED 与 EXPIRED 互斥竞争同一个 APPROVED：双方都先 FOR UPDATE 锁行再检查状态，
+ * 先提交者赢，后到者因状态已不是 APPROVED 而拒绝/跳过。</p>
  */
 public final class Authorization {
 

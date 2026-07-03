@@ -17,6 +17,21 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>关键词：Outbox 恢复, 发布租约, 重试, outbox recovery,
  * processing lease, retry, アウトボックス復旧(アウトボックスふっきゅう),
  * 発行リース(はっこうリース)。</p>
+ *
+ * <p>recoverer 兜底的是"worker 在 claim 之后永远回不来"的时间线：</p>
+ * <pre>
+ * t0  worker claim:  PENDING -&gt; PROCESSING(token=X, lease deadline=t0+30s)
+ * t1  pod 宕机/进程被 kill：finalize 永远不会执行，row 停在 PROCESSING
+ * t2  (&gt;deadline) recoverer 扫描到超时 row -&gt; 按一次失败处理:
+ *       attempts+1 &lt; maxAttempts -&gt; PENDING(nextAttemptAt=now+backoff)
+ *       attempts+1 &gt;= maxAttempts -&gt; DEAD
+ * t3  poller 下一轮重新 claim（生成新 token），publish 重新执行
+ * </pre>
+ *
+ * <p>注意 t1 有两种可能：Kafka send 根本没发生，或 broker 已 ack 但 finalize 前宕机。
+ * recoverer 无法区分，只能统一重发——所以 Outbox 是 at-least-once，t3 可能产生重复消息，
+ * 由 consumer Inbox 按 eventId 去重。若 t1 的 worker 只是慢而非死，t3 之后它迟到 finalize
+ * 会因 leaseToken 不匹配被拒（见 OutboxWorker 的 stale worker 时间线）。</p>
  */
 @Component
 // 发布恢复器和 poller 用同一个 outbox.publisher.enabled 开关，便于测试中关闭所有后台发布动作。

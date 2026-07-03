@@ -20,6 +20,21 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>PROCESSING 是 lease，不是永久状态。worker/pod 宕机时，recoverer 会把超时任务
  * 重新放回 retry 状态或转 DEAD，保证 database-backed queue 不会卡死。</p>
+ *
+ * <p>recoverer 兜底的是"worker 在 claim 之后永远回不来"的时间线：</p>
+ * <pre>
+ * t0  worker claim:  PENDING -&gt; PROCESSING(token=X, lease deadline=t0+30s)
+ * t1  pod 宕机/进程被 kill：finalize 永远不会执行，row 停在 PROCESSING
+ * t2  (&gt;deadline) recoverer 扫描到超时 row -&gt; 按一次失败处理:
+ *       attempts+1 &lt; maxAttempts -&gt; PENDING(nextAttemptAt=now+backoff)
+ *       attempts+1 &gt;= maxAttempts -&gt; DEAD
+ * t3  poller 下一轮重新 claim（生成新 token），handler 重新执行
+ * </pre>
+ *
+ * <p>注意 t1 有两种可能：handler 业务事务没执行，或已 commit 但 finalize 前宕机。
+ * recoverer 无法区分，只能统一重跑——所以 handler 必须幂等（如 authorization expiry
+ * 先检查状态仍是 APPROVED 才释放额度）。若 t1 的 worker 只是慢而非死，t3 之后它迟到
+ * finalize 会因 leaseToken 不匹配被拒（见 DelayJobWorker 的 stale worker 时间线）。</p>
  */
 @Component
 // recoverer 也受同一个 enabled 开关控制；测试或本地排障时可以整体关掉后台任务扫描。

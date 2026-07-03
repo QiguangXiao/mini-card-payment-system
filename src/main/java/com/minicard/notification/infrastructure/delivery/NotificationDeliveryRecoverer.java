@@ -22,6 +22,22 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>worker 在 PROCESSING 后宕机/卡死时，没有 recoverer 这些投递会永远不可见。recoverer 在 lease
  * 到期后把它们按一次失败处理，统一走退避重试或 DEAD，是可靠投递闭环的最后一环。</p>
+ *
+ * <p>recoverer 兜底的是"worker 在 claim 之后永远回不来"的时间线：</p>
+ * <pre>
+ * t0  worker claim:  PENDING -&gt; PROCESSING(token=X, lease deadline=t0+30s)
+ * t1  pod 宕机/provider 调用卡死：finalize 永远不会执行，row 停在 PROCESSING
+ * t2  (&gt;deadline) recoverer 扫描到超时 row -&gt; 按一次失败处理:
+ *       attempts+1 &lt; maxAttempts -&gt; PENDING(nextAttemptAt=now+backoff)
+ *       attempts+1 &gt;= maxAttempts -&gt; DEAD
+ * t3  poller 下一轮重新 claim（生成新 token），重新调 provider
+ * </pre>
+ *
+ * <p>注意 t1 有两种可能：provider 根本没收到请求，或已发送成功但回执/finalize 前宕机。
+ * recoverer 无法区分，只能统一重发——所以投递是 at-least-once，t3 会带着同一个
+ * idempotencyKey（= delivery id）重试，由 provider 侧去重防止用户收到重复通知。
+ * 若 t1 的 worker 只是慢而非死，t3 之后它迟到 finalize 会因 leaseToken 不匹配被拒
+ * （见 NotificationDeliveryWorker 的 stale worker 时间线）。</p>
  */
 @Component
 @ConditionalOnProperty(prefix = "notification.delivery", name = "enabled", havingValue = "true")

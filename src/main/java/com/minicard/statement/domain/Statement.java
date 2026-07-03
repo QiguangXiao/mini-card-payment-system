@@ -25,6 +25,21 @@ import lombok.experimental.Accessors;
  *
  * <p>Statement 表达一个 credit account 在固定 billing cycle 内的已入账消费快照。
  * 它不是实时余额视图：一旦生成，total/minimum payment/line items 就应该可审计、可解释。</p>
+ *
+ * <p>状态转换表（方法 / 推动方）：</p>
+ * <pre>
+ * (无)            -&gt; CLOSED          close()           异步 batch：StatementJobHandler 出账，生成即 CLOSED
+ * CLOSED          -&gt; PARTIALLY_PAID  applyRepayment()  部分还款
+ * CLOSED          -&gt; PAID            applyRepayment()  一次性全额结清（终态，PAID 后拒绝再收款）
+ * PARTIALLY_PAID  -&gt; PAID            applyRepayment()  补足剩余金额（终态）
+ * OVERDUE         -&gt; PAID            applyRepayment()  逾期后全额结清；部分还款保持 OVERDUE 不回 PARTIALLY_PAID
+ * </pre>
+ *
+ * <p>划分逻辑：CLOSED 由 billing-cycle batch（StatementJob）推动，没有 API 能出账；
+ * 还款转换由两条入口共同推动——手动还款 API（RepaymentController）和 due date 自动扣款
+ * DelayJob（AutoRepaymentDelayJobHandler），二者最终都走 RepaymentService 同一事务。
+ * OVERDUE 预留给未来的 due-date 逾期扫描：当前没有任何代码路径写入 OVERDUE，
+ * restore()/applyRepayment() 只是提前兼容这个状态。</p>
  */
 @Getter
 @Accessors(fluent = true)

@@ -20,6 +20,19 @@ import lombok.experimental.Accessors;
  * 而非"发 Kafka"。notificationType/subjectId/recipientKey 是 Notification 的快照，使一条投递自洽，
  * worker 无需回查 notifications 即可渲染并发送。</p>
  *
+ * <p>状态转换表（方法 / 推动方）：</p>
+ * <pre>
+ * (创建)     -&gt; PENDING     pendingFor()               Kafka listener 收到业务事件，与 Notification 同事务写入
+ * PENDING    -&gt; PROCESSING  markProcessing()           claimer 短事务写 lease（token + deadline）
+ * PROCESSING -&gt; SENT        markSent()                 worker finalize：provider 已回执（终态）
+ * PROCESSING -&gt; PENDING     markFailed()               worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -&gt; DEAD        markFailed()               attempts &gt;= maxAttempts（终态，等人工重放）
+ * </pre>
+ *
+ * <p>划分逻辑：没有任何 API 直接推动投递状态——上游（messaging listener）只负责创建 PENDING 行，
+ * 之后全部由后台组件（poller/claimer/worker/recoverer）异步推进。这正是"通知"适合完全异步的原因：
+ * 用户请求不需要等推送结果，失败重试也不该阻塞业务事务。</p>
+ *
  * <p><b>lease 的两个维度分开表达</b>：{@code nextAttemptAt} 是 lease <i>deadline</i>(WHEN 到期，供 recoverer
  * 扫描)；{@code leaseToken} 是 lease <i>identity</i>(WHO 持有，供 worker finalize 校验)。
  * 不能用 nextAttemptAt 兼任 token：它是 {@code Instant.now()}，纳秒精度经 TIMESTAMP(6) 微秒列 round-trip
