@@ -38,6 +38,10 @@ public class AuthorizationNotificationListener {
         // 如果所有 bounded context 共用一个 group，Notification 可能抢走 Risk/Ledger 应该处理的消息。
         // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
         // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
+        // offset commit 也不是这里手写的：application.yml 关闭 Kafka 原生 auto commit，
+        // 但设置 ack-mode=record，让 Spring Kafka container 在本方法正常 return 后自动提交这条 record 的 offset。
+        // 如果 read()/requestNotification() 抛异常，异常会交给 notificationKafkaListenerContainerFactory
+        // 配置的 DefaultErrorHandler：先按策略 retry，仍失败再投递到 notification DLT。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {

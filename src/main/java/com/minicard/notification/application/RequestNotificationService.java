@@ -44,6 +44,9 @@ public class RequestNotificationService {
      */
     @Transactional
     public void request(RequestNotificationCommand command) {
+        // 这个 MySQL transaction 由 Spring 管理：方法正常结束时先提交 DB，
+        // 然后 listener 才正常 return，Kafka container 才会按 ack-mode=record 提交 offset。
+        // 如果 DB 写入失败抛异常，listener 不会成功 return，Kafka offset 也不会被当作成功处理。
         Instant now = Instant.now(clock);
         // Inbox claim 是 consumer-side idempotency 的第一道门：Kafka at-least-once 可能重复投递，
         // 同一 eventId 对 notification-v1 只处理一次。没有它，Outbox 重发/offset 重放会重复创建通知与投递。

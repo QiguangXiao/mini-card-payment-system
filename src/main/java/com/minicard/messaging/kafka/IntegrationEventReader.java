@@ -45,6 +45,9 @@ public class IntegrationEventReader {
      */
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {
+            // value 是 Kafka message body。这里永远解析 body envelope，再由 listener 用 eventType dispatch。
+            // 如果 JSON 坏了，会抛 EventContractException，交给 KafkaMessagingConfiguration 配置的
+            // DefaultErrorHandler：contract failure 不重试，直接发到对应 consumer 的 DLT。
             IntegrationEvent event = objectMapper.readValue(record.value(), IntegrationEvent.class);
             // 集中 validate transport contract，consumer 就能专注业务字段。
             // 如果每个 listener 自己解析/校验，contract failure 会变成不一致的异常和重试行为。
@@ -62,12 +65,15 @@ public class IntegrationEventReader {
     private void validate(IntegrationEvent event) {
         if (event.eventId() == null || event.payload() == null || event.payload().isNull()) {
             // 缺 eventId/payload 时无法做 idempotency 和业务解析，必须拒绝。
+            // 如果放进业务 service，缺 eventId 会让 Inbox 无法去重，重复投递就可能重复写业务表。
             throw new EventContractException("eventId and payload are required");
         }
         if (event.eventType() == null || event.eventType().isBlank()) {
+            // eventType 是 dispatch key。缺它时 consumer 不知道这条消息属于哪个业务 contract。
             throw new EventContractException("eventType is required");
         }
         if (event.eventVersion() < 1) {
+            // 版本号用于未来 schema 演进。非法版本不要猜测兼容，否则 replay 时会产生不可解释的数据。
             throw new EventContractException("eventVersion must be positive");
         }
     }

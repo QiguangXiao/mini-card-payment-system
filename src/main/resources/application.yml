@@ -47,8 +47,10 @@ spring:
         # 设置得太长会让 Outbox worker 线程被慢 broker 钉住；太短会制造不必要的 retry。
         request.timeout.ms: 3000
     consumer:
-      # 关闭 auto commit 后，offset 只在 listener 成功返回后提交。
-      # 反事实：如果自动提交，consumer 可能先提交 offset，随后写 MySQL 失败，消息就不会被再次投递。
+      # 关闭 Kafka consumer 原生自动提交(auto commit)：不要按时间后台提交 offset。
+      # 本项目要的是 Spring Kafka listener container 的"处理成功后自动提交"：
+      # listener 正常 return 后，再由 container 根据 ack-mode=record 自动提交当前 record 的 offset。
+      # 反事实：如果开启 Kafka 原生自动提交，consumer 可能先提交 offset，随后写 MySQL 失败，消息就不会被再次投递。
       # 这仍然是 at-least-once，不是 exactly-once：listener 成功写库但提交 offset 前崩溃时，Kafka 会重放；
       # 所以 Inbox claim 和业务唯一约束必须能安全处理 duplicate delivery。
       enable-auto-commit: false
@@ -56,7 +58,8 @@ spring:
       # 生产中是否用 earliest 要结合 retention、replay 策略和是否能承受历史消息重放来决定。
       auto-offset-reset: earliest
     listener:
-      # record ack 表示每条消息处理成功后提交 offset。
+      # record ack 表示每条消息处理成功后，由 Spring Kafka container 自动 ack/commit offset。
+      # 这里的"自动提交"不是 enable-auto-commit=true 的后台定时提交，而是 listener return 后的受控提交。
       # 它比 batch ack 更容易定位坏消息，也更贴合本项目"每个 event 一次 Inbox 幂等处理"的教学目标。
       ack-mode: record
   cloud:
