@@ -52,14 +52,17 @@ public class DelayJobRecoverer {
     @Transactional
     public void recoverStuckJobs() {
         Instant now = Instant.now(clock);
+        // 阶段 1：扫描 lease deadline 已过的 PROCESSING jobs，并用 SKIP LOCKED 避免多实例重复恢复。
         List<DelayJob> jobs = delayJobRepository.findStuckProcessingBatchForUpdate(
                 now,
                 properties.maxPerRun()
         );
         for (DelayJob job : jobs) {
+            // 阶段 2：把超时 PROCESSING 当作一次失败，推进 retry/DEAD 状态机。
             // 超时 PROCESSING 按一次失败处理；超过 maxAttempts 后进入 DEAD，避免无限重试坏任务。
             // 如果没有这条恢复路径，worker 宕机后授权过期释放或自动还款 job 会永久卡住。
             job.markProcessingTimedOut(now, properties.maxAttempts());
+            // 阶段 3：持久化恢复结果。回到 PENDING 的 job 会在下一轮 poll 中重新领取。
             delayJobRepository.updateExecutionState(job);
             log.warn(
                     "delay_job_recovered jobId={} jobType={} attempts={} status={}",

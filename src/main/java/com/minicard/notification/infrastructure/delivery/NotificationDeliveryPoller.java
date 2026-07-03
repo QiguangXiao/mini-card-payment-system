@@ -51,11 +51,17 @@ public class NotificationDeliveryPoller {
             scheduler = "notificationDeliveryTaskScheduler"
     )
     public void pollDispatchableDeliveries() {
+        // 阶段 1：短事务 claim 可投递记录。这里只写 PROCESSING lease，不调用外部 provider。
+        // claim commit 后，其他 pod 会跳过这些 delivery row，避免同一通知并发外发。
         List<NotificationDelivery> deliveries = claimer.claimDispatchableDeliveries();
+        // 阶段 2：把已领取 delivery 提交给投递 worker pool。
+        // poller 线程保持很薄，provider timeout/retry 不会拖住下一轮扫描。
         for (NotificationDelivery delivery : deliveries) {
             try {
+                // 阶段 3：worker 在事务外解析收件人、渲染模板、调用 provider，并在短事务里 finalize。
                 deliveryWorkerExecutor.execute(() -> worker.handleClaimedDelivery(delivery));
             } catch (TaskRejectedException exception) {
+                // 阶段 4：worker pool 拒绝时立即推进 retry/DEAD，不等 lease timeout 后 recoverer 再兜底。
                 worker.markRejectedForRetry(delivery, exception);
                 log.warn("notification_delivery_worker_rejected deliveryId={}", delivery.id(), exception);
             }

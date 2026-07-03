@@ -88,8 +88,10 @@ public class AuthorizationService {
     @Transactional
     public Authorization authorize(AuthorizationCommand command) {
         Instant now = Instant.now(clock);
-        // 本次请求的 fingerprint 在 transaction boundary 内只计算一次，并作为稳定业务输入传递。
-        // 如果到处调用 command.requestFingerprint()，虽然 SHA-256 很便宜，但会让幂等校验看起来像多个独立判断。
+        // 阶段 1：在事务内准备幂等 fingerprint 和 PENDING authorization。
+        // fingerprint 描述"这次请求的业务内容"，idempotencyKey 描述"客户端声称这是同一次请求"。
+        // 两者分开：同 key 同 fingerprint 可安全重放；同 key 不同 fingerprint 必须拒绝为冲突。
+        // fingerprint 只计算一次，并作为稳定业务输入传递，避免幂等校验看起来像多个独立判断。
         String requestFingerprint = command.requestFingerprint();
         // 先创建 PENDING aggregate：每次请求都先落一条可审计(auditable)记录，
         // 再进入风控、卡状态和额度检查，符合真实发卡行 issuer flow。
@@ -101,6 +103,7 @@ public class AuthorizationService {
         );
 
 
+        // 阶段 2：INSERT-first idempotency claim，争夺本幂等键的处理权。
         // claim() 是本事务第一笔写入：利用 idempotency_key 唯一索引让并发 retry 只有一个 winner。
         // loser 不会继续做额度预占(reserve credit)，而是在下面读取 winner 的结果。
         // 如果没有这个 INSERT-first claim，同一个支付请求重试可能各自 reserve credit，造成 double hold。
@@ -119,15 +122,21 @@ public class AuthorizationService {
             return persisted;
         }
 
+        // 阶段 3：只有 winner 进入授权决策链。
+        // 这里会按便宜检查 -> 卡状态 -> 风控 -> account row lock -> 额度预占的顺序推进。
+        // 顺序的目标是缩短 row lock 持有时间，同时保证额度更新和 authorization 状态同事务提交。
         // 只有 idempotency winner 才能进入真实决策路径(decision path)。
         decideAndReserve(persisted, command, now);
+        // 阶段 4：持久化 Authorization 最终状态。APPROVED/DECLINED 都会落库，便于审计和幂等重放。
         authorizationRepository.update(persisted);
         if (persisted.status().isApproved()) {
+            // 阶段 5：批准才创建过期释放额度的 DelayJob。
             // DelayJob 和 APPROVED authorization 在同一事务提交：
             // 只要额度 hold 生效，就一定有一个未来释放额度的 durable plan。
             // 如果省掉这一步，商户不 presentment 时 reservedAmount 会长期占住额度，形成 stale hold。
             expiryJobScheduler.schedule(persisted);
         }
+        // 阶段 6：把 domain events 交给 Outbox adapter，和状态变更同事务提交。
         // Domain event 已在 approve()/decline() 状态转换时产生。
         // Service 只负责在同一 transaction boundary 内把事实交给 Outbox adapter。
         publishDomainEvents(persisted);
@@ -158,6 +167,7 @@ public class AuthorizationService {
             AuthorizationCommand command,
             Instant now
     ) {
+        // 决策阶段 1：先做本地配置类 policy check，不需要 DB lock 或外部调用。
         // 便宜的 policy check 先执行，尽量推迟 account row lock，缩短高并发下的 critical section。
         AuthorizationDeclineReason localDeclineReason = checkSingleTransactionLimit(authorization);
         if (localDeclineReason != null) {
@@ -165,6 +175,7 @@ public class AuthorizationService {
             return;
         }
 
+        // 决策阶段 2：读取 Card aggregate，判断卡生命周期是否允许授权。
         // Card 是独立 aggregate：回答“这张卡能不能用”；CreditAccount 回答“额度够不够”。
         Card card = cardRepository.findById(authorization.cardId()).orElse(null);
         if (card == null) {
@@ -178,6 +189,7 @@ public class AuthorizationService {
             return;
         }
 
+        // 决策阶段 3：执行风控。它可能访问 projection/Redis/外部风控，所以必须放在账户锁之前。
         // riskAssessmentService.assess() 放在账户锁之前：风控可能有计算/外部调用成本，
         // 不应该让同账户的其他 authorization 在锁上白等。
         // 如果先拿 account row lock 再等外部风控，慢调用会放大锁等待，热点账户容易排队超时。
@@ -187,6 +199,7 @@ public class AuthorizationService {
             return;
         }
 
+        // 决策阶段 4：最后才锁 CreditAccount row，串行化同账户额度检查与 reservedAmount 更新。
         // findByIdForUpdate() 对 credit_accounts 做 SELECT ... FOR UPDATE。
         // 这是额度并发控制核心：同一账户的请求在这里串行检查 availableCredit 并更新 reservedAmount。
         // 如果只普通 SELECT，两笔并发授权可能看到同一个 availableCredit，然后都批准，造成超额授权。
@@ -198,6 +211,7 @@ public class AuthorizationService {
             return;
         }
 
+        // 决策阶段 5：在锁内执行额度预占，并把 account 与 authorization 一起推进。
         // reserve() 是 domain behavior，不是 service 里的普通加减法。
         // CreditAccount aggregate 负责保证 reservedAmount <= creditLimit。
         CreditReservationResult reservation = account.reserve(authorization.requestedAmount());

@@ -47,8 +47,9 @@ public class RepaymentService {
     @Transactional
     public Repayment receive(ReceiveRepaymentCommand command) {
         Instant now = Instant.now(clock);
-        // 先确认 statement 存在并取得 immutable accountId，避免 repayment claim 先撞 FK
-        // 变成晦涩的数据库异常。余额和状态决策仍会在后面 FOR UPDATE 后重新校验。
+        // 阶段 1：先确认 statement 存在，取得 creditAccountId 快照。
+        // 这里不是最终状态判断；真正的金额/状态校验会在后面 SELECT ... FOR UPDATE 后重新做。
+        // 先查这一步是为了避免 repayment claim 先撞 FK，变成晦涩的数据库异常。
         Statement statementSnapshot = statementRepository.findById(command.statementId())
                 .orElseThrow(() -> new NoSuchElementException(
                         "statement not found: " + command.statementId()
@@ -61,6 +62,7 @@ public class RepaymentService {
                 now
         );
 
+        // 阶段 2：INSERT-first idempotency claim，争夺本还款幂等键的处理权。
         // INSERT-first idempotency claim：同一 Idempotency-Key 的并发请求只有一个 winner。
         // loser 会在 findByIdempotencyKeyForUpdate 等待 winner commit 后读取最终 RECEIVED 结果。
         // 如果没有这层 claim，客户端或银行回调重复提交会多次减少 postedBalance，造成 double repayment。
@@ -78,8 +80,12 @@ public class RepaymentService {
             );
         }
 
+        // 阶段 3：winner 才能把还款应用到 statement 和 credit account。
+        // 这里会锁 account/statement，推进 paidAmount/status/postedBalance，并注册 cache after-commit 失效。
         applyToStatementAndAccount(repayment, statementSnapshot, command.money(), now);
+        // 阶段 4：保存 repayment RECEIVED 状态。它与 account/statement 更新处于同一 transaction boundary。
         repaymentRepository.update(repayment);
+        // 阶段 5：把 repayment.received 事实追加到 Outbox。Kafka 发布由后台 worker 做，API 不等待 broker。
         publishDomainEvents(repayment);
         return repayment;
     }
@@ -106,6 +112,7 @@ public class RepaymentService {
             Money amount,
             Instant now
     ) {
+        // 应用阶段 1：按全项目锁顺序先锁 credit account，再锁 statement。
         // 全项目保持同一锁顺序：credit account row lock 先于 statement row lock。
         // 这样 repayment 不会和 StatementGenerationService.generate(account -> statement) 形成死锁。
         // 如果 repayment 反过来先锁 statement，再等 account，就可能和 statement batch 互相等待。
@@ -120,7 +127,10 @@ public class RepaymentService {
                         "statement not found: " + repayment.statementId()
                 ));
 
+        // 应用阶段 2：在锁内重新校验金额、币种、账单状态和账户归属。
+        // 不能只相信阶段 1 的 statementSnapshot，因为它不是锁定快照，期间可能已有其它还款推进状态。
         validateCanApply(statement, account, amount);
+        // 应用阶段 3：推进两个 aggregate 和 repayment 自身的业务状态。
         // 这两个 aggregate state changes 在同一个 transaction boundary 内提交：
         // account.postedBalance 释放额度，statement.paidAmount/status/version 推进账单生命周期。
         account.applyRepayment(amount);
@@ -134,6 +144,7 @@ public class RepaymentService {
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
+        // 应用阶段 4：只注册 after-commit cache invalidation，不在事务中直接写缓存。
         // 写路径不"顺手更新 cache"，而是更新 MySQL source of truth 后失效 cache。
         // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
         // 传整个 statement（而不是只传 id）：Statement.applyRepayment 已经推进正式 version，

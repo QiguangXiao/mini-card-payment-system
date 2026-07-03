@@ -48,14 +48,18 @@ public class OutboxRecoverer {
     @Transactional
     public void recoverStuckEvents() {
         Instant now = Instant.now(clock);
+        // 阶段 1：扫描 publish lease 已超时的 PROCESSING events。
+        // SKIP LOCKED 让多个 recoverer 实例不会互相等待或重复恢复同一行。
         List<OutboxEvent> events = outboxEventRepository.findStuckProcessingBatchForUpdate(
                 now,
                 properties.batchSize()
         );
         for (OutboxEvent event : events) {
+            // 阶段 2：把超时 PROCESSING 当作一次 publish failure，推进 retry/DEAD。
             // 超时发布按一次失败处理；超过 maxAttempts 后转 DEAD，避免无限打 Kafka。
             // 如果没有 recoverer，pod 在 PROCESSING 后宕机的事件会永久不可见，可靠发布链路会断。
             event.markProcessingTimedOut(now, properties.maxAttempts());
+            // 阶段 3：持久化恢复结果。回到 PENDING 的 event 会在下一轮 poll 中重新发布。
             outboxEventRepository.updateDeliveryState(event);
             log.warn(
                     "outbox_recovered eventId={} eventType={} attempts={} status={}",

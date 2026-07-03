@@ -34,7 +34,11 @@ public class BillingCycleScheduler {
             scheduler = "billingCycleTaskScheduler"
     )
     public void createDueStatementJobs() {
+        // 阶段 1：daily scheduler 在配置的账务时区醒来。
+        // 这里不直接生成所有账单，只触发一次"对账式补建"检查，避免 cron 漏跑后永远丢失某天的 job。
+        // 阶段 2：StatementCycleService 查询当前 due 的 billing cycles，并用 DB 唯一约束保证幂等创建。
         int shardCount = cycleService.createDueJobs();
+        // 阶段 3：只记录有实际创建的批次。没有 due cycle 是正常空跑，不需要刷日志。
         if (shardCount > 0) {
             log.info("billing_cycle_jobs_created shardCount={}", shardCount);
         }

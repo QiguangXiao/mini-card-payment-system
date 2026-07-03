@@ -39,15 +39,21 @@ public class DelayJobClaimer {
     @Transactional
     public List<DelayJob> claimDueJobs() {
         Instant now = Instant.now(clock);
+        // 阶段 1：用 FOR UPDATE SKIP LOCKED 扫描可执行 job。
+        // 多实例并发时，已被别的事务锁住的 row 会被跳过，而不是互相等待。
         List<DelayJob> jobs = delayJobRepository.findRunnableBatchForUpdate(
                 now,
                 properties.maxPerRun()
         );
         for (DelayJob job : jobs) {
+            // 阶段 2：为每条 job 生成本轮 lease owner token。
+            // token 是 WHO，nextAttemptAt 在 PROCESSING 下是 WHEN 到期；二者不能混用。
             // claim 后立刻 PENDING -> PROCESSING，commit 后其他 pod 就不会重复领取。
             // nextAttemptAt 在 PROCESSING 状态下临时充当 lease deadline；leaseToken 才是本轮 owner identity。
             // 如果不先写 PROCESSING lease，多实例 poller 会同时执行同一个 future business action。
             String leaseToken = UUID.randomUUID().toString();
+            // 阶段 3：写入 PROCESSING lease 并在本短事务内提交。
+            // worker 只收到提交后的快照，后续业务处理不会继续持有 delay_jobs row lock。
             job.markProcessing(now, properties.processingTimeoutSeconds(), leaseToken);
             delayJobRepository.updateExecutionState(job);
         }

@@ -57,14 +57,20 @@ public class DelayJobPoller {
             scheduler = "delayJobTaskScheduler"
     )
     public void pollDueJobs() {
+        // 阶段 1：短事务 claim 到期 job。这里只拿 lease，不执行业务动作。
+        // claim 提交后，其他 pod 会看到这些 job 已是 PROCESSING，不会重复领取。
         // scheduler 指向专用 ThreadPoolTaskScheduler。
         // 如果不指定，多个 @Scheduled 任务会共享默认调度线程，慢任务更容易互相拖住。
         List<DelayJob> jobs = claimer.claimDueJobs();
+        // 阶段 2：把已领取 job 提交给业务 worker pool。
+        // @Scheduled 线程只负责触发和提交，不能直接跑授权过期/自动还款这种可能持锁的业务。
         for (DelayJob job : jobs) {
             try {
+                // 阶段 3：worker 执行业务 handler，并在结束后自行 finalize DONE/FAILED。
                 // commit 后才 submit 给 worker pool；worker 会重新校验 PROCESSING lease 后再 finalize。
                 delayJobWorkerExecutor.execute(() -> worker.handleClaimedJob(job));
             } catch (TaskRejectedException exception) {
+                // 阶段 4：提交 worker pool 失败也要持久化失败状态。
                 // 如果应用正在 shutdown 或 worker queue 满了，不能让 job 永远卡在 PROCESSING。
                 worker.markRejectedForRetry(job, exception);
                 log.warn("delay_job_worker_rejected jobId={}", job.id(), exception);

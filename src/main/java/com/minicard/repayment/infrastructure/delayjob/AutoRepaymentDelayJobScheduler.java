@@ -44,12 +44,17 @@ public class AutoRepaymentDelayJobScheduler implements StatementDueJobScheduler 
      */
     @Override
     public void scheduleAutoRepayment(Statement statement) {
+        // 阶段 1：把 statement dueDate 转成日本账务日的执行时刻。
+        // dueDate 是日本支払日；如果误用 UTC 零点，实际会变成日本时间早上 09:00 才触发。
         Instant scheduledAt = statement.dueDate().atStartOfDay(JAPAN_BILLING_ZONE).toInstant();
+        // 阶段 2：记录 DelayJob row 的创建时间，使用 Clock 让测试可以稳定断言。
         Instant now = Instant.now(clock);
 
+        // 阶段 3：写入 AUTO_REPAYMENT DelayJob。
         // DelayJob 与 statement 生成在同一个 MySQL transaction boundary 内提交。
         // 如果 statement rollback，自动扣款计划也 rollback；如果重试生成同一期账单，
         // unique(job_type, aggregate_type, aggregate_id) 保证一个 statement 只有一个扣款计划。
+        // 后台 DelayJob poller 到 dueDate 后 claim 这条 row，再调用 repayment use case 执行扣款。
         delayJobRepository.insertIfAbsent(DelayJob.pending(
                 UUID.randomUUID(),
                 DelayJobType.AUTO_REPAYMENT,

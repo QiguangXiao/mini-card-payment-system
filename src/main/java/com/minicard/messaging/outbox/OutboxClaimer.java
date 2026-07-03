@@ -39,15 +39,19 @@ public class OutboxClaimer {
     @Transactional
     public List<OutboxEvent> claimPublishableEvents() {
         Instant now = Instant.now(clock);
+        // 阶段 1：用 FOR UPDATE SKIP LOCKED 领取 due 的 PENDING/FAILED event。
+        // 多个 publisher 实例会自然分摊不同 row，不会同时发布同一条消息。
         // findPublishableBatchForUpdate 在 SQL 层使用 FOR UPDATE SKIP LOCKED。
         List<OutboxEvent> events = outboxEventRepository.findPublishableBatchForUpdate(
                 now,
                 properties.batchSize()
         );
         for (OutboxEvent event : events) {
+            // 阶段 2：生成本轮 publish lease owner token。
             // 每次 claim 生成新的 lease token：它回答"本轮 owner 是谁"，而 nextAttemptAt 只回答"何时超时"。
             // 如果旧 worker 在 lease 过期后才回来，finalize 会因 token 不匹配而放弃覆盖。
             String leaseToken = UUID.randomUUID().toString();
+            // 阶段 3：PENDING/FAILED -> PROCESSING，在短事务内提交。
             // PROCESSING lease 先 commit，worker 才开始等 Kafka ack。
             // 如果 worker 宕机，recoverer 会在 lease deadline 后把 event 放回 retry。
             // 如果 claim 事务一直包着 Kafka publish，MySQL row lock 会被 broker latency 放大。

@@ -61,16 +61,21 @@ public class StatementJobDispatcher {
             scheduler = "statementJobTaskScheduler"
     )
     public void dispatch() {
+        // 阶段 1：在短事务里 claim 可执行分片，只写 PROCESSING lease，不生成账单。
         List<StatementJob> jobs = transactionOperations.execute(status -> claimJobs());
         if (jobs == null || jobs.isEmpty()) {
             return;
         }
 
+        // 阶段 2：claim commit 后，把分片交给 worker pool。
+        // @Scheduled 线程只负责触发，不直接跑每个账户的出账事务。
         for (StatementJob job : jobs) {
             try {
+                // 阶段 3：worker 执行账户级出账，并在结束后自己 finalize DONE/FAILED。
                 // claim commit 后才交给 worker pool；生成账单时不会继续持有 job row lock。
                 statementJobWorkerExecutor.execute(() -> handleClaimedJob(job));
             } catch (TaskRejectedException exception) {
+                // 阶段 4：worker pool 拒绝也要持久化失败状态，避免 job 卡在 PROCESSING。
                 markFailed(job, null, "statement job worker pool rejected job", exception);
                 log.warn("statement_job_worker_rejected jobId={}", job.id(), exception);
             }
@@ -87,11 +92,13 @@ public class StatementJobDispatcher {
     public void recoverStuckJobs() {
         transactionOperations.executeWithoutResult(status -> {
             Instant now = Instant.now(clock);
+            // 阶段 1：扫描 PROCESSING lease 已过期的分片任务。
             List<StatementJob> jobs = jobRepository.findStuckProcessingBatchForUpdate(
                     now,
                     properties.jobs().maxPerRun()
             );
             for (StatementJob job : jobs) {
+                // 阶段 2：把 lease 超时视为一次失败，推进 retry/DEAD。
                 // PROCESSING 是 lease，不是永久拥有权。worker 宕机后必须放回 PENDING 或 DEAD。
                 // 如果没有 recover，账单分片可能永久卡在 PROCESSING，本期出账永远无法完成。
                 job.markFailed(
@@ -100,6 +107,7 @@ public class StatementJobDispatcher {
                         now,
                         properties.jobs().maxAttempts()
                 );
+                // 阶段 3：持久化恢复结果；回到 PENDING 的分片下一轮会重新 claim。
                 jobRepository.updateExecutionState(job);
                 log.warn(
                         "statement_job_recovered jobId={} attempts={} status={}",
@@ -119,11 +127,14 @@ public class StatementJobDispatcher {
      */
     private List<StatementJob> claimJobs() {
         Instant now = Instant.now(clock);
+        // 阶段 1：用 FOR UPDATE SKIP LOCKED 领取 due 的 PENDING/FAILED 分片。
+        // 多实例 dispatcher 会自然分摊不同分片，不会互相等待同一批 row。
         List<StatementJob> jobs = jobRepository.findClaimableBatchForUpdate(
                 now,
                 properties.jobs().maxPerRun()
         );
         for (StatementJob job : jobs) {
+            // 阶段 2：PENDING/FAILED -> PROCESSING，并写入本 dispatcher 的 claim token。
             // PENDING -> PROCESSING 在短事务内提交；commit 后 worker 才真正生成账单。
             // 如果 claim 和业务处理放进一个大事务，上千账户的出账会放大 job row lock 时间。
             job.markProcessing(workerId, now, properties.jobs().processingTimeoutSeconds());

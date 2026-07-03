@@ -51,17 +51,22 @@ public class PostingService {
     @Transactional
     public CardTransaction post(PostPresentmentCommand command) {
         Instant now = Instant.now(clock);
+        // 阶段 1：先锁 authorization row。presentment 必须基于一笔仍可入账的 APPROVED authorization。
+        // FOR UPDATE 让过期释放、重复 presentment、人工修正等路径不会同时改同一笔授权状态。
         Authorization authorization = authorizationRepository
                 .findByIdForUpdate(command.authorizationId())
                 .orElseThrow(() -> new NoSuchElementException(
                         "authorization not found: " + command.authorizationId()
                 ));
 
+        // 阶段 2：读取 Card，拿到 creditAccountId。Card 本身不在这里改状态，所以不需要 row lock。
         Card card = cardRepository.findById(authorization.cardId())
                 .orElseThrow(() -> new PresentmentRejectedException(
                         "posted authorization references missing card " + authorization.cardId()
                 ));
 
+        // 阶段 3：用 networkTransactionId 查重。它是 presentment 的幂等键。
+        // 如果已存在，后续不再锁 account，也不再移动余额，避免同一请款重复入账。
         Optional<CardTransaction> existing = transactionRepository
                 .findByNetworkTransactionIdForUpdate(command.networkTransactionId());
         if (existing.isPresent()) {
@@ -70,6 +75,8 @@ public class PostingService {
             return resolveExistingPresentment(command, existing.get());
         }
 
+        // 阶段 4：校验 authorization 状态/金额/过期时间，然后锁 credit account。
+        // 锁顺序固定为 authorization -> account -> transaction claim，和 statement batch 保持一致，降低死锁风险。
         validateAuthorizationCanBePosted(authorization, command.money(), now);
         CreditAccount account = creditAccountRepository.findByIdForUpdate(card.creditAccountId())
                 .orElseThrow(() -> new PresentmentRejectedException(
@@ -77,6 +84,8 @@ public class PostingService {
                                 + card.creditAccountId()
                 ));
 
+        // 阶段 5：创建 PENDING CardTransaction，并尝试 INSERT-first claim。
+        // pending 先代表"这笔网络请款正在处理"，claim 成功后才会在同事务内推进为 POSTED。
         CardTransaction pending = CardTransaction.pending(
                 command.networkTransactionId(),
                 authorization.id(),
@@ -104,6 +113,7 @@ public class PostingService {
         // claim 成功：pending 行由本事务独占持有，直接用内存里的 aggregate，
         // 省掉一次多余的 SELECT FOR UPDATE 和对自己刚插入行恒为真的同一性校验。
 
+        // 阶段 6：同一事务内移动余额并推进三个状态。
         // 同一个 transaction 内完成三件事：
         // 1. reservedAmount -> postedBalance，2. Authorization APPROVED -> POSTED，
         // 3. CardTransaction PENDING -> POSTED。任一步失败都会 rollback。
@@ -115,6 +125,7 @@ public class PostingService {
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
         transactionRepository.update(pending);
+        // 阶段 7：发布两个不同语义的 domain events 到 Outbox。
         // 两个 aggregate 都发生了状态转换，但语义不同：
         // Authorization event 表达授权生命周期结束；CardTransaction event 表达用户交易已入账。
         // 两类 Outbox rows 仍和本次 posting transaction 一起提交，避免消息与状态不一致。

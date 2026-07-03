@@ -51,6 +51,7 @@ public class StatementGenerationService {
     public Statement generate(GenerateStatementCommand command) {
         Instant now = Instant.now(clock);
 
+        // 阶段 1：锁 credit account，作为账单生成和 posting 的共同并发门。
         // 账户 row lock 是账单生成的并发门(concurrency gate)。
         // PostingService 也会先锁同一个 credit account，再创建/更新 CardTransaction，
         // 因此 statement 生成期间不会漏掉正在入账的交易，也不会和 posting 产生锁顺序死锁。
@@ -61,6 +62,8 @@ public class StatementGenerationService {
                         "credit account not found: " + command.creditAccountId()
                 ));
 
+        // 阶段 2：用 (creditAccountId, periodStart, periodEnd) 做账单幂等查询。
+        // 命中已有账单就直接返回，不再重复扫描交易或插入 statement_lines。
         // 一个 credit account 在同一 billing cycle 只能有一张账单。
         // 这个自然键就是 statement generation 的 idempotency key。
         // 如果没有 cycle-level idempotency，batch retry 可能给同一账户同一期生成两张账单。
@@ -94,6 +97,8 @@ public class StatementGenerationService {
             CreditAccount account,
             Instant now
     ) {
+        // 创建阶段 1：先检查 posted transaction 是否已具备 ledger entry。
+        // Statement line 需要 ledger_entry_id 做审计链路；缺 projection 时应 retry，而不是生成不完整账单。
         if (billingRepository.existsUnbilledPostedTransactionMissingLedger(
                 account.id(),
                 periodStartInstant(command.periodStart()),
@@ -106,6 +111,8 @@ public class StatementGenerationService {
             );
         }
 
+        // 创建阶段 2：锁定本期可出账交易快照。
+        // FOR UPDATE 防止这些交易在本事务完成前被另一轮 statement job 同时归账。
         List<StatementLineSource> lineSources = billingRepository
                 .findBillableLineSourcesForUpdate(
                         account.id(),
@@ -120,6 +127,8 @@ public class StatementGenerationService {
             );
         }
 
+        // 创建阶段 3：计算账单金额，构造 CLOSED statement 和不可变 statement lines。
+        // lineSources 是本事务锁定后的快照；Statement.close 会把这些来源转成账单行。
         Money totalAmount = totalAmount(lineSources);
         Statement statement = Statement.close(
                 account.id(),
@@ -131,6 +140,7 @@ public class StatementGenerationService {
                 now
         );
 
+        // 创建阶段 4：插入 statements/statement_lines，并用自然唯一键兜底幂等。
         boolean inserted = statementRepository.insert(statement);
         if (!inserted) {
             // 理论上账户 row lock 已经串行化同账户同周期生成；这里是 DB unique constraint 的
@@ -146,13 +156,16 @@ public class StatementGenerationService {
                     ));
         }
 
+        // 创建阶段 5：把本期交易标记为 BILLED，防止后续批次再次生成相同 statement line。
         // CardTransaction 是用户可见消费明细；StatementLine 是账单快照。
         // 同一 transaction boundary 内把交易标记为 BILLED，防止下一轮 job 重复生成 line。
         billingRepository.markCardTransactionsBilled(statement.id(), lineSources, now);
+        // 创建阶段 6：创建到期自动还款 DelayJob，与账单同事务提交。
         // 自动扣款计划是 future business action，使用 DelayJob 而不是 Outbox。
         // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
         // 如果这一步不和 statement 同事务提交，就可能出现账单已生成但没有任何到期扣款计划。
         dueJobScheduler.scheduleAutoRepayment(statement);
+        // 创建阶段 7：追加 statement.closed Outbox event。Kafka publish 仍由后台 Outbox worker 完成。
         // statement.closed 的 Outbox row 和账单/明细/BILLED 标记/扣款计划在同一事务内提交，
         // 避免“账单已生成但通知消息丢失”或“消息已发但账单回滚”的不一致。Kafka 发布由后台 worker 处理，
         // 所以账单生成批处理不等待 broker。只有这条新插入成功的路径才发事件；幂等命中已有账单的分支不会到这里。

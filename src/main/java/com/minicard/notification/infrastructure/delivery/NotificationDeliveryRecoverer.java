@@ -44,12 +44,16 @@ public class NotificationDeliveryRecoverer {
     @Transactional
     public void recoverStuckDeliveries() {
         Instant now = Instant.now(clock);
+        // 阶段 1：扫描 PROCESSING lease 已过期的 delivery，并用 SKIP LOCKED 避免多实例重复恢复。
         List<NotificationDelivery> deliveries = deliveryRepository.findStuckProcessingBatchForUpdate(
                 now,
                 properties.batchSize()
         );
         for (NotificationDelivery delivery : deliveries) {
+            // 阶段 2：把超时 PROCESSING 当作一次投递失败，推进 retry/DEAD。
+            // provider 调用可能已经卡死或 worker 已宕机；状态机必须把 row 放回可见队列。
             delivery.markProcessingTimedOut(now, properties.maxAttempts());
+            // 阶段 3：持久化恢复结果。回到 PENDING 的 delivery 会在下一轮 poll 中重新领取。
             deliveryRepository.updateDeliveryState(delivery);
             log.warn(
                     "notification_delivery_recovered deliveryId={} channel={} attempts={} status={}",

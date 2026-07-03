@@ -48,7 +48,10 @@ public class StatementCycleService {
      */
     @Transactional
     public int createDueJobs() {
+        // 阶段 1：按账务时区取今天，而不是 JVM 默认时区。
+        // 账单关账/还款日是业务日期；时区不明确会导致跨日边界错建或漏建。
         LocalDate today = LocalDate.now(clock.withZone(batchZone()));
+        // 阶段 2：做 desired-state reconciliation。缺失周期补建，已存在周期跳过。
         return reconcileDueCycles(today);
     }
 
@@ -66,15 +69,19 @@ public class StatementCycleService {
      */
     @Transactional
     public int createDueJobs(LocalDate runDate) {
+        // 阶段 1：手工/测试入口按 runDate 的前一天判断是否是 close date。
         LocalDate periodEnd = runDate.minusDays(1);
         if (!isCloseDate(periodEnd)) {
             return 0;
         }
 
+        // 阶段 2：先用 cycle 唯一键判断是否已规划过，减少重复计算。
+        // 幂等最终仍靠 INSERT IGNORE + 唯一键兜底，多实例同时进来也不会重复创建。
         LocalDate periodStart = periodStartFor(periodEnd);
         if (jobRepository.existsForCycle(periodStart, periodEnd)) {
             return 0;
         }
+        // 阶段 3：确定账期和 due date 后，落成 sharded statement_jobs。
         BillingCycle cycle = billingCycle(periodEnd);
         return createJobsForCycle(cycle);
     }
@@ -89,10 +96,13 @@ public class StatementCycleService {
     private int reconcileDueCycles(LocalDate today) {
         int created = 0;
         LocalDate latestClosedDate = today.minusDays(1);
+        // 阶段 1：回看最近 N 个已过去 close dates。
+        // 这不是"只看昨天"的 edge-triggered cron，而是能补应用停机/cron 漏跑的 level-triggered scan。
         for (LocalDate closeDate : recentCloseDatesOnOrBefore(
                 latestClosedDate,
                 properties.batch().reconciliationLookbackCycles()
         )) {
+            // 阶段 2：每个 close date 独立判断是否已有分片。
             LocalDate periodStart = periodStartFor(closeDate);
             if (jobRepository.existsForCycle(periodStart, closeDate)) {
                 log.debug(
@@ -102,6 +112,7 @@ public class StatementCycleService {
                 );
                 continue;
             }
+            // 阶段 3：缺失周期立即补建；同一事务内由唯一键保证重复触发安全。
             BillingCycle cycle = billingCycle(closeDate);
             created += createJobsForCycle(cycle);
         }
@@ -115,12 +126,16 @@ public class StatementCycleService {
      * 在各自已打开的 job creation 事务中调用。</p>
      */
     private int createJobsForCycle(BillingCycle cycle) {
+        // 阶段 1：把业务账期日期转成查询交易流水的时间窗口。
+        // periodEndExclusive 用次日零点，避免在 SQL 里处理 23:59:59.999999 这种精度边界。
         Instant periodStartInclusive = cycle.periodStart().atStartOfDay(batchZone()).toInstant();
         Instant periodEndExclusive = cycle.periodEnd().plusDays(1).atStartOfDay(batchZone()).toInstant();
         long accountCount = billingRepository.countBillableAccounts(periodStartInclusive, periodEndExclusive);
+        // 阶段 2：根据待出账账户量决定分片数；没有账户也创建 1 个空分片保留生命周期。
         int shardCount = shardCount(accountCount);
         Instant now = Instant.now(clock);
 
+        // 阶段 3：生成本期所有 PENDING statement_jobs。
         // 所有分片在一个事务内 INSERT IGNORE：要么整批写入，要么因唯一键幂等跳过，不会留下半套分片。
         List<StatementJob> jobs = IntStream.range(0, shardCount)
                 .mapToObj(shardNo -> StatementJob.pending(

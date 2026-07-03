@@ -55,12 +55,18 @@ public class OutboxPoller {
             scheduler = "outboxTaskScheduler"
     )
     public void pollPublishableEvents() {
+        // 阶段 1：短事务 claim 可发布 Outbox events。这里只写 PROCESSING lease，不发 Kafka。
+        // 可靠发布的正确性来自 DB row lease + worker finalize，而不是 @Scheduled 线程自己干完所有事。
         List<OutboxEvent> events = claimer.claimPublishableEvents();
+        // 阶段 2：把已领取 event 提交给 Kafka publish worker pool。
+        // poller 线程保持很薄，避免 broker latency 或 worker backlog 拖住下一次扫描。
         for (OutboxEvent event : events) {
             try {
+                // 阶段 3：worker 等 Kafka ack，并自行 finalize 为 PUBLISHED 或 retry/DEAD。
                 // claim commit 后才提交 worker。worker 会在 finalize 前重新校验 PROCESSING lease。
                 outboxWorkerExecutor.execute(() -> worker.publishClaimedEvent(event));
             } catch (TaskRejectedException exception) {
+                // 阶段 4：worker pool 拒绝时立即记录失败/退避，不等 recoverer 超时兜底。
                 worker.markRejectedForRetry(event, exception);
                 log.warn("outbox_worker_rejected eventId={}", event.id(), exception);
             }
