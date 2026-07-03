@@ -1,6 +1,5 @@
 package com.minicard.messaging.kafka;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 
@@ -10,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicard.messaging.event.IntegrationEvent;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.header.Header;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,8 +18,18 @@ import org.springframework.stereotype.Component;
  * contract validation, JSON envelope, メッセージ読取(メッセージよみとり),
  * 契約検証(けいやくけんしょう)。</p>
  *
- * <p>它只处理 transport contract：JSON envelope、header 和基础字段校验。
- * 具体 consumer 自己根据 eventType 读取 JsonNode payload，避免为每种消息创建 payload class。</p>
+ * <p>契约分工：<b>consumer correctness 只依赖 self-describing envelope</b>——永远解析 body，
+ * 用 body 的 eventType 决定 dispatch。header 是纯 observability 元数据(kcat/DLT/日志排查
+ * 不解析 JSON 就能看到消息身份)，不参与 correctness，所以这里既不读 header，
+ * 也不做 header/body 一致性校验；缺 header 的手工 replay(console producer)照常可消费。</p>
+ *
+ * <p>曾考虑用 eventType header 在解析前跳过无关消息（省 Jackson 解析；envelope 损坏的
+ * 无关消息不进本 consumer 的 DLT），被否决：感兴趣类型要在 hint 参数和 body 分支两处维护；
+ * 且引入"信任 header"语义——header 说谎会错跳，而被跳过的消息在 consumer 侧不可检出。
+ * 在单一 outbox producer、消息很小、topic 已按业务拆分的前提下，这点收益买不回复杂度。
+ * 另外 Kafka fetch 是整批 record(含 value)拉回，header 过滤本来就省不了网络 IO。</p>
+ *
+ * <p>具体 consumer 自己根据 eventType 读取 JsonNode payload，避免为每种消息创建 payload class。</p>
  */
 @Component
 // @RequiredArgsConstructor 只为 final fields 生成 constructor，适合无状态 infrastructure component。
@@ -40,7 +48,7 @@ public class IntegrationEventReader {
             IntegrationEvent event = objectMapper.readValue(record.value(), IntegrationEvent.class);
             // 集中 validate transport contract，consumer 就能专注业务字段。
             // 如果每个 listener 自己解析/校验，contract failure 会变成不一致的异常和重试行为。
-            validate(record, event);
+            validate(event);
             return event;
         } catch (JsonProcessingException exception) {
             // JSON 格式错误是永久 contract failure，重试同一消息也不会成功。
@@ -49,12 +57,9 @@ public class IntegrationEventReader {
     }
 
     /**
-     * 校验 envelope 字段和 header 一致性。
+     * 校验 envelope 自身的必填字段；header 不参与 correctness，所以这里不读它。
      */
-    private void validate(
-            ConsumerRecord<String, String> record,
-            IntegrationEvent event
-    ) {
+    private void validate(IntegrationEvent event) {
         if (event.eventId() == null || event.payload() == null || event.payload().isNull()) {
             // 缺 eventId/payload 时无法做 idempotency 和业务解析，必须拒绝。
             throw new EventContractException("eventId and payload are required");
@@ -64,24 +69,6 @@ public class IntegrationEventReader {
         }
         if (event.eventVersion() < 1) {
             throw new EventContractException("eventVersion must be positive");
-        }
-
-        Header eventIdHeader = record.headers().lastHeader("eventId");
-        if (eventIdHeader == null
-                || !event.eventId().toString().equals(
-                        new String(eventIdHeader.value(), StandardCharsets.UTF_8)
-                )) {
-            // header/payload 不一致说明消息契约损坏，不能进入业务 consumer。
-            throw new EventContractException("eventId header does not match payload");
-        }
-
-        Header eventTypeHeader = record.headers().lastHeader("eventType");
-        if (eventTypeHeader != null
-                && !event.eventType().equals(
-                        new String(eventTypeHeader.value(), StandardCharsets.UTF_8)
-                )) {
-            // eventType header 用于 consumer 快速过滤，必须和 payload 保持一致。
-            throw new EventContractException("eventType header does not match payload");
         }
     }
 

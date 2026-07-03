@@ -67,6 +67,30 @@ class CardTransactionLedgerListenerTest {
         verifyNoInteractions(service);
     }
 
+    @Test
+    void processesHeaderlessReplayedMessage() throws Exception {
+        // header 是纯 observability 元数据，correctness 只依赖 self-describing envelope：
+        // console-producer 手工 replay 的消息没有 header，也必须正常入账。
+        RecordLedgerEntryService service = mock(RecordLedgerEntryService.class);
+        CardTransactionLedgerListener listener = listener(service);
+        UUID eventId = UUID.randomUUID();
+
+        ConsumerRecord<String, String> record = record(
+                eventId,
+                "card_transaction.posted",
+                payload(UUID.randomUUID(), UUID.randomUUID(), "postedAt")
+        );
+        record.headers().remove("eventId");
+        record.headers().remove("eventType");
+
+        listener.onCardTransactionEvent(record);
+
+        ArgumentCaptor<RecordLedgerEntryCommand> command =
+                ArgumentCaptor.forClass(RecordLedgerEntryCommand.class);
+        verify(service).record(command.capture());
+        assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
+    }
+
     private CardTransactionLedgerListener listener(RecordLedgerEntryService service) {
         return new CardTransactionLedgerListener(
                 new IntegrationEventReader(objectMapper),

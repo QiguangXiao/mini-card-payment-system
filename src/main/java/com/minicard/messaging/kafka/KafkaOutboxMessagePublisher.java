@@ -43,8 +43,10 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
                 event.partitionKey(),
                 event.payload()
         );
-        // Headers 支持 routing、observability 和 schema-version check，
-        // 消费者无需先反序列化 JSON payload 就能做基础判断。
+        // Headers 是纯 observability 元数据：kcat/DLT/日志排查时不解析 JSON 就能看到消息身份。
+        // consumer correctness 只依赖 body envelope，不读 header——缺 header 的手工 replay 照常可消费。
+        // header 与 envelope 同源仍由测试钉住(见 KafkaOutboxMessagePublisherTest)：
+        // header 说谎不影响 correctness，但会在 DLT/线上排查时误导 on-call。
         addHeader(record, "eventId", event.id().toString());
         addHeader(record, "eventType", event.eventType());
         addHeader(record, "eventVersion", Integer.toString(event.eventVersion()));

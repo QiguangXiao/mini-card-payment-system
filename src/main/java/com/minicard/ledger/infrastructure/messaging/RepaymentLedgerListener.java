@@ -38,6 +38,8 @@ public class RepaymentLedgerListener {
             containerFactory = "ledgerKafkaListenerContainerFactory"
     )
     public void onRepaymentEvent(ConsumerRecord<String, String> record) {
+        // consumer correctness 只依赖 self-describing envelope：永远解析 body，
+        // 用 body 的 eventType 判断是否感兴趣；无关类型直接跳过，不进入 retry/DLT。
         IntegrationEvent event = eventReader.read(record);
         if (!REPAYMENT_RECEIVED.equals(event.eventType())) {
             return;

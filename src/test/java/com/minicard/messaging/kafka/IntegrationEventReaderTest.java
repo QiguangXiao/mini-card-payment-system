@@ -60,17 +60,17 @@ class IntegrationEventReaderTest {
     }
 
     @Test
-    void rejectsMismatchedEventTypeHeader() throws Exception {
+    void readsPayloadWithoutAnyHeaders() throws Exception {
+        // envelope 是 self-describing 的：console-producer 手工 replay 的消息没有 header，
+        // 也必须能被正常消费。如果 read() 强依赖 header，self-describing envelope 就名存实亡。
         IntegrationEvent event = event("authorization.approved", 1);
-        ConsumerRecord<String, String> record = record(
-                objectMapper.writeValueAsString(event),
-                event.eventId(),
-                "authorization.declined"
-        );
+        ConsumerRecord<String, String> record =
+                recordWithoutHeaders(objectMapper.writeValueAsString(event));
 
-        assertThatThrownBy(() -> reader.read(record))
-                .isInstanceOf(EventContractException.class)
-                .hasMessage("eventType header does not match payload");
+        IntegrationEvent parsed = reader.read(record);
+
+        assertThat(parsed.eventId()).isEqualTo(event.eventId());
+        assertThat(parsed.eventType()).isEqualTo("authorization.approved");
     }
 
     @Test
@@ -105,13 +105,7 @@ class IntegrationEventReaderTest {
             UUID eventId,
             String eventType
     ) {
-        ConsumerRecord<String, String> record = new ConsumerRecord<>(
-                "mini-card.authorization-events.v1",
-                0,
-                0,
-                "authorization-id",
-                value
-        );
+        ConsumerRecord<String, String> record = recordWithoutHeaders(value);
         record.headers().add(new RecordHeader(
                 "eventId",
                 eventId.toString().getBytes(StandardCharsets.UTF_8)
@@ -121,5 +115,15 @@ class IntegrationEventReaderTest {
                 eventType.getBytes(StandardCharsets.UTF_8)
         ));
         return record;
+    }
+
+    private ConsumerRecord<String, String> recordWithoutHeaders(String value) {
+        return new ConsumerRecord<>(
+                "mini-card.authorization-events.v1",
+                0,
+                0,
+                "authorization-id",
+                value
+        );
     }
 }

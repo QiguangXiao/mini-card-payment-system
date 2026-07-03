@@ -65,6 +65,30 @@ class AuthorizationRiskFeatureListenerTest {
     }
 
     @Test
+    void processesHeaderlessReplayedMessage() throws Exception {
+        // header 是纯 observability 元数据，correctness 只依赖 self-describing envelope：
+        // 手工 replay 的消息没有 header，approved 事件也照常投影。
+        RiskFeatureProjectionService service = mock(RiskFeatureProjectionService.class);
+        AuthorizationRiskFeatureListener listener = listener(service);
+        UUID eventId = UUID.randomUUID();
+
+        ConsumerRecord<String, String> record = record(
+                eventId,
+                "authorization.approved",
+                payload("approvedAt")
+        );
+        record.headers().remove("eventId");
+        record.headers().remove("eventType");
+
+        listener.onAuthorizationDecision(record);
+
+        ArgumentCaptor<ProjectRiskFeatureCommand> command =
+                ArgumentCaptor.forClass(ProjectRiskFeatureCommand.class);
+        verify(service).project(command.capture());
+        assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
+    }
+
+    @Test
     void genuineRiskDeclineProjectsDeclinedFeature() throws Exception {
         RiskFeatureProjectionService service = mock(RiskFeatureProjectionService.class);
         AuthorizationRiskFeatureListener listener = listener(service);
