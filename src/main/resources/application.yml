@@ -3,11 +3,17 @@ spring:
     # application name 会进入 Actuator/Micrometer tags，生产排查时用于区分服务。
     name: mini-card-payment-system
   datasource:
+    # 这里就是本项目的 MySQL 连接配置，不再单独发明 mysql: 子树。
+    # Spring Boot 会读取 spring.datasource.* 创建 DataSource/Hikari pool；
+    # 如果改成自定义 mysql.*，除非再写 @ConfigurationProperties + DataSource bean，
+    # 否则 MyBatis、Liquibase、transaction boundary 都不会自动接上这组配置。
     # ${ENV:default} 是 Spring Boot relaxed binding 的常见写法：
     # 本地有默认值，CI/生产可用环境变量覆盖，不需要改代码或提交敏感配置。
     url: ${DB_URL:jdbc:mysql://localhost:3306/mini_card}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:rootpassword}
+    # driver-class-name 对 MySQL 8 通常可由 URL 推断；这里显式写出来，是为了让学习者一眼看出
+    # 当前 persistence source of truth 是 MySQL，而不是 H2/PostgreSQL/内存库。
     driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
@@ -17,23 +23,41 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
   kafka:
+    # spring.kafka.* 是 Kafka client 的技术配置：连哪个 broker、producer 怎么确认、consumer 怎么提交 offset。
+    # 业务上的 topic 名和 consumer group 放在下面的 messaging.*，避免把"传输机制"和"事件契约"混在一起。
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
-      # Broker acknowledgements and idempotent producer retries reduce duplicate
-      # writes inside Kafka, but consumers must still deduplicate Outbox events.
+      # interview 重点：acks=all 要求 leader 等待 in-sync replicas 确认后才算发送成功。
+      # 它提高 durable write 的可靠性，但不是端到端 exactly-once：DB transaction 已提交、Kafka 发送失败时，
+      # 仍然要靠 Outbox 表 + retry/recoverer 补发。
       acks: all
       properties:
+        # idempotent producer 让同一个 producer session 的 retry 不会因为网络抖动而在 Kafka 内写出重复 batch。
+        # 反事实：如果关闭它，producer 发出消息但 ack 丢了，重试可能让 broker 接收两份相同 record。
+        # 边界：它不解决 consumer 重复消费，也不解决 MySQL 和 Kafka 之间没有原子事务的问题；
+        # 本项目仍然用 Inbox 和业务唯一键做 consumer-side idempotency。
         enable.idempotence: true
+        # 开启 idempotence 时 Kafka 要求 in-flight request 不能超过 5。
+        # 这个值保留 producer pipeline 吞吐，同时避免 retry 乱序破坏 per-partition ordering guarantee。
         max.in.flight.requests.per.connection: 5
+        # delivery.timeout.ms 是一次 send 从入队到最终成功/失败的总上限。
+        # 它必须大于 request.timeout.ms 和内部 retry backoff，否则还没等 broker 恢复就过早失败。
         delivery.timeout.ms: 10000
+        # request.timeout.ms 是等待单次 broker 响应的上限。
+        # 设置得太长会让 Outbox worker 线程被慢 broker 钉住；太短会制造不必要的 retry。
         request.timeout.ms: 3000
     consumer:
-      # Offsets are committed only after a listener returns successfully.
-      # Database side effects remain idempotent because Kafka and MySQL cannot
-      # participate in one atomic local transaction.
+      # 关闭 auto commit 后，offset 只在 listener 成功返回后提交。
+      # 反事实：如果自动提交，consumer 可能先提交 offset，随后写 MySQL 失败，消息就不会被再次投递。
+      # 这仍然是 at-least-once，不是 exactly-once：listener 成功写库但提交 offset 前崩溃时，Kafka 会重放；
+      # 所以 Inbox claim 和业务唯一约束必须能安全处理 duplicate delivery。
       enable-auto-commit: false
+      # earliest 适合本地学习和新 consumer group：group 第一次启动时从 topic 开头读，方便重放演示。
+      # 生产中是否用 earliest 要结合 retention、replay 策略和是否能承受历史消息重放来决定。
       auto-offset-reset: earliest
     listener:
+      # record ack 表示每条消息处理成功后提交 offset。
+      # 它比 batch ack 更容易定位坏消息，也更贴合本项目"每个 event 一次 Inbox 幂等处理"的教学目标。
       ack-mode: record
   cloud:
     openfeign:
@@ -94,15 +118,24 @@ mybatis:
   mapper-locations: classpath:mappers/**/*.xml
 
 messaging:
+  # messaging.* 是本项目自己的 typed configuration，不是 Spring Boot 内建前缀。
+  # 它描述"本系统有哪些 integration event channel"，由 KafkaTopicsProperties 和 @KafkaListener 占位符使用。
+  # 这样将来即使 transport 从 Kafka 换成别的消息系统，业务 topic/group 命名仍然有一个清晰入口。
   topics:
+    # topic 按业务事实拆开，而不是所有事件塞进一个大 topic：
+    # producer/consumer 可以按生命周期订阅，DLT 和 replay 范围也更小。
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
     statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
+    # DLT(dead-letter topic) 按 consumer 职责拆开。
+    # Notification 坏消息不应该阻塞 Risk projection 或 Ledger projection 的排查/重放。
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
     ledger-dead-letter: mini-card.ledger.dlt.v1
   consumers:
+    # group-id 表示同一个 bounded context 的一组实例共同消费。
+    # 同一 topic 可以被 notification/risk/ledger 多个 group 独立消费，互不抢 offset。
     notification:
       group-id: mini-card-notification-v1
     risk-feature:
@@ -114,11 +147,19 @@ messaging:
 
 outbox:
   publisher:
+    # Outbox 是 reliable event publication：业务事务先把 event 写入 MySQL outbox_events，
+    # 后台 publisher 再异步发 Kafka。它解决"DB 已提交但消息没发出去"的 partial failure。
     enabled: true
+    # fixed-delay-ms 控制 poller 扫描 NEW/FAILED event 的频率；不是业务 SLA。
+    # 真正的 correctness 来自 row lock / lease / retry / idempotency，而不是扫得越快越安全。
     fixed-delay-ms: 1000
+    # recoverer 专门捞超时的 PROCESSING event。
+    # 如果 worker 在 Kafka ack 前后崩溃，没有这条恢复路径，event 会永远卡在 PROCESSING。
     recovery-fixed-delay-ms: 5000
     batch-size: 50
     send-timeout-ms: 5000
+    # PROCESSING lease 必须覆盖一次正常 publish + ack + finalize。
+    # 太短会让 recoverer 抢走仍在发送中的 event；太长会拖慢真实宕机后的恢复。
     processing-timeout-seconds: 30
     max-attempts: 10
     worker-pool-size: 4
@@ -126,6 +167,9 @@ outbox:
 
 delay-jobs:
   scheduler:
+    # DelayJob 是 future business action scheduling：例如 authorization expiry、auto repayment。
+    # 它和 Outbox 都有 poll/claim/worker/recoverer，但语义不同：
+    # Outbox 发"已经发生的事实"，DelayJob 触发"到点要执行的动作"。
     enabled: true
     fixed-delay-ms: 1000
     recovery-fixed-delay-ms: 5000
