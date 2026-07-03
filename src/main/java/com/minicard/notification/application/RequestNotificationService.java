@@ -36,13 +36,13 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>流程总览（mini trace，全部在一个 DB transaction 内）：</p>
  * <pre>
  * Kafka listener 收到 integration event（at-least-once，可能重放）
- *  -&gt; claim consumer inbox (consumer_name, event_id)
- *     -&gt; 重复消息: return（不再创建第二批投递）
- *  -&gt; INSERT Notification 意图（source_event_id 唯一键 = 第二道幂等保护）
- *  -&gt; resolve recipient -&gt; 启用渠道集合（enum 排序保证确定性）
- *  -&gt; fan-out: 每渠道一条 PENDING notification_delivery，批量 INSERT（同事务）
- *     -&gt; 无渠道: 意图保留 + warn，不让 Kafka retry
- *  -&gt; COMMIT -&gt; listener 正常返回 -&gt; Kafka offset 提交
+ *  -> claim consumer inbox (consumer_name, event_id)
+ *     -> 重复消息: return（不再创建第二批投递）
+ *  -> INSERT Notification 意图（source_event_id 唯一键 = 第二道幂等保护）
+ *  -> resolve recipient -> 启用渠道集合（enum 排序保证确定性）
+ *  -> fan-out: 每渠道一条 PENDING notification_delivery，批量 INSERT（同事务）
+ *     -> 无渠道: 意图保留 + warn，不让 Kafka retry
+ *  -> COMMIT -> listener 正常返回 -> Kafka offset 提交
  *  （任一步抛异常: 整体回滚，offset 不提交，重放时重新走 claim）
  * </pre>
  */

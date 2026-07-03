@@ -15,11 +15,11 @@ import lombok.experimental.Accessors;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * (创建)     -&gt; PENDING     pending()          业务事务：Outbox adapter 与业务变更同事务写入
- * PENDING    -&gt; PROCESSING  markProcessing()   OutboxClaimer 短事务写 lease（token + deadline）
- * PROCESSING -&gt; PUBLISHED   markPublished()    OutboxWorker finalize：broker 已 ack（终态）
- * PROCESSING -&gt; PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
- * PROCESSING -&gt; DEAD        markFailed()       attempts &gt;= maxAttempts（终态，等人工重放）
+ * (创建)     -> PENDING     pending()          业务事务：Outbox adapter 与业务变更同事务写入
+ * PENDING    -> PROCESSING  markProcessing()   OutboxClaimer 短事务写 lease（token + deadline）
+ * PROCESSING -> PUBLISHED   markPublished()    OutboxWorker finalize：broker 已 ack（终态）
+ * PROCESSING -> PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -> DEAD        markFailed()       attempts >= maxAttempts（终态，等人工重放）
  * </pre>
  *
  * <p>划分逻辑：API/业务服务只在自己的事务里写入 PENDING 行（这正是 Outbox pattern 的

@@ -28,11 +28,11 @@ import lombok.experimental.Accessors;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * (无)            -&gt; CLOSED          close()           异步 batch：StatementJobHandler 出账，生成即 CLOSED
- * CLOSED          -&gt; PARTIALLY_PAID  applyRepayment()  部分还款
- * CLOSED          -&gt; PAID            applyRepayment()  一次性全额结清（终态，PAID 后拒绝再收款）
- * PARTIALLY_PAID  -&gt; PAID            applyRepayment()  补足剩余金额（终态）
- * OVERDUE         -&gt; PAID            applyRepayment()  逾期后全额结清；部分还款保持 OVERDUE 不回 PARTIALLY_PAID
+ * (无)            -> CLOSED          close()           异步 batch：StatementJobHandler 出账，生成即 CLOSED
+ * CLOSED          -> PARTIALLY_PAID  applyRepayment()  部分还款
+ * CLOSED          -> PAID            applyRepayment()  一次性全额结清（终态，PAID 后拒绝再收款）
+ * PARTIALLY_PAID  -> PAID            applyRepayment()  补足剩余金额（终态）
+ * OVERDUE         -> PAID            applyRepayment()  逾期后全额结清；部分还款保持 OVERDUE 不回 PARTIALLY_PAID
  * </pre>
  *
  * <p>划分逻辑：CLOSED 由 billing-cycle batch（StatementJob）推动，没有 API 能出账；

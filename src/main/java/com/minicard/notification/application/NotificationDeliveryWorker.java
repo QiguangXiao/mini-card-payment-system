@@ -29,27 +29,27 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 send / finalize 短事务）：</p>
  * <pre>
- * claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
- *  -&gt; resolve recipient by recipientKey（delivery row 只存稳定业务 key，不存地址）
- *  -&gt; 该渠道无地址: markFailed（业务失败走 retry/DEAD，不假装 SENT）
- *  -&gt; render template（type/channel/subjectId，不回查 Notification aggregate）
- *  -&gt; [事务外] provider send（timeout/retry/circuit breaker；idempotencyKey = delivery id）
- *  -&gt; 成功: finalize 短事务
- *     -&gt; SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
- *        -&gt; lease 已变: skip（迟到回执不能覆盖新 owner 的结果）
- *     -&gt; markSent(providerMessageId)，释放 lease
- *  -&gt; 失败/worker pool 拒绝: finalize 短事务
- *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ * claimer 短事务: PENDING -> PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -> resolve recipient by recipientKey（delivery row 只存稳定业务 key，不存地址）
+ *  -> 该渠道无地址: markFailed（业务失败走 retry/DEAD，不假装 SENT）
+ *  -> render template（type/channel/subjectId，不回查 Notification aggregate）
+ *  -> [事务外] provider send（timeout/retry/circuit breaker；idempotencyKey = delivery id）
+ *  -> 成功: finalize 短事务
+ *     -> SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
+ *        -> lease 已变: skip（迟到回执不能覆盖新 owner 的结果）
+ *     -> markSent(providerMessageId)，释放 lease
+ *  -> 失败/worker pool 拒绝: finalize 短事务
+ *     -> 同样 lease 校验 -> markFailed: attempts+backoff -> PENDING 或 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
- * t0  worker A claim:  PENDING -&gt; PROCESSING(token=A, lease deadline=t0+30s)
+ * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+30s)
  * t1  A 在事务外等 provider 回执，provider 响应很慢（timeout/retry 耗时叠加）
- * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -&gt; PENDING（token 清空）
- * t3  worker B claim:  PENDING -&gt; PROCESSING(token=B, 新 deadline)，再次调 provider
- * t4  B 拿到回执 -&gt; finalize: DB token=B 与自己相符 -&gt; SENT(providerMessageId)
- * t5  A 的回执迟到返回 -&gt; finalize: DB 已非 PROCESSING（或 token=B != A）-&gt; skip
+ * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
+ * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)，再次调 provider
+ * t4  B 拿到回执 -> finalize: DB token=B 与自己相符 -> SENT(providerMessageId)
+ * t5  A 的回执迟到返回 -> finalize: DB 已非 PROCESSING（或 token=B != A）-> skip
  * </pre>
  *
  * <p>t5 若不 skip，A 会覆盖 B 已写入的 providerMessageId（A 失败时甚至把 SENT 打回

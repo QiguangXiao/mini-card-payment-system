@@ -30,22 +30,22 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>interview重点：Repayment 同时影响 repayment row、credit account postedBalance、
  * statement paidAmount/status/version 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
  *
- * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序固定 account -&gt; statement）：</p>
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序固定 account -> statement）：</p>
  * <pre>
  * POST /api/repayments
- *  -&gt; load statement snapshot（不锁，只为拿 creditAccountId + 提前挡 FK 异常）
- *  -&gt; INSERT-first claim repayment by idempotency_key
- *  -&gt; SELECT repayment FOR UPDATE + fingerprint 校验
- *  -&gt; loser: RECEIVED 返回幂等结果 / 处理中则拒绝
- *  -&gt; winner: SELECT credit_account FOR UPDATE（先于 statement，和账单生成同锁顺序）
- *  -&gt; SELECT statement FOR UPDATE
- *  -&gt; 锁内重新校验金额/币种/账单状态/账户归属（不信任阶段 1 快照）
- *  -&gt; account.applyRepayment: postedBalance 下降，额度释放
- *  -&gt; statement.applyRepayment: paidAmount/status/version 推进
- *  -&gt; 注册 after-commit cache invalidation（不在事务内直接写缓存）
- *  -&gt; update repayment RECEIVED
- *  -&gt; append Outbox event repayment.received
- *  -&gt; COMMIT -&gt; 触发 statement 读缓存失效
+ *  -> load statement snapshot（不锁，只为拿 creditAccountId + 提前挡 FK 异常）
+ *  -> INSERT-first claim repayment by idempotency_key
+ *  -> SELECT repayment FOR UPDATE + fingerprint 校验
+ *  -> loser: RECEIVED 返回幂等结果 / 处理中则拒绝
+ *  -> winner: SELECT credit_account FOR UPDATE（先于 statement，和账单生成同锁顺序）
+ *  -> SELECT statement FOR UPDATE
+ *  -> 锁内重新校验金额/币种/账单状态/账户归属（不信任阶段 1 快照）
+ *  -> account.applyRepayment: postedBalance 下降，额度释放
+ *  -> statement.applyRepayment: paidAmount/status/version 推进
+ *  -> 注册 after-commit cache invalidation（不在事务内直接写缓存）
+ *  -> update repayment RECEIVED
+ *  -> append Outbox event repayment.received
+ *  -> COMMIT -> 触发 statement 读缓存失效
  * </pre>
  */
 @Service

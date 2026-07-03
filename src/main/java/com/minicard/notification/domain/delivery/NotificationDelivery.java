@@ -22,11 +22,11 @@ import lombok.experimental.Accessors;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * (创建)     -&gt; PENDING     pendingFor()               Kafka listener 收到业务事件，与 Notification 同事务写入
- * PENDING    -&gt; PROCESSING  markProcessing()           claimer 短事务写 lease（token + deadline）
- * PROCESSING -&gt; SENT        markSent()                 worker finalize：provider 已回执（终态）
- * PROCESSING -&gt; PENDING     markFailed()               worker 失败 finalize / recoverer lease 超时，backoff 后重试
- * PROCESSING -&gt; DEAD        markFailed()               attempts &gt;= maxAttempts（终态，等人工重放）
+ * (创建)     -> PENDING     pendingFor()               Kafka listener 收到业务事件，与 Notification 同事务写入
+ * PENDING    -> PROCESSING  markProcessing()           claimer 短事务写 lease（token + deadline）
+ * PROCESSING -> SENT        markSent()                 worker finalize：provider 已回执（终态）
+ * PROCESSING -> PENDING     markFailed()               worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -> DEAD        markFailed()               attempts >= maxAttempts（终态，等人工重放）
  * </pre>
  *
  * <p>划分逻辑：没有任何 API 直接推动投递状态——上游（messaging listener）只负责创建 PENDING 行，

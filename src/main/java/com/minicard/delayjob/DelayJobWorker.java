@@ -23,26 +23,26 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / handler 业务事务 / finalize 短事务）：</p>
  * <pre>
- * poller+claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
- *  -&gt; 按 jobType 查 handler（缺 handler = 配置错误 -&gt; 走失败路径，不静默 DONE）
- *  -&gt; handler.handle(job): 业务自己的事务
+ * poller+claimer 短事务: PENDING -> PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -> 按 jobType 查 handler（缺 handler = 配置错误 -> 走失败路径，不静默 DONE）
+ *  -> handler.handle(job): 业务自己的事务
  *     （如 expiry 锁 authorization/account 释放额度；auto repayment 先银行扣款再入账）
- *  -&gt; 成功: finalize 短事务
- *     -&gt; SELECT job FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
- *        -&gt; lease 已变: skip（recoverer/新 worker 已接管）
- *     -&gt; markDone，清空 leaseToken
- *  -&gt; 失败/worker pool 拒绝: finalize 短事务
- *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ *  -> 成功: finalize 短事务
+ *     -> SELECT job FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
+ *        -> lease 已变: skip（recoverer/新 worker 已接管）
+ *     -> markDone，清空 leaseToken
+ *  -> 失败/worker pool 拒绝: finalize 短事务
+ *     -> 同样 lease 校验 -> markFailed: attempts+backoff -> PENDING 或 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
- * t0  worker A claim:  PENDING -&gt; PROCESSING(token=A, lease deadline=t0+30s)
+ * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+30s)
  * t1  A 的 handler 业务事务执行很慢（锁等待/外部调用/GC 停顿）
- * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -&gt; PENDING（token 清空）
- * t3  worker B claim:  PENDING -&gt; PROCESSING(token=B, 新 deadline)，handler 再次执行
- * t4  B handler 成功 -&gt; finalize: DB token=B 与自己相符 -&gt; DONE
- * t5  A 的 handler 终于返回 -&gt; finalize: DB 已非 PROCESSING（或 token=B != A）-&gt; skip
+ * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
+ * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)，handler 再次执行
+ * t4  B handler 成功 -> finalize: DB token=B 与自己相符 -> DONE
+ * t5  A 的 handler 终于返回 -> finalize: DB 已非 PROCESSING（或 token=B != A）-> skip
  * </pre>
  *
  * <p>t5 若不 skip，A 会覆盖 B 已定稿的结果（A 失败时甚至把 DONE 打回 PENDING，业务动作

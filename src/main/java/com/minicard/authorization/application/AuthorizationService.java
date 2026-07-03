@@ -40,19 +40,19 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>流程总览（mini trace，全部在一个 DB transaction 内）：</p>
  * <pre>
  * POST /api/authorizations
- *  -&gt; 计算 request fingerprint，构造 PENDING Authorization
- *  -&gt; INSERT-first claim by idempotency_key（唯一索引决出 winner/loser）
- *  -&gt; SELECT authorization FOR UPDATE + fingerprint 校验
- *  -&gt; loser: 直接返回 winner 的结果（幂等重放）
- *  -&gt; winner: cheap policy check（单笔限额，本地内存）
- *  -&gt; card status check（普通 SELECT，不锁）
- *  -&gt; risk check（可能有外部调用，刻意放在账户锁之前）
- *  -&gt; SELECT credit_account FOR UPDATE（额度并发控制核心）
- *  -&gt; account.reserve(amount) 预占额度，update account
- *  -&gt; authorization APPROVED/DECLINED 落库
- *  -&gt; APPROVED 时 schedule expiry DelayJob（同事务，保证 hold 必有释放计划）
- *  -&gt; append Outbox events（同事务，Kafka 由后台 worker 发）
- *  -&gt; COMMIT
+ *  -> 计算 request fingerprint，构造 PENDING Authorization
+ *  -> INSERT-first claim by idempotency_key（唯一索引决出 winner/loser）
+ *  -> SELECT authorization FOR UPDATE + fingerprint 校验
+ *  -> loser: 直接返回 winner 的结果（幂等重放）
+ *  -> winner: cheap policy check（单笔限额，本地内存）
+ *  -> card status check（普通 SELECT，不锁）
+ *  -> risk check（可能有外部调用，刻意放在账户锁之前）
+ *  -> SELECT credit_account FOR UPDATE（额度并发控制核心）
+ *  -> account.reserve(amount) 预占额度，update account
+ *  -> authorization APPROVED/DECLINED 落库
+ *  -> APPROVED 时 schedule expiry DelayJob（同事务，保证 hold 必有释放计划）
+ *  -> append Outbox events（同事务，Kafka 由后台 worker 发）
+ *  -> COMMIT
  * </pre>
  */
 // @Service 让 use case 成为 Spring bean，并把它标识为 application service。

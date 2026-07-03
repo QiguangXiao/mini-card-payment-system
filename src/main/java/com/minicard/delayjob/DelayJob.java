@@ -15,11 +15,11 @@ import lombok.experimental.Accessors;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * (创建)     -&gt; PENDING     pending()          业务事务：如授权 APPROVED 时排 7 天过期、账单 close 时排自动扣款
- * PENDING    -&gt; PROCESSING  markProcessing()   DelayJobClaimer 短事务写 lease（token + deadline）
- * PROCESSING -&gt; DONE        markDone()         DelayJobWorker finalize：handler 业务事务已成功（终态）
- * PROCESSING -&gt; PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
- * PROCESSING -&gt; DEAD        markFailed()       attempts &gt;= maxAttempts（终态，等人工排查/重放）
+ * (创建)     -> PENDING     pending()          业务事务：如授权 APPROVED 时排 7 天过期、账单 close 时排自动扣款
+ * PENDING    -> PROCESSING  markProcessing()   DelayJobClaimer 短事务写 lease（token + deadline）
+ * PROCESSING -> DONE        markDone()         DelayJobWorker finalize：handler 业务事务已成功（终态）
+ * PROCESSING -> PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -> DEAD        markFailed()       attempts >= maxAttempts（终态，等人工排查/重放）
  * </pre>
  *
  * <p>划分逻辑：API/业务服务只在自己的事务里创建 PENDING 行——"计划一个未来动作"和业务变更

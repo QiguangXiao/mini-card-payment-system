@@ -124,6 +124,9 @@ messaging:
   # messaging.* 是本项目自己的 typed configuration，不是 Spring Boot 内建前缀。
   # 它描述"本系统有哪些 integration event channel"，由 KafkaTopicsProperties 和 @KafkaListener 占位符使用。
   # 这样将来即使 transport 从 Kafka 换成别的消息系统，业务 topic/group 命名仍然有一个清晰入口。
+  # 对应代码：KafkaTopicsProperties。producer 侧 KafkaOutboxMessagePublisher.topicFor() 按
+  # outbox_events.event_type 前缀（authorization./card_transaction./...）路由到对应 topic；
+  # consumer 侧各 @KafkaListener 用 ${messaging.topics.*}/${messaging.consumers.*.group-id} 占位符订阅。
   topics:
     # topic 按业务事实拆开，而不是所有事件塞进一个大 topic：
     # producer/consumer 可以按生命周期订阅，DLT 和 replay 范围也更小。
@@ -152,19 +155,30 @@ outbox:
   publisher:
     # Outbox 是 reliable event publication：业务事务先把 event 写入 MySQL outbox_events，
     # 后台 publisher 再异步发 Kafka。它解决"DB 已提交但消息没发出去"的 partial failure。
+    # 整个前缀绑定到 OutboxProperties（@ConfigurationProperties("outbox.publisher")）。
     enabled: true
     # fixed-delay-ms 控制 poller 扫描 NEW/FAILED event 的频率；不是业务 SLA。
     # 真正的 correctness 来自 row lock / lease / retry / idempotency，而不是扫得越快越安全。
+    # 对应代码：OutboxPoller 每轮扫 status='PENDING' AND next_attempt_at<=now（近似 FIFO）。
     fixed-delay-ms: 1000
     # recoverer 专门捞超时的 PROCESSING event。
     # 如果 worker 在 Kafka ack 前后崩溃，没有这条恢复路径，event 会永远卡在 PROCESSING。
+    # 对应代码：OutboxRecoverer 扫描 status='PROCESSING' AND next_attempt_at<=now。
     recovery-fixed-delay-ms: 5000
+    # 对应代码：OutboxPoller 单轮领取的 LIMIT；一轮最多把这么多行改成 PROCESSING。
     batch-size: 50
+    # 对应代码：OutboxWorker.publishClaimedEvent 里 publish(claimedEvent, Duration.ofMillis(sendTimeoutMs))，
+    # 即等待 Kafka broker ack 的上限。必须明显小于 processing-timeout-seconds，否则 ack 还没超时 lease 先过期。
     send-timeout-ms: 5000
     # PROCESSING lease 必须覆盖一次正常 publish + ack + finalize。
     # 太短会让 recoverer 抢走仍在发送中的 event；太长会拖慢真实宕机后的恢复。
+    # 对应字段：outbox_events.next_attempt_at 在 PROCESSING 时表示 lease deadline（= claim 时刻 + 本值）。
+    # 对应代码：OutboxClaimer.markProcessing 写入 deadline + lease_token；OutboxRecoverer 按它判定超时。
     processing-timeout-seconds: 30
+    # 对应字段：outbox_events.attempts。达到上限后 OutboxEvent.markFailed 把 status 置 DEAD（outbox 的 DLT-like 状态）。
     max-attempts: 10
+    # 对应代码：WorkerExecutorConfiguration 的 outbox 线程池；poller 领取后 submit 给它，
+    # 队列满被拒绝时走 OutboxWorker.markRejectedForRetry 放回 retry。
     worker-pool-size: 4
     worker-queue-capacity: 100
 
@@ -173,28 +187,48 @@ delay-jobs:
     # DelayJob 是 future business action scheduling：例如 authorization expiry、auto repayment。
     # 它和 Outbox 都有 poll/claim/worker/recoverer，但语义不同：
     # Outbox 发"已经发生的事实"，DelayJob 触发"到点要执行的动作"。
+    # 整个前缀绑定到 DelayJobProperties；表结构与 outbox_events 对称（status/attempts/next_attempt_at/lease_token）。
     enabled: true
+    # 对应代码：DelayJobPoller 扫 delay_jobs status='PENDING' AND next_attempt_at<=now。
+    # PENDING 时 next_attempt_at = 首次 scheduled_at 或失败后的 retry 时间。
     fixed-delay-ms: 1000
+    # 对应代码：DelayJobRecoverer 扫 status='PROCESSING' AND next_attempt_at<=now（lease 过期 = worker 可能宕机）。
     recovery-fixed-delay-ms: 5000
+    # 对应代码：DelayJobPoller 单轮领取上限（LIMIT）。
     max-per-run: 100
+    # 对应字段：delay_jobs.attempts；达到上限后 DelayJob.markFailed 置 DEAD，等人工处理。
     max-attempts: 10
+    # 对应字段：delay_jobs.next_attempt_at 在 PROCESSING 时表示 lease deadline。
+    # 对应代码：DelayJobClaimer.markProcessing 写入。比 outbox 的 30s 长，
+    # 因为 handler 里可能有业务事务 + 外部调用（如 auto repayment 先走 bank debit）。
     processing-timeout-seconds: 60
+    # 对应代码：WorkerExecutorConfiguration 的 delay-job 线程池；拒绝时 DelayJobWorker.markRejectedForRetry。
     worker-pool-size: 4
     worker-queue-capacity: 100
 
 notification:
   delivery:
+    # 整个前缀绑定到 NotificationDeliveryProperties；表结构与 outbox_events 对称。
     # 关掉后只创建 PENDING delivery、不实际外发，便于迁移/排查时隔离副作用。
     enabled: true
+    # 对应代码：NotificationDeliveryPoller 扫 notification_deliveries status='PENDING' AND next_attempt_at<=now。
     fixed-delay-ms: 1000
+    # 对应代码：NotificationDeliveryRecoverer 扫 status='PROCESSING' AND next_attempt_at<=now。
     recovery-fixed-delay-ms: 5000
+    # 对应代码：NotificationDeliveryPoller 单轮领取的 LIMIT。
     batch-size: 50
     # PROCESSING lease 超时秒数：必须 > 一次"provider 调用(含 Resilience4j 重试) + finalize"的正常耗时，
     # 否则正常投递还没结束 lease 就过期，recoverer 会重复领取。
+    # 对应字段：notification_deliveries.next_attempt_at 在 PROCESSING 时表示 lease deadline。
+    # 对应代码：NotificationDeliveryClaimer.markProcessing 写入 deadline + lease_token。
     processing-timeout-seconds: 30
+    # 对应字段：notification_deliveries.attempts；达到上限后 markFailed 置 DEAD（投递侧 DLT）。
     max-attempts: 8
+    # 对应代码：WorkerExecutorConfiguration.notificationDeliveryWorkerExecutor。
     worker-pool-size: 4
     worker-queue-capacity: 100
+    # 对应代码：NotificationDeliveryConfiguration.notificationSenderExecutor——TimeLimiter 需要独立线程跑 send，
+    # 所以 sender 线程池和 worker 线程池分开；senderThreads 应 >= worker-pool-size，否则 worker 会等 sender 空闲。
     sender-threads: 4
     # 模拟 provider 的延迟/失败注入：默认 0 失败，改大可演示 TimeLimiter 超时与重试/断路/DEAD。
     simulated-latency-millis: 20
@@ -202,32 +236,54 @@ notification:
 
 authorization:
   policy:
+    # 对应代码：AuthorizationPolicyProperties -> AuthorizationService 构造器里预转换成 Map<Currency, Money>，
+    # 再由 checkSingleTransactionLimit() 在授权决策链第一步（账户加锁前）使用。
+    # 币种不在此表中会直接 decline UNSUPPORTED_CURRENCY——新增币种要先补这里再放流量。
     single-transaction-limits:
       JPY: 100000.00
       USD: 1000.00
 
 statement:
   batch:
+    # 整个 statement.* 前缀绑定到 StatementProperties。
     enabled: true
     # BillingCycleScheduler 每天按 JST 醒来一次，只负责对账式补建缺失的 statement_jobs。
+    # 对应代码：BillingCycleScheduler 的 @Scheduled(cron=..., zone=...) -> StatementCycleService.createDueJobs()。
     cron: "0 0 1 * * *"
+    # zone 同时用于 cron 触发时区和账期日切（periodStart/periodEnd 转 Instant）；
+    # 对应代码：StatementCycleService.batchZone()、StatementGenerationService.periodStartInstant()。
     zone: Asia/Tokyo
     # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
     # 默认 31 表示月末关账；次日批处理上一周期，避免关账日白天迟到交易漏入账单。
+    # 对应代码：StatementCycleService.isCloseDate()/periodStartFor()，短月自动落到当月最后一天（dayInMonth）。
     close-day-of-month: 31
     # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
+    # 对应代码：StatementCycleService.paymentDateAfter() + JapaneseBusinessDayCalendar；
+    # 结果写入 statement_jobs.due_date，最终成为 statements.due_date 和自动扣款 DelayJob 的触发日。
     payment-base-day-of-month: 27
     # 每天醒来时对最近几个已过去关账周期做 reconciliation，防止 missed cron 导致账单分片永远不创建。
+    # 对应代码：StatementCycleService.recentCloseDatesOnOrBefore() 的回看窗口（level-triggered 补建）。
     reconciliation-lookback-cycles: 2
     # 每个 durable statement_job 目标账户数；百万账户会被拆成约 1000 个分片任务。
+    # 对应字段：statement_jobs.shard_no/shard_count。对应代码：StatementCycleService.shardCount()。
     target-accounts-per-job: 1000
   jobs:
+    # 分片 job 的执行配置。注意 statement_jobs 的 lease 字段和 outbox/delay-jobs 不同：
+    # 用 claim_until（deadline）+ claimed_by（worker 身份），而不是 next_attempt_at + lease_token。
     enabled: true
+    # 对应代码：StatementJobDispatcher 扫 statement_jobs status='PENDING'。
     fixed-delay-ms: 1000
+    # 对应代码：StatementJobDispatcher 的 recover 路径，捞 status='PROCESSING' AND claim_until<=now。
     recovery-fixed-delay-ms: 10000
+    # 对应代码：StatementJobDispatcher 单轮领取的 LIMIT。分片 job 每个都要处理最多 target-accounts-per-job
+    # 个账户，比单条消息重得多，所以此值远小于 outbox/delay-jobs 的领取上限。
     max-per-run: 20
+    # 对应字段：statement_jobs.attempts；达到上限置 DEAD。
     max-attempts: 10
+    # 对应字段：statement_jobs.claim_until = claim 时刻 + 本值。
+    # 300s 是因为一个分片要循环处理上千账户（每账户一个独立事务），远长于单条 publish/投递。
     processing-timeout-seconds: 300
+    # 对应代码：WorkerExecutorConfiguration.statementJobWorkerExecutor。
     worker-pool-size: 4
     worker-queue-capacity: 100
   policy:
@@ -241,8 +297,11 @@ statement:
     # Statement GET read model 的两级 cache：Caffeine L1 + Redis L2。
     # 只缓存可从 MySQL 重建的查询快照，不缓存额度、幂等 claim 或写模型。
     # L1 很快但只在本 JVM 生效，所以 TTL 要短；L2 跨实例共享，所以 TTL 可以稍长。
+    # 前缀绑定到 StatementReadCacheProperties，全部消费方是 StatementReadService。
+    # 对应代码：StatementReadService 构造 Caffeine.expireAfterWrite(localTtl)。
     local-ttl: 30s
     # 生产 cache 必须有容量上限，避免无限 key 把应用 heap 吃满。
+    # 对应代码：Caffeine.maximumSize(localMaximumSize)。
     local-maximum-size: 1000
     remote-ttl: 5m
     # 在基础 TTL 上加随机抖动，避免一批 key 同秒过期后一起回源 MySQL。
@@ -250,6 +309,8 @@ statement:
     # 还款 after-commit 写入 L2 的"版本地板"墓碑存活时间。它挡住"迟到写"覆盖新值，
     # 只需活到第一个新鲜 reader 用真实值替换墓碑为止，所以远短于 remote-ttl。
     # 取值要 >= 一个慢 GET 从"读 DB"到"写回 L2"的最大时滞。
+    # 对应字段：L2 value 编码为 "<version>|payload"，'|' 后为空即墓碑；版本来自 statements.version。
+    # 对应代码：StatementReadService.evictAfterCommit（RepaymentService 在还款事务里注册）。
     tombstone-ttl: 10s
     # 热点 key 重建锁，防缓存击穿(cache breakdown / stampede)：L2 miss 时用一把跨 pod 的 Redis 锁
     # (SET NX PX) 做 single-flight，只有 winner 回源 DB，其余 pod 等它填好 L2 后复用，不重复打库。
@@ -271,18 +332,23 @@ statement:
 
 repayment:
   auto-debit:
-    # 默认模拟银行扣款成功；改成 false 可演示 DelayJob retry/DEAD 的失败路径。
+    # 对应代码：AutoDebitProperties -> SimulatedBankDebitGateway（BankDebitGateway 的本地实现）。
+    # 默认模拟银行扣款成功；改成 false 可演示 DelayJob retry/DEAD 的失败路径：
+    # AutoRepaymentService.debitStatement 收到失败后抛 AutoRepaymentFailedException，不会入账。
     simulated-success: true
     failure-reason: simulated insufficient bank balance
 
 risk:
   # velocity 限流计数器实现：redis(默认, sliding window, 主库零读压) 或 jdbc(COUNT(*) 精确对照)。
+  # 对应代码：RedisRiskVelocityCounter / JdbcRiskVelocityCounter 二选一注入 RiskAssessmentService。
   velocity:
     store: redis
   local:
+    # 对应代码：RiskProperties -> RiskAssessmentService，在授权决策链里、账户加锁之前执行。
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
     # 长期画像来自 card_risk_features projection：样本太少时不参与判定，避免一两次失败就打标签。
+    # 对应字段：card_risk_features 表（RiskFeatureProjectionService 消费 authorization 事件异步累计）。
     min-historical-authorizations: 5
     # 0.80 表示历史拒绝率达到 80% 时把这张卡提高审查档位。它是长窗口 soft signal，不替代 Redis 短窗口 velocity。
     max-historical-decline-rate: 0.80

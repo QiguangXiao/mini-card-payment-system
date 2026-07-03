@@ -22,25 +22,25 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 publish / finalize 短事务）：</p>
  * <pre>
- * claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
- *  -&gt; [事务外] kafka publish + 等 broker ack（sendTimeoutMs 上限）
- *  -&gt; ack 成功: finalize 短事务
- *     -&gt; SELECT outbox row FOR UPDATE
- *     -&gt; lease 校验: status==PROCESSING 且 leaseToken 未变
- *        -&gt; 已变: skip（recoverer/新 worker 已接管，迟到者无权写）
- *     -&gt; markPublished（成功终态 = broker 已 ack，不代表 consumer 已处理）
- *  -&gt; publish 失败/worker pool 拒绝: finalize 短事务
- *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ * claimer 短事务: PENDING -> PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -> [事务外] kafka publish + 等 broker ack（sendTimeoutMs 上限）
+ *  -> ack 成功: finalize 短事务
+ *     -> SELECT outbox row FOR UPDATE
+ *     -> lease 校验: status==PROCESSING 且 leaseToken 未变
+ *        -> 已变: skip（recoverer/新 worker 已接管，迟到者无权写）
+ *     -> markPublished（成功终态 = broker 已 ack，不代表 consumer 已处理）
+ *  -> publish 失败/worker pool 拒绝: finalize 短事务
+ *     -> 同样 lease 校验 -> markFailed: attempts+backoff -> PENDING 或 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
- * t0  worker A claim:  PENDING -&gt; PROCESSING(token=A, lease deadline=t0+30s)
+ * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+30s)
  * t1  A 在事务外等 Kafka ack，broker 迟迟不回（或 GC 停顿/网络分区）
- * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -&gt; PENDING（token 清空）
- * t3  worker B claim:  PENDING -&gt; PROCESSING(token=B, 新 deadline)
- * t4  B publish 成功 -&gt; finalize: DB token=B 与自己相符 -&gt; PUBLISHED
- * t5  A 的 ack 终于返回 -&gt; finalize: DB 已非 PROCESSING（或 token=B != A）-&gt; skip
+ * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
+ * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)
+ * t4  B publish 成功 -> finalize: DB token=B 与自己相符 -> PUBLISHED
+ * t5  A 的 ack 终于返回 -> finalize: DB 已非 PROCESSING（或 token=B != A）-> skip
  * </pre>
  *
  * <p>t5 若不 skip，A 会把 B 已定稿的状态再写一遍（更糟的是 A 失败时把 PUBLISHED 打回

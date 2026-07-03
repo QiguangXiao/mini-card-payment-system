@@ -20,11 +20,11 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>recoverer 兜底的是"worker 在 claim 之后永远回不来"的时间线：</p>
  * <pre>
- * t0  worker claim:  PENDING -&gt; PROCESSING(token=X, lease deadline=t0+30s)
+ * t0  worker claim:  PENDING -> PROCESSING(token=X, lease deadline=t0+30s)
  * t1  pod 宕机/进程被 kill：finalize 永远不会执行，row 停在 PROCESSING
- * t2  (&gt;deadline) recoverer 扫描到超时 row -&gt; 按一次失败处理:
- *       attempts+1 &lt; maxAttempts -&gt; PENDING(nextAttemptAt=now+backoff)
- *       attempts+1 &gt;= maxAttempts -&gt; DEAD
+ * t2  (>deadline) recoverer 扫描到超时 row -> 按一次失败处理:
+ *       attempts+1 未达 maxAttempts -> PENDING(nextAttemptAt=now+backoff)
+ *       attempts+1 >= maxAttempts -> DEAD
  * t3  poller 下一轮重新 claim（生成新 token），publish 重新执行
  * </pre>
  *

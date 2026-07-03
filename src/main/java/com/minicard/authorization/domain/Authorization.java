@@ -27,10 +27,10 @@ import com.minicard.authorization.domain.event.AuthorizationPostedDomainEvent;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * PENDING  -&gt; APPROVED   approve()   同步 API：AuthorizationService，card/额度/风控检查通过后同事务预占额度
- * PENDING  -&gt; DECLINED   decline()   同步 API：AuthorizationService，检查失败（终态）
- * APPROVED -&gt; POSTED     post()      同步 API：PresentmentController/PostingService，清算入账消费掉 hold（终态）
- * APPROVED -&gt; EXPIRED    expire()    异步 DelayJob：AuthorizationExpiryDelayJobHandler，7 天未 capture 释放额度（终态）
+ * PENDING  -> APPROVED   approve()   同步 API：AuthorizationService，card/额度/风控检查通过后同事务预占额度
+ * PENDING  -> DECLINED   decline()   同步 API：AuthorizationService，检查失败（终态）
+ * APPROVED -> POSTED     post()      同步 API：PresentmentController/PostingService，清算入账消费掉 hold（终态）
+ * APPROVED -> EXPIRED    expire()    异步 DelayJob：AuthorizationExpiryDelayJobHandler，7 天未 capture 释放额度（终态）
  * </pre>
  *
  * <p>划分逻辑：授权决策和入账必须同步返回给商户/网络，所以由 API 推动；过期释放是
