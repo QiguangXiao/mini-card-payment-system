@@ -25,22 +25,27 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
 
     private final NotificationDeliveryMapper mapper;
 
-    @Override
     /**
      * 批量写入 Notification 分渠道投递记录。
      */
+    @Override
     public void insertAll(List<NotificationDelivery> deliveries) {
         if (deliveries.isEmpty()) {
             // 空列表直接返回，避免 <foreach> 生成非法的 INSERT ... VALUES（空）。
+            // 上层仍会保留 Notification 意图并打 warn；没有渠道是收件人配置问题，不是 SQL 错误。
             return;
         }
+        // 这里是真正写 notification_deliveries 表的地方，对应 RequestNotificationService 的"阶段 4"。
+        // 每条 delivery 是一个可被 poller/worker 独立领取的工作行：状态初始为 PENDING，
+        // 后续由 NotificationDeliveryPoller/Worker 通过 lease 推进到 SENT/DEAD。
+        // 这一步若抛异常，会让整个 @Transactional 回滚：notifications 意图也不会留下半截数据。
         mapper.insertBatch(deliveries.stream().map(this::toRow).toList());
     }
 
-    @Override
     /**
      * 锁定一批可投递记录，供 claimer 写入 PROCESSING lease。
      */
+    @Override
     public List<NotificationDelivery> findDispatchableBatchForUpdate(Instant now, int limit) {
         return mapper.findDispatchableBatchForUpdate(now, limit)
                 .stream()
@@ -48,10 +53,10 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
                 .toList();
     }
 
-    @Override
     /**
      * 锁定一批 lease 已超时的 PROCESSING 投递，供 recoverer 恢复。
      */
+    @Override
     public List<NotificationDelivery> findStuckProcessingBatchForUpdate(Instant now, int limit) {
         return mapper.findStuckProcessingBatchForUpdate(now, limit)
                 .stream()
@@ -59,18 +64,18 @@ public class MyBatisNotificationDeliveryRepository implements NotificationDelive
                 .toList();
     }
 
-    @Override
     /**
      * 按 id 锁定当前投递行，供 worker finalize 前重新校验 lease。
      */
+    @Override
     public Optional<NotificationDelivery> findByIdForUpdate(UUID id) {
         return Optional.ofNullable(mapper.findByIdForUpdate(id.toString())).map(this::toDomain);
     }
 
-    @Override
     /**
      * 更新投递状态字段，不修改通知意图快照。
      */
+    @Override
     public void updateDeliveryState(NotificationDelivery delivery) {
         mapper.updateDeliveryState(toRow(delivery));
     }

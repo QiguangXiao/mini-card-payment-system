@@ -45,7 +45,7 @@ class CardTransactionNotificationListenerTest {
 
         ArgumentCaptor<RequestNotificationCommand> command =
                 ArgumentCaptor.forClass(RequestNotificationCommand.class);
-        verify(service).request(command.capture());
+        verify(service).requestNotification(command.capture());
         assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
         assertThat(command.getValue().subjectType()).isEqualTo(NotificationSubjectType.CARD_TRANSACTION);
         assertThat(command.getValue().subjectId()).isEqualTo(cardTransactionId.toString());

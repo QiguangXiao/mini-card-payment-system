@@ -58,7 +58,7 @@ class RequestNotificationServiceTest {
                 )
         ));
 
-        service.request(approvedCommand());
+        service.requestNotification(approvedCommand());
 
         ArgumentCaptor<List<NotificationDelivery>> captor = ArgumentCaptor.captor();
         verify(deliveryRepository).insertAll(captor.capture());
@@ -82,8 +82,8 @@ class RequestNotificationServiceTest {
         ));
         RequestNotificationCommand command = approvedCommand();
 
-        service.request(command);
-        service.request(command);
+        service.requestNotification(command);
+        service.requestNotification(command);
 
         // Inbox claim 是第一道幂等边界；重复投递不会再创建通知，也不会再创建投递。
         verify(inboxRepository, times(2)).claim(any(), any(), any());
@@ -97,7 +97,7 @@ class RequestNotificationServiceTest {
         // source_event_id 唯一键冲突：第二道幂等保护命中，连带不创建投递。
         when(notificationRepository.insertIfAbsent(any(Notification.class))).thenReturn(false);
 
-        service.request(approvedCommand());
+        service.requestNotification(approvedCommand());
 
         verify(deliveryRepository, never()).insertAll(any());
     }

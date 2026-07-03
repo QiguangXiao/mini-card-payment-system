@@ -58,7 +58,7 @@ public class AuthorizationNotificationListener {
             JsonNode payload,
             NotificationType type
     ) {
-        service.request(new RequestNotificationCommand(
+        service.requestNotification(new RequestNotificationCommand(
                 event.eventId(),
                 NotificationSubjectType.AUTHORIZATION,
                 eventReader.requiredText(payload, "authorizationId"),

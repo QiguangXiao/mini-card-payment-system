@@ -47,7 +47,7 @@ class RepaymentNotificationListenerTest {
 
         ArgumentCaptor<RequestNotificationCommand> command =
                 ArgumentCaptor.forClass(RequestNotificationCommand.class);
-        verify(service).request(command.capture());
+        verify(service).requestNotification(command.capture());
         assertThat(command.getValue().sourceEventId()).isEqualTo(eventId);
         assertThat(command.getValue().subjectType()).isEqualTo(NotificationSubjectType.REPAYMENT);
         assertThat(command.getValue().subjectId()).isEqualTo(repaymentId.toString());

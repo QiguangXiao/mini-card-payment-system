@@ -43,7 +43,7 @@ public class RepaymentNotificationListener {
         JsonNode payload = event.payload();
         // 当前项目没有 customer/cardholder 表，repayment payload 也没有用户 ID。
         // 暂时使用 creditAccountId 作为 recipientKey，后续接用户模型时应改成 customerId。
-        service.request(new RequestNotificationCommand(
+        service.requestNotification(new RequestNotificationCommand(
                 event.eventId(),
                 NotificationSubjectType.REPAYMENT,
                 eventReader.requiredText(payload, "repaymentId"),

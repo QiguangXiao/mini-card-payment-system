@@ -41,7 +41,7 @@ public class CardTransactionNotificationListener {
         if (CARD_TRANSACTION_POSTED.equals(event.eventType())) {
             // 先判断 eventType 再解析 payload；合法但无关的事件不应该因为缺字段进入 DLT。
             JsonNode payload = event.payload();
-            service.request(new RequestNotificationCommand(
+            service.requestNotification(new RequestNotificationCommand(
                     event.eventId(),
                     NotificationSubjectType.CARD_TRANSACTION,
                     eventReader.requiredText(payload, "cardTransactionId"),
