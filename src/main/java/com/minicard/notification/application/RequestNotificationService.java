@@ -33,17 +33,16 @@ import org.springframework.transaction.annotation.Transactional;
  * 注意这里没有 {@code NotificationEntry} 概念：本项目拆成一条不可变 Notification 意图，
  * 再按渠道拆成多条 NotificationDelivery work rows。</p>
  *
- * <p>流程总览（mini trace，全部在一个 DB transaction 内）：</p>
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；编号对应方法内的"阶段 N"注释）：</p>
  * <pre>
  * Kafka listener 收到 integration event（at-least-once，可能重放）
- *  -> claim consumer inbox (consumer_name, event_id)
- *     -> 重复消息: return（不再创建第二批投递）
- *  -> INSERT Notification 意图（source_event_id 唯一键 = 第二道幂等保护）
- *  -> resolve recipient -> 启用渠道集合（enum 排序保证确定性）
- *  -> fan-out: 每渠道一条 PENDING notification_delivery，批量 INSERT（同事务）
- *     -> 无渠道: 意图保留 + warn，不让 Kafka retry
- *  -> COMMIT -> listener 正常返回 -> Kafka offset 提交
- *  （任一步抛异常: 整体回滚，offset 不提交，重放时重新走 claim）
+ * 1. claim consumer inbox (consumer_name, event_id)；重复消息: return（不再创建第二批投递）
+ * 2. INSERT Notification 意图（source_event_id 唯一键 = 第二道幂等保护）
+ * 3. resolve recipient，取启用渠道集合（enum 排序保证确定性）；
+ *    无渠道: 意图保留 + warn，不让 Kafka retry
+ * 4. fan-out: 每渠道一条 PENDING notification_delivery，批量 INSERT（同事务）
+ * 5. COMMIT 后 listener 正常返回，Kafka offset 才提交
+ *    （任一步抛异常: 整体回滚，offset 不提交，重放时重新走 claim）
  * </pre>
  */
 @Service

@@ -22,15 +22,15 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 publish / finalize 短事务）：</p>
  * <pre>
- * claimer 短事务: PENDING -> PROCESSING + 新 leaseToken（本类拿到的是快照）
- *  -> [事务外] kafka publish + 等 broker ack（sendTimeoutMs 上限）
- *  -> ack 成功: finalize 短事务
- *     -> SELECT outbox row FOR UPDATE
- *     -> lease 校验: status==PROCESSING 且 leaseToken 未变
- *        -> 已变: skip（recoverer/新 worker 已接管，迟到者无权写）
- *     -> markPublished（成功终态 = broker 已 ack，不代表 consumer 已处理）
- *  -> publish 失败/worker pool 拒绝: finalize 短事务
- *     -> 同样 lease 校验 -> markFailed: attempts+backoff -> PENDING 或 DEAD
+ * 前置: claimer 短事务把 PENDING 改成 PROCESSING + 新 leaseToken（本类拿到的是快照）
+ * 1. [事务外] kafka publish + 等 broker ack（sendTimeoutMs 上限）
+ * 2. ack 成功: finalize 短事务
+ *    2.1 SELECT outbox row FOR UPDATE
+ *    2.2 lease 校验: status==PROCESSING 且 leaseToken 未变；
+ *        已变则 skip（recoverer/新 worker 已接管，迟到者无权写）
+ *    2.3 markPublished（成功终态 = broker 已 ack，不代表 consumer 已处理）
+ * 3. publish 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验，
+ *    markFailed: attempts+backoff 回 PENDING 或进 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>

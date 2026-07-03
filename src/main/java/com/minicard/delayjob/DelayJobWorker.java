@@ -23,16 +23,16 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / handler 业务事务 / finalize 短事务）：</p>
  * <pre>
- * poller+claimer 短事务: PENDING -> PROCESSING + 新 leaseToken（本类拿到的是快照）
- *  -> 按 jobType 查 handler（缺 handler = 配置错误 -> 走失败路径，不静默 DONE）
- *  -> handler.handle(job): 业务自己的事务
- *     （如 expiry 锁 authorization/account 释放额度；auto repayment 先银行扣款再入账）
- *  -> 成功: finalize 短事务
- *     -> SELECT job FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
- *        -> lease 已变: skip（recoverer/新 worker 已接管）
- *     -> markDone，清空 leaseToken
- *  -> 失败/worker pool 拒绝: finalize 短事务
- *     -> 同样 lease 校验 -> markFailed: attempts+backoff -> PENDING 或 DEAD
+ * 前置: poller+claimer 短事务把 PENDING 改成 PROCESSING + 新 leaseToken（本类拿到的是快照）
+ * 1. 按 jobType 查 handler（缺 handler = 配置错误，走失败路径，不静默 DONE）
+ * 2. handler.handle(job): 业务自己的事务
+ *    （如 expiry 锁 authorization/account 释放额度；auto repayment 先银行扣款再入账）
+ * 3. 成功: finalize 短事务
+ *    3.1 SELECT job FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
+ *        lease 已变则 skip（recoverer/新 worker 已接管）
+ *    3.2 markDone，清空 leaseToken
+ * 4. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验，
+ *    markFailed: attempts+backoff 回 PENDING 或进 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>

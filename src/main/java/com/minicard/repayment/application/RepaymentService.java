@@ -30,22 +30,20 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>interview重点：Repayment 同时影响 repayment row、credit account postedBalance、
  * statement paidAmount/status/version 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
  *
- * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序固定 account -> statement）：</p>
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；编号对应方法内的"阶段 N"注释。
+ * 锁顺序固定：credit account 先于 statement）：</p>
  * <pre>
  * POST /api/repayments
- *  -> load statement snapshot（不锁，只为拿 creditAccountId + 提前挡 FK 异常）
- *  -> INSERT-first claim repayment by idempotency_key
- *  -> SELECT repayment FOR UPDATE + fingerprint 校验
- *  -> loser: RECEIVED 返回幂等结果 / 处理中则拒绝
- *  -> winner: SELECT credit_account FOR UPDATE（先于 statement，和账单生成同锁顺序）
- *  -> SELECT statement FOR UPDATE
- *  -> 锁内重新校验金额/币种/账单状态/账户归属（不信任阶段 1 快照）
- *  -> account.applyRepayment: postedBalance 下降，额度释放
- *  -> statement.applyRepayment: paidAmount/status/version 推进
- *  -> 注册 after-commit cache invalidation（不在事务内直接写缓存）
- *  -> update repayment RECEIVED
- *  -> append Outbox event repayment.received
- *  -> COMMIT -> 触发 statement 读缓存失效
+ * 1. load statement snapshot（不锁，只为拿 creditAccountId + 提前挡 FK 异常）
+ * 2. INSERT-first claim repayment by idempotency_key，
+ *    再 SELECT FOR UPDATE + fingerprint 校验；loser: RECEIVED 返回幂等结果 / 处理中则拒绝
+ * 3. winner 应用还款（对应 applyToStatementAndAccount 的"应用阶段 1-4"）：
+ *    3.1 SELECT credit_account FOR UPDATE，再 SELECT statement FOR UPDATE（全项目统一锁顺序）
+ *    3.2 锁内重新校验金额/币种/账单状态/账户归属（不信任步骤 1 的快照）
+ *    3.3 account.applyRepayment 释放额度；statement.applyRepayment 推进 paidAmount/status/version
+ *    3.4 注册 after-commit cache invalidation（不在事务内直接写缓存）
+ * 4. update repayment RECEIVED
+ * 5. append Outbox event repayment.received；COMMIT 后才触发 statement 读缓存失效
  * </pre>
  */
 @Service

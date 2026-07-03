@@ -32,21 +32,21 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>interview重点：Statement generation 是批处理业务，但仍然需要清楚的 transaction boundary。
  * 同一事务里锁账户、锁待出账交易、创建 statement line 快照、标记交易已归账。</p>
  *
- * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序 account -> 待出账交易，和 posting 一致）：</p>
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；编号对应方法内的"阶段/创建阶段"注释。
+ * 锁顺序：credit account 先于待出账交易，和 posting 一致）：</p>
  * <pre>
  * StatementJobHandler 对单个 (account, cycle) 调用 generate
- *  -> SELECT credit_account FOR UPDATE（与 posting 共用的并发门）
- *  -> SELECT statement by (account, periodStart, periodEnd) FOR UPDATE
- *     -> 已存在: 直接返回幂等结果，不再扫交易
- *  -> 本期 posted 交易缺 ledger entry? -> retryable 异常（等 projection，不出残缺账单）
- *  -> SELECT 本期可出账交易 FOR UPDATE（冻结明细快照）
- *     -> 为空: rejected（当前不生成 0 元账单）
- *  -> 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
- *  -> INSERT statements/statement_lines（自然唯一键兜底幂等）
- *  -> 交易标记 BILLED（防下一轮重复归账）
- *  -> schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
- *  -> append Outbox event statement.closed
- *  -> COMMIT
+ * 1. SELECT credit_account FOR UPDATE（与 posting 共用的并发门）
+ * 2. SELECT statement by (account, periodStart, periodEnd) FOR UPDATE；
+ *    已存在: 直接返回幂等结果，不再扫交易
+ * 3. 新建路径（对应 createStatement 的"创建阶段 1-7"）：
+ *    3.1 本期 posted 交易缺 ledger entry: retryable 异常（等 projection，不出残缺账单）
+ *    3.2 SELECT 本期可出账交易 FOR UPDATE（冻结明细快照）；为空: rejected（不生成 0 元账单）
+ *    3.3 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
+ *    3.4 INSERT statements/statement_lines（自然唯一键兜底幂等）
+ *    3.5 交易标记 BILLED（防下一轮重复归账）
+ *    3.6 schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
+ *    3.7 append Outbox event statement.closed，随后 COMMIT
  * </pre>
  */
 @Service

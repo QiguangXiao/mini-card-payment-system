@@ -28,12 +28,11 @@ import org.springframework.stereotype.Service;
  * <p>流程总览（mini trace；本类自身不开事务，银行扣款是事务外副作用）：</p>
  * <pre>
  * DelayJob AUTO_REPAYMENT 到期触发（statement due date）
- *  -> load statement（不锁）
- *     -> 已 PAID / remaining==0: 幂等 skip，正常返回（DelayJob 标 DONE）
- *  -> bank debit gateway 扣款（DB 事务外；deterministic key "auto-debit:{statementId}"）
- *     -> 扣款失败: 抛异常 -> DelayJob retry/DEAD，绝不入账
- *  -> 扣款成功: RepaymentService.receive(同一个 idempotency key)
- *     -> 复用还款写事务：claim / account+statement 锁 / 余额推进 / Outbox
+ * 1. load statement（不锁）；已 PAID / remaining==0: 幂等 skip，正常返回（DelayJob 标 DONE）
+ * 2. bank debit gateway 扣款（DB 事务外；deterministic key "auto-debit:{statementId}"）；
+ *    扣款失败: 抛异常让 DelayJob retry/DEAD，绝不入账
+ * 3. 扣款成功后 RepaymentService.receive(同一个 idempotency key)：
+ *    复用还款写事务（claim / account+statement 锁 / 余额推进 / Outbox）
  * </pre>
  */
 @Service

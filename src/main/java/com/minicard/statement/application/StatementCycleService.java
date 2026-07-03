@@ -29,15 +29,14 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>流程总览（mini trace，level-triggered，不是"只看昨天"的 edge-triggered cron）：</p>
  * <pre>
- * scheduler 每日 tick -> createDueJobs()
- *  -> today = LocalDate.now(billing timezone, Asia/Tokyo)
- *  -> 回看最近 N 个已过去的 close dates（补 cron 漏跑/应用停机的周期）
- *  -> 对每个 close date:
- *     -> 该 cycle 已有 statement_jobs? -> skip（快速判断，非最终幂等）
- *     -> 推导账期 [periodStart, periodEnd] 和营业日顺延后的 dueDate
- *     -> count billable accounts -> shardCount（0 账户也建 1 个空分片）
- *     -> INSERT IGNORE 整批 PENDING statement_jobs（cycle/shard 唯一键兜底幂等）
- *  -> COMMIT（之后 StatementJobDispatcher claim 分片并行执行）
+ * scheduler 每日 tick 调 createDueJobs()
+ * 1. today = LocalDate.now(billing timezone, Asia/Tokyo)
+ * 2. 回看最近 N 个已过去的 close dates（补 cron 漏跑/应用停机的周期），对每个 close date:
+ *    2.1 该 cycle 已有 statement_jobs: skip（快速判断，非最终幂等）
+ *    2.2 推导账期 [periodStart, periodEnd] 和营业日顺延后的 dueDate
+ *    2.3 count billable accounts 决定 shardCount（0 账户也建 1 个空分片）
+ *    2.4 INSERT IGNORE 整批 PENDING statement_jobs（cycle/shard 唯一键兜底幂等）
+ * 3. COMMIT（之后 StatementJobDispatcher claim 分片并行执行）
  * </pre>
  */
 @Service
