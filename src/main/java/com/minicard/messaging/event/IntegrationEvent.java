@@ -8,6 +8,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 /**
  * Kafka/Outbox 共用的最小 integration event JSON 结构。
  *
+ * <p>它表达的是跨进程消息契约(message envelope)，不是 DDD domain event。
+ * eventId/eventType/eventVersion/occurredAt 是所有 consumer 都需要的元信息；
+ * 真正随业务变化的字段放在 payload。</p>
+ *
  * <p>payload 保持 JsonNode，避免为每个 event type 都创建一组 Java payload class。
  * Consumer 根据 eventType 判断是否关心，再读取自己需要的字段。</p>
  */

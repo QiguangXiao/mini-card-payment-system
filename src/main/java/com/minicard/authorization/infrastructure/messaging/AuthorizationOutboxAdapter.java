@@ -50,6 +50,11 @@ public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPubli
         UUID eventId = UUID.randomUUID();
         String eventType = eventType(event);
         JsonNode payload = payload(event);
+        // IntegrationEvent 不是再造一个业务 DTO，而是 Kafka message body 的统一 envelope。
+        // OutboxEvent 的 eventType/eventVersion columns 方便本服务查询、routing、retry；
+        // envelope 里的 eventId/eventType/version 让消息离开本服务后仍然 self-describing，
+        // DLT/replay/外部 consumer 不必依赖 outbox_events 表才能知道这条消息是什么。
+        // 如果只发送裸 payload，consumer 要从 topic/header/代码约定猜 schema，版本演进和排查都会变脆。
         IntegrationEvent envelope = new IntegrationEvent(
                 eventId,
                 eventType,
