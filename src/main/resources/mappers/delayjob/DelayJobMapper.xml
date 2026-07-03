@@ -30,6 +30,13 @@
     </sql>
 
     <insert id="insert">
+        <!--
+          插入样例：job_type='AUTHORIZATION_EXPIRY'，aggregate_type='AUTHORIZATION'，
+          aggregate_id='66666666-6666-6666-6666-666666666660'，
+          scheduled_at='2026-07-03T10:15:00Z'，next_attempt_at='2026-07-03T10:15:00Z'。
+          防重复样例：uk_delay_jobs_identity(job_type, aggregate_type, aggregate_id)
+          阻止同一个 authorization 被安排多个 expiry job。
+        -->
         INSERT INTO delay_jobs (
             <include refid="delayJobColumns"/>
         ) VALUES (
@@ -51,6 +58,9 @@
     <!--
       poller 只 claim PENDING due rows，并在短事务内改成 PROCESSING。
       多个 pod 并发 poll 时，SKIP LOCKED 会跳过别人已经锁住的 rows，避免重复 claim。
+      查询样例：now='2026-07-03T10:20:00Z'，limit=50。
+      索引样例：idx_delay_jobs_runnable(status, next_attempt_at, created_at)
+      先找已到期 PENDING job，再按 scheduled time 近似 FIFO 领取。
     -->
     <select id="findRunnableBatchForUpdate" resultMap="delayJobRowMap">
         SELECT <include refid="delayJobColumns"/>
@@ -66,6 +76,9 @@
     <!--
       recovery 独立扫描 lease 已超时的 PROCESSING rows。
       这让“正常 claim”和“宕机恢复”两个路径在interview解释时更清楚。
+      查询样例：PROCESSING job 的 next_attempt_at='2026-07-03T10:15:00Z'，
+      now='2026-07-03T10:20:00Z'，代表 worker lease 已过期。
+      如果没有 recovery，authorization expiry 这种未来业务动作会因为一次宕机永久不执行。
     -->
     <select id="findStuckProcessingBatchForUpdate" resultMap="delayJobRowMap">
         SELECT <include refid="delayJobColumns"/>
@@ -79,6 +92,11 @@
     </select>
 
     <select id="findByIdForUpdate" resultMap="delayJobRowMap">
+        <!--
+          查询样例：id='delay-auth-expiry-66666666-6666-6666-6666-666666666660'。
+          worker 执行业务动作前后都应锁住 job row 并核对 lease_token，
+          防止过期 worker 覆盖已经被 recover worker 接手的结果。
+        -->
         SELECT <include refid="delayJobColumns"/>
         FROM delay_jobs
         WHERE id = #{id}
@@ -86,6 +104,12 @@
     </select>
 
     <update id="updateExecutionState">
+        <!--
+          更新样例：claim 时 status='PROCESSING'，lease_token='a63d...'，
+          next_attempt_at='2026-07-03T10:25:00Z' 表示 lease deadline；
+          成功后 status='SUCCEEDED'，lease_token=NULL；失败后 attempts+1 并把 next_attempt_at 推迟重试。
+          这个 mapper 不直接“自动 DLT”，但 Java worker 会根据 attempts 决定重试或 DEAD。
+        -->
         UPDATE delay_jobs
         SET status = #{status},
             attempts = #{attempts},

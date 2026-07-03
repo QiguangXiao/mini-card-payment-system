@@ -33,6 +33,10 @@
     </sql>
 
     <select id="findById" resultMap="authorizationRowMap">
+        <!--
+          查询样例：id='66666666-6666-6666-6666-666666666660'。
+          访问路径：走 PRIMARY KEY(id)，用于 GET /api/authorizations/{id} 这类精确查询。
+        -->
         SELECT <include refid="authorizationColumns"/>
         FROM authorizations
         <!--
@@ -45,6 +49,8 @@
     <!--
       INSERT-first idempotency：先写入 claim，避免 read-then-insert race。
       unique idempotency_key constraint 会在并发请求中选出唯一 winner。
+      防重复样例：两次 INSERT 都带 idempotency_key='auth-seed-approved-hold'，
+      只有第一条能成功，第二条由 repository 捕获 DuplicateKeyException 后转为“读取原结果”。
     -->
     <insert id="insert">
         INSERT INTO authorizations (
@@ -70,6 +76,9 @@
     <!--
       concurrent duplicate 会等待 winner transaction，然后读取最终状态。
       这样 duplicate 不会再次执行 credit reservation。
+      查询样例：idempotency_key='auth-seed-approved-hold'。
+      对应索引：uk_authorizations_idempotency_key(idempotency_key)。
+      锁语义：FOR UPDATE 锁住 winner row，让并发 duplicate 等到 APPROVED/DECLINED 最终状态后再返回。
     -->
     <select id="findByIdempotencyKeyForUpdate" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
@@ -81,6 +90,8 @@
     <!--
       DelayJobWorker 处理的是已经 claim 的 delay job；这里仍要锁 authorization row。
       原因是 business state 才是释放 reserved credit 前的 source of truth。
+      查询样例：id='66666666-6666-6666-6666-666666666664'。
+      锁语义：FOR UPDATE 防止 expiry release 与 presentment posting 同时改同一 authorization 状态。
     -->
     <select id="findByIdForUpdate" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
@@ -90,6 +101,11 @@
     </select>
 
     <update id="update">
+        <!--
+          更新样例：APPROVED 会写 decided_at/expires_at；DECLINED 会写 decline_reason；
+          POSTED 会写 posted_at；EXPIRED 会写 expired_at。
+          DB CHECK chk_authorizations_decision_state 会兜底阻止“状态和时间字段不自洽”的 row。
+        -->
         UPDATE authorizations
         SET status = #{status},
             decline_reason = #{declineReason,jdbcType=VARCHAR},

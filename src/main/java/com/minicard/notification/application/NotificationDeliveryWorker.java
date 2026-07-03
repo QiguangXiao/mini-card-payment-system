@@ -26,6 +26,21 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>结构照搬 OutboxWorker：等待 provider 回执的耗时不占用 DB 事务，只在更新投递状态时短暂开事务，
  * 且 finalize 前重新 FOR UPDATE 锁住并校验 lease token(status==PROCESSING 且 leaseToken 未变)，
  * 防止迟到 worker 覆盖 recoverer/新 worker 的结果。</p>
+ *
+ * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 send / finalize 短事务）：</p>
+ * <pre>
+ * claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -&gt; resolve recipient by recipientKey（delivery row 只存稳定业务 key，不存地址）
+ *  -&gt; 该渠道无地址: markFailed（业务失败走 retry/DEAD，不假装 SENT）
+ *  -&gt; render template（type/channel/subjectId，不回查 Notification aggregate）
+ *  -&gt; [事务外] provider send（timeout/retry/circuit breaker；idempotencyKey = delivery id）
+ *  -&gt; 成功: finalize 短事务
+ *     -&gt; SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
+ *        -&gt; lease 已变: skip（迟到回执不能覆盖新 owner 的结果）
+ *     -&gt; markSent(providerMessageId)，释放 lease
+ *  -&gt; 失败/worker pool 拒绝: finalize 短事务
+ *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ * </pre>
  */
 @Service
 @Slf4j

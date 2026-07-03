@@ -38,6 +38,10 @@
         <!--
           一条 SQL 批量插入所有渠道的 delivery；逐条插入会增加 round trip。
           (notification_id, channel) 唯一键兜底防重复（创建路径已在 inbox+source_event_id 事务内保护）。
+          插入样例：notification_id='eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1'，
+          channel='APP_PUSH' 和 channel='EMAIL' 各一条 delivery，status='PENDING'。
+          防重复样例：同一 notification 如果因为 retry 再次生成 APP_PUSH，
+          uk_notification_deliveries_notification_channel 会阻止第二条 APP_PUSH delivery。
         -->
         <foreach collection="deliveries" item="d" separator=",">
             (#{d.id}, #{d.notificationId}, #{d.channel}, #{d.notificationType}, #{d.subjectId},
@@ -50,6 +54,10 @@
 
     <!--
       poller 领取 PENDING 到期投递；SKIP LOCKED 让多 pod 并发领取不同 row，不互相阻塞。
+      查询样例：now='2026-07-03T10:20:00Z'，limit=100。
+      索引样例：idx_notification_deliveries_dispatchable(status, next_attempt_at, created_at)
+      先找到期 PENDING delivery，再按创建时间近似 FIFO 投递。
+      投递失败会更新 attempts/next_attempt_at；超过上限后进入 DEAD，等价于 notification delivery 的 DLT。
     -->
     <select id="findDispatchableBatchForUpdate" resultMap="notificationDeliveryRowMap">
         SELECT <include refid="deliveryColumns"/>
@@ -64,6 +72,9 @@
 
     <!--
       recovery 独立扫描 lease 超时的 PROCESSING 投递，与正常领取路径边界分清。
+      查询样例：PROCESSING delivery 的 next_attempt_at='2026-07-03T10:15:00Z'，
+      now='2026-07-03T10:20:00Z'，代表 provider 调用前后 worker 可能宕机。
+      没有 recovery 的话，用户可能永远收不到通知，而 DB 里只剩一个卡死的 PROCESSING row。
     -->
     <select id="findStuckProcessingBatchForUpdate" resultMap="notificationDeliveryRowMap">
         SELECT <include refid="deliveryColumns"/>
@@ -76,6 +87,11 @@
     </select>
 
     <select id="findByIdForUpdate" resultMap="notificationDeliveryRowMap">
+        <!--
+          查询样例：id='dddddddd-dddd-dddd-dddd-ddddddddddd1'。
+          finalize provider result 前锁住 delivery row，并由 Java 层核对 lease_token；
+          这样旧 worker 不能把新 worker 已经标记 SENT/DEAD 的结果改回去。
+        -->
         SELECT <include refid="deliveryColumns"/>
         FROM notification_deliveries
         WHERE id = #{id}
@@ -83,6 +99,12 @@
     </select>
 
     <update id="updateDeliveryState">
+        <!--
+          更新样例：发送成功后 status='SENT'，provider_message_id='push-msg-20260703-001'，
+          sent_at='2026-07-03T10:21:03Z'，lease_token=NULL；
+          发送失败后 status='PENDING' 或 'DEAD'，last_error='provider timeout'。
+          lease_token 在非 PROCESSING 状态清空，避免后续排查时误以为还有 worker 持有 lease。
+        -->
         UPDATE notification_deliveries
         SET status = #{status},
             attempts = #{attempts},

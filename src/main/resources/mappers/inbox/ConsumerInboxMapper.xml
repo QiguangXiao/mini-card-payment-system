@@ -8,6 +8,12 @@
         <!--
           这里不用 SELECT 再 INSERT，而是直接 INSERT 让 unique key 判定第一次消费。
           MyBatis 返回 affected rows；DuplicateKeyException 在 repository adapter 中转成 false。
+          插入样例：consumer_name='notification-v1'，
+          event_id='88888888-8888-8888-8888-888888888821'。
+          防重复样例：Kafka redelivery 同一 event 时，PRIMARY KEY(consumer_name, event_id)
+          让第二次 INSERT 失败，listener 就可以跳过后续 DB 写入。
+          这条 INSERT 必须和业务写入放在同一个 transaction boundary；
+          否则可能先标记 processed，后续 notification 写入失败，重试时又被 inbox 跳过。
         -->
         INSERT INTO consumer_inbox (consumer_name, event_id, processed_at)
         VALUES (#{consumerName}, #{eventId}, #{processedAt})

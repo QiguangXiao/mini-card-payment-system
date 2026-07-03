@@ -13,6 +13,11 @@
     </resultMap>
 
     <select id="findById" resultMap="cardRowMap">
+        <!--
+          查询样例：cardId='card-123'。
+          访问路径：走 cards.PRIMARY KEY(id)，授权流程用它先判断卡是否 ACTIVE/BLOCKED/EXPIRED，
+          再通过 credit_account_id='11111111-1111-1111-1111-111111111111' 找额度账户。
+        -->
         SELECT id, credit_account_id, status
         FROM cards
         <!-- cardId 来自外部请求，必须用 #{cardId} bind parameter，不能用 ${cardId} 字符串拼接。 -->

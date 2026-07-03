@@ -31,6 +31,23 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>interview重点：Statement generation 是批处理业务，但仍然需要清楚的 transaction boundary。
  * 同一事务里锁账户、锁待出账交易、创建 statement line 快照、标记交易已归账。</p>
+ *
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序 account -&gt; 待出账交易，和 posting 一致）：</p>
+ * <pre>
+ * StatementJobHandler 对单个 (account, cycle) 调用 generate
+ *  -&gt; SELECT credit_account FOR UPDATE（与 posting 共用的并发门）
+ *  -&gt; SELECT statement by (account, periodStart, periodEnd) FOR UPDATE
+ *     -&gt; 已存在: 直接返回幂等结果，不再扫交易
+ *  -&gt; 本期 posted 交易缺 ledger entry? -&gt; retryable 异常（等 projection，不出残缺账单）
+ *  -&gt; SELECT 本期可出账交易 FOR UPDATE（冻结明细快照）
+ *     -&gt; 为空: rejected（当前不生成 0 元账单）
+ *  -&gt; 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
+ *  -&gt; INSERT statements/statement_lines（自然唯一键兜底幂等）
+ *  -&gt; 交易标记 BILLED（防下一轮重复归账）
+ *  -&gt; schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
+ *  -&gt; append Outbox event statement.closed
+ *  -&gt; COMMIT
+ * </pre>
  */
 @Service
 @RequiredArgsConstructor

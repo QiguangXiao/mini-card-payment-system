@@ -19,6 +19,13 @@
     </resultMap>
 
     <select id="countBillableAccounts" resultType="long">
+        <!--
+          统计样例：periodStartInclusive='2026-06-01T00:00:00Z'，
+          periodEndExclusive='2026-07-01T00:00:00Z'。
+          访问路径：idx_card_transactions_billing_batch(status, billing_status, posted_at, credit_account_id)
+          先定位本账期 UNBILLED/POSTED 交易，再 COUNT(DISTINCT credit_account_id) 估算 job 数量。
+          这里不加锁，因为它只是生成 StatementJob 的参考计数；真正防重复在 job 唯一键和单账户出账锁里完成。
+        -->
         SELECT COUNT(DISTINCT credit_account_id)
         FROM card_transactions
         WHERE status = 'POSTED'
@@ -30,6 +37,10 @@
     <!--
       StatementJob 用 CRC32(account_id) % shardCount 做稳定分片。
       这里不加 FOR UPDATE：真正并发控制在单账户生成时锁 credit account + candidate rows。
+      查询样例：shardCount=2，shardNo=0 时，只返回哈希后落在 0 号分片的 account。
+      注意 CRC32(credit_account_id) 是函数计算，MySQL 不能直接用它做范围索引；
+      所以前面的 status/billing_status/posted_at 条件先靠 idx_card_transactions_billing_batch 缩小集合，
+      再对候选 account 做稳定分片，避免同一 account 被两个 job 同时处理。
     -->
     <select id="findAccountIdsForJob" resultType="java.lang.String">
         SELECT DISTINCT credit_account_id
@@ -43,6 +54,12 @@
     </select>
 
     <select id="countUnbilledPostedTransactionsMissingLedger" resultType="int">
+        <!--
+          查询样例：creditAccountId='11111111-1111-1111-1111-111111111111'，
+          periodStartInclusive='2026-06-01T00:00:00Z'，periodEndExclusive='2026-07-01T00:00:00Z'。
+          LEFT JOIN 用来找“交易已经 POSTED，但 ledger_entries 还没有对应事实”的异常。
+          如果跳过这个检查，statement 可能静默少收一笔交易，账单总额会小于交易事实表。
+        -->
         SELECT COUNT(*)
         FROM card_transactions c
         LEFT JOIN ledger_entries l
@@ -60,6 +77,10 @@
     <!--
       生成 statement line 前同时锁住 card_transactions row。
       LedgerEntry 是 append-only，不在这里更新；statement_lines.ledger_entry_id unique key 防重复出账。
+      查询样例：同一账户 2026-06 账期内，锁住所有 status='POSTED' 且 billing_status='UNBILLED' 的候选交易。
+      索引样例：idx_card_transactions_statement_candidates
+      (credit_account_id, status, billing_status, statement_id, posted_at) 能把候选范围压到单账户单账期。
+      如果没有 FOR UPDATE，两个 statement worker 可能同时读取同一批候选交易，再各自插入 statement_lines。
     -->
     <select id="findBillableLineSourcesForUpdate" resultMap="statementLineSourceRowMap">
         SELECT
@@ -87,6 +108,12 @@
     </select>
 
     <update id="markCardTransactionsBilled">
+        <!--
+          更新样例：statementId='77777777-7777-7777-7777-777777777701'，
+          cardTransactionIds=('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2')。
+          防重复条件：只有仍然 POSTED/UNBILLED 且 statement_id IS NULL 的交易会被标记。
+          如果某笔交易已经被别的账单任务抢先标记，本 UPDATE 不会覆盖它；service 应关注 affected rows 是否符合预期。
+        -->
         UPDATE card_transactions
         SET billing_status = 'BILLED',
             statement_id = #{statementId},

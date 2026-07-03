@@ -19,6 +19,10 @@
     <!--
       FOR UPDATE 的锁会一直持有到 service transaction commit。
       授权、入账、还款都通过这条 locking read 串行修改同一个账户余额。
+      查询样例：accountId='11111111-1111-1111-1111-111111111111'。
+      访问路径：走 credit_accounts.PRIMARY KEY(id)，只锁这一张额度账户 row。
+      如果改成普通 SELECT，两笔并发授权可能都看到 reserved_amount=0.00，
+      然后分别判断额度足够，最终把 available credit 算错。
     -->
     <select id="findByIdForUpdate" resultMap="creditAccountRowMap">
         SELECT id, credit_limit, reserved_amount, posted_balance, currency, status
@@ -28,7 +32,12 @@
     </select>
 
     <update id="update">
-        <!-- available_credit 不落库；这里只持久化 source fields，派生值由 domain 计算。 -->
+        <!--
+          更新样例：credit_limit=10000.00，reserved_amount=3000.00，posted_balance=4800.00，
+          则 available_credit 由 domain 计算为 2200.00，不单独落库。
+          只持久化 source fields 可以避免 derived value 和源字段漂移；
+          DB CHECK 会兜底保证 reserved_amount + posted_balance 不超过 credit_limit。
+        -->
         UPDATE credit_accounts
         SET reserved_amount = #{reservedAmount},
             posted_balance = #{postedBalance},

@@ -32,6 +32,12 @@
     </sql>
 
     <insert id="insert">
+        <!--
+          插入样例：network_transaction_id='ntx-supermarket-20260615-0001'，
+          authorization_id='66666666-6666-6666-6666-666666666660'，amount=1200.00，status='POSTED'。
+          防重复：uk_card_transactions_network_transaction_id 阻止同一清算 presentment 被重复入账。
+          DB CHECK 还会兜底约束 status、billing_status、posted_at、statement_id 的组合关系。
+        -->
         INSERT INTO card_transactions (
             <include refid="cardTransactionColumns"/>
         ) VALUES (
@@ -56,6 +62,9 @@
     <!--
       network_transaction_id 是 presentment 的 idempotency key。
       duplicate retry 会等待原 transaction 完成，然后读取最终 POSTED 结果。
+      查询样例：networkTransactionId='ntx-supermarket-20260615-0001'。
+      对应索引：uk_card_transactions_network_transaction_id(network_transaction_id)。
+      这里锁的是唯一交易 row，不是整张 card_transactions 表。
     -->
     <select id="findByNetworkTransactionIdForUpdate" resultMap="cardTransactionRowMap">
         SELECT <include refid="cardTransactionColumns"/>
@@ -67,6 +76,11 @@
     <!--
       Statement generation 只收录 POSTED 且 statement_id 为空的交易。
       FOR UPDATE 防止两次并发账单生成把同一笔交易重复归入不同 statement。
+      查询样例：creditAccountId='11111111-1111-1111-1111-111111111111'，
+      postedAtFromInclusive='2026-06-01T00:00:00Z'，
+      postedAtToExclusive='2026-07-01T00:00:00Z'。
+      索引样例：idx_card_transactions_statement_candidates 先按 account/status/billing_status 缩小候选，
+      再按 posted_at 做账期范围扫描，最后 ORDER BY posted_at, id 形成稳定出账顺序。
     -->
     <select id="findUnbilledPostedByCreditAccountForUpdate" resultMap="cardTransactionRowMap">
         SELECT <include refid="cardTransactionColumns"/>
@@ -85,6 +99,10 @@
         <!--
           <foreach> 在一条 SQL 中生成多组 CASE WHEN 和 IN 参数。
           如果逐条 UPDATE，每笔交易都要一次 round trip；如果手写字符串拼接，又会回到 SQL injection 风险。
+          更新样例：把 id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' 的交易标记到
+          statement_id='77777777-7777-7777-7777-777777777701'。
+          WHERE 里的 status='POSTED'、billing_status='UNBILLED'、statement_id IS NULL 是防重复条件；
+          如果并发任务已经把交易出账，本 SQL 更新行数会变少，而不是覆盖别人已经写入的 statement_id。
         -->
         UPDATE card_transactions
         SET statement_id = CASE id
@@ -113,6 +131,11 @@
     </update>
 
     <update id="update">
+        <!--
+          单笔更新用于 presentment 后续状态修正或测试路径。
+          样例：status='POSTED' 时 posted_at='2026-06-15T10:20:30Z'；
+          如果未来引入 REFUNDED/REVERSED，应同时检查 DB CHECK 和 billing_status 语义是否还成立。
+        -->
         UPDATE card_transactions
         SET status = #{status},
             billing_status = #{billingStatus},

@@ -20,6 +20,20 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>interview重点：claim 已经在短事务内完成；worker 只处理已经拿到 PROCESSING lease 的 job。
  * handler 执行业务动作时不持有 job row lock；成功/失败后再开一个短事务重新锁 row 并校验
  * lease token，确认"这轮 claim 仍属于我"，再标 DONE 或按 retry policy 回到 PENDING/DEAD。</p>
+ *
+ * <p>流程总览（mini trace，三段式：claim 短事务 / handler 业务事务 / finalize 短事务）：</p>
+ * <pre>
+ * poller+claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -&gt; 按 jobType 查 handler（缺 handler = 配置错误 -&gt; 走失败路径，不静默 DONE）
+ *  -&gt; handler.handle(job): 业务自己的事务
+ *     （如 expiry 锁 authorization/account 释放额度；auto repayment 先银行扣款再入账）
+ *  -&gt; 成功: finalize 短事务
+ *     -&gt; SELECT job FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）
+ *        -&gt; lease 已变: skip（recoverer/新 worker 已接管）
+ *     -&gt; markDone，清空 leaseToken
+ *  -&gt; 失败/worker pool 拒绝: finalize 短事务
+ *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ * </pre>
  */
 @Service
 @Slf4j

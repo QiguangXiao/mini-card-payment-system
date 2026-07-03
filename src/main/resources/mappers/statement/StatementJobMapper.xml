@@ -38,8 +38,13 @@
         created_at, updated_at, last_error
     </sql>
 
-    <!-- INSERT IGNORE 让 cycle 创建幂等：scheduler 重复触发同一个 close date 时，
-         uk_statement_jobs_cycle_shard 会让重复分片成为 no-op，而不是抛 duplicate key。 -->
+    <!--
+      INSERT IGNORE 让 cycle 创建幂等：scheduler 重复触发同一个 close date 时，
+      uk_statement_jobs_cycle_shard 会让重复分片成为 no-op，而不是抛 duplicate key。
+      插入样例：period_start='2026-06-01'，period_end='2026-06-30'，
+      due_date='2026-07-25'，shard_no=0，shard_count=2，status='PENDING'。
+      防重复样例：同一个账期的 0 号分片如果已经存在，再跑 scheduler 只会 affected rows=0。
+    -->
     <insert id="insert">
         INSERT IGNORE INTO statement_jobs (
             <include refid="statementJobColumns"/>
@@ -67,6 +72,11 @@
     </insert>
 
     <select id="existsForCycle" resultType="boolean">
+        <!--
+          查询样例：periodStart='2026-06-01'，periodEnd='2026-06-30'。
+          这里只问“这个 cycle 是否已建过任意 shard”，用于 scheduler 判断是否需要补建。
+          不做 COUNT(*) 是因为业务只关心存在性，MySQL 找到第一条即可停止。
+        -->
         SELECT EXISTS(
             SELECT 1
             FROM statement_jobs
@@ -76,7 +86,12 @@
         )
     </select>
 
-    <!-- 多个 worker/pod 并发 claim 时，SKIP LOCKED 会跳过别人已锁住的 job row。 -->
+    <!--
+      多个 worker/pod 并发 claim 时，SKIP LOCKED 会跳过别人已锁住的 job row。
+      查询样例：limit=20，取 status='PENDING' 的最早 job。
+      索引样例：idx_statement_jobs_claimable(status, created_at, shard_no, id)
+      先定位 PENDING 队列，再按 created_at/shard_no 近似 FIFO 领取。
+    -->
     <select id="findClaimableBatchForUpdate" resultMap="statementJobRowMap">
         SELECT <include refid="statementJobColumns"/>
         FROM statement_jobs
@@ -86,7 +101,11 @@
         FOR UPDATE SKIP LOCKED
     </select>
 
-    <!-- PROCESSING 不是永久状态；claim_until 到期说明 worker 可能宕机，需要 recover。 -->
+    <!--
+      PROCESSING 不是永久状态；claim_until 到期说明 worker 可能宕机，需要 recover。
+      查询样例：now='2026-07-03T10:20:00Z'，找到 claim_until 小于等于 now 的过期 job。
+      recovery 重新把 job 放回 PENDING 或重新 claim；如果没有 lease deadline，宕机后的 job 会永远卡住。
+    -->
     <select id="findStuckProcessingBatchForUpdate" resultMap="statementJobRowMap">
         SELECT <include refid="statementJobColumns"/>
         FROM statement_jobs
@@ -98,6 +117,11 @@
     </select>
 
     <select id="findByIdForUpdate" resultMap="statementJobRowMap">
+        <!--
+          查询样例：id='job-statement-202606-shard-0'。
+          finalize/retry 前必须锁 job row，并检查 claim_token 是否仍属于当前 worker；
+          否则旧 worker 恢复后可能覆盖新 worker 的处理结果。
+        -->
         SELECT <include refid="statementJobColumns"/>
         FROM statement_jobs
         WHERE id = #{id}
@@ -105,6 +129,12 @@
     </select>
 
     <update id="updateExecutionState">
+        <!--
+          更新样例：claim 时 status='PROCESSING'，claimed_by='mini-card-1'，
+          claim_until='2026-07-03T10:25:00Z'，claim_token='7f4a...'；
+          完成时 status='SUCCEEDED'，claim_token=NULL，last_error=NULL。
+          这些字段必须一起写入，避免出现 status 已变但 lease_token 还残留的不可解释状态。
+        -->
         UPDATE statement_jobs
         SET status = #{status},
             claimed_by = #{claimedBy,jdbcType=VARCHAR},

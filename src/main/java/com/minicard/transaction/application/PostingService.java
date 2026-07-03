@@ -32,6 +32,23 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Presentment 是外部网络/商户正式请款；posting 是发卡行把交易入账到持卡人账户。
  * 这里刻意不叫 capture/settlement：capture 偏商户侧，settlement 偏资金清算，不等于持卡人账户入账。</p>
+ *
+ * <p>流程总览（mini trace，全部在一个 DB transaction 内；锁顺序固定 authorization -&gt; account -&gt; tx claim）：</p>
+ * <pre>
+ * POST /api/presentments
+ *  -&gt; SELECT authorization FOR UPDATE（挡住过期释放/重复请款并发改状态）
+ *  -&gt; load card（不锁，只为拿 creditAccountId）
+ *  -&gt; SELECT card_transaction by network_transaction_id FOR UPDATE
+ *     -&gt; 已存在: POSTED 返回幂等结果 / 处理中则拒绝
+ *  -&gt; 校验 authorization APPROVED、未过期、金额全等（当前只支持 full presentment）
+ *  -&gt; SELECT credit_account FOR UPDATE（与 statement batch 同锁顺序，防死锁）
+ *  -&gt; INSERT-first claim PENDING card_transaction
+ *     -&gt; claim 失败: 重新 FOR UPDATE 读并发 winner，按已存在路径处理
+ *  -&gt; account.postAuthorized: reservedAmount -&gt; postedBalance
+ *  -&gt; authorization APPROVED -&gt; POSTED；transaction PENDING -&gt; POSTED
+ *  -&gt; append Outbox events（authorization.posted + card_transaction.posted）
+ *  -&gt; COMMIT
+ * </pre>
  */
 @Service
 @RequiredArgsConstructor

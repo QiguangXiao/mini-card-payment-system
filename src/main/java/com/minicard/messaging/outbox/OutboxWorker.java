@@ -19,6 +19,19 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>流程与 DelayJobWorker 对称：claimer 先在短事务内把 PENDING event 改成 PROCESSING lease；
  * worker 在事务外等待 Kafka ack；最后再开短事务校验 lease 并写 PUBLISHED/PENDING/DEAD。
  * 这样不会因为等 broker 回包而长时间占用 outbox row lock。</p>
+ *
+ * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 publish / finalize 短事务）：</p>
+ * <pre>
+ * claimer 短事务: PENDING -&gt; PROCESSING + 新 leaseToken（本类拿到的是快照）
+ *  -&gt; [事务外] kafka publish + 等 broker ack（sendTimeoutMs 上限）
+ *  -&gt; ack 成功: finalize 短事务
+ *     -&gt; SELECT outbox row FOR UPDATE
+ *     -&gt; lease 校验: status==PROCESSING 且 leaseToken 未变
+ *        -&gt; 已变: skip（recoverer/新 worker 已接管，迟到者无权写）
+ *     -&gt; markPublished（成功终态 = broker 已 ack，不代表 consumer 已处理）
+ *  -&gt; publish 失败/worker pool 拒绝: finalize 短事务
+ *     -&gt; 同样 lease 校验 -&gt; markFailed: attempts+backoff -&gt; PENDING 或 DEAD
+ * </pre>
  */
 @Service
 @Slf4j

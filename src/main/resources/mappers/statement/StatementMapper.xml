@@ -55,6 +55,14 @@
     </sql>
 
     <insert id="insertStatement">
+        <!--
+          插入样例：id='77777777-7777-7777-7777-777777777701'，
+          credit_account_id='11111111-1111-1111-1111-111111111111'，
+          period_start='2026-06-01'，period_end='2026-06-30'，due_date='2026-07-25'，
+          total_amount=1200.00，minimum_payment_amount=120.00，status='OPEN'。
+          防重复样例：uk_statements_cycle(credit_account_id, period_start, period_end)
+          阻止同一账户同一账期生成两张 statement。
+        -->
         INSERT INTO statements (
             <include refid="statementColumns"/>
         ) VALUES (
@@ -77,6 +85,14 @@
     </insert>
 
     <insert id="insertItem">
+        <!--
+          插入样例：id='77777777-7777-7777-7777-7777777777a1'，
+          statement_id='77777777-7777-7777-7777-777777777701'，
+          card_transaction_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1'，
+          ledger_entry_id='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1'。
+          防重复样例：statement_lines.card_transaction_id 和 ledger_entry_id 的 unique key
+          分别防止同一交易或同一 ledger fact 被重复放进账单。
+        -->
         INSERT INTO statement_lines (
             <include refid="statementItemColumns"/>
         ) VALUES (
@@ -95,6 +111,12 @@
     </insert>
 
     <select id="findByCycleForUpdate" resultMap="statementRowMap">
+        <!--
+          查询样例：creditAccountId='11111111-1111-1111-1111-111111111111'，
+          periodStart='2026-06-01'，periodEnd='2026-06-30'。
+          对应索引：uk_statements_cycle(credit_account_id, period_start, period_end)。
+          FOR UPDATE 让并发生成或补偿路径等待同一周期 statement 的最终状态，避免重复插入。
+        -->
         SELECT <include refid="statementColumns"/>
         FROM statements
         WHERE credit_account_id = #{creditAccountId}
@@ -104,12 +126,21 @@
     </select>
 
     <select id="findById" resultMap="statementRowMap">
+        <!--
+          查询样例：id='77777777-7777-7777-7777-777777777701'。
+          访问路径：走 statements.PRIMARY KEY(id)，用于 API 读取，不锁 row。
+        -->
         SELECT <include refid="statementColumns"/>
         FROM statements
         WHERE id = #{id}
     </select>
 
     <select id="findByIdForUpdate" resultMap="statementRowMap">
+        <!--
+          查询样例：id='77777777-7777-7777-7777-777777777701'。
+          还款、逾期扫描、账单修正这类会改 paid_amount/status 的路径必须 locking read。
+          如果还款并发不用这把 row lock，两次支付可能都基于旧 paid_amount 计算，导致状态错误。
+        -->
         SELECT <include refid="statementColumns"/>
         FROM statements
         WHERE id = #{id}
@@ -117,6 +148,11 @@
     </select>
 
     <update id="updatePayment">
+        <!--
+          更新样例：paid_amount=500.00，status='OPEN' 或 'PAID'，version=3。
+          version 随付款状态变化递增，给 cache/read model 做 freshness 判断；
+          如果只改 paid_amount 不改 version，缓存层可能继续相信旧账单快照。
+        -->
         UPDATE statements
         SET paid_amount = #{paidAmount},
             status = #{status},
@@ -126,6 +162,11 @@
     </update>
 
     <select id="findItemsByStatementId" resultMap="statementItemRowMap">
+        <!--
+          查询样例：statementId='77777777-7777-7777-7777-777777777701'。
+          访问路径：idx_statement_lines_statement(statement_id, posted_at, card_transaction_id)
+          支持按账单取明细并稳定排序，避免 API 每次返回顺序跳动。
+        -->
         SELECT <include refid="statementItemColumns"/>
         FROM statement_lines
         WHERE statement_id = #{statementId}

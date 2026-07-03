@@ -31,6 +31,13 @@
     </sql>
 
     <insert id="insert">
+        <!--
+          插入样例：id='88888888-8888-8888-8888-888888888811'，
+          aggregate_type='AUTHORIZATION'，aggregate_id='66666666-6666-6666-6666-666666666660'，
+          event_type='authorization.approved'，event_version=1，partition_key='card-123'。
+          业务事务只写 outbox_events，不直接发 Kafka；事务提交后 poller 再异步 publish。
+          这样即使应用在 commit 后、Kafka send 前宕机，PENDING row 仍能被下一轮 poller 找回来。
+        -->
         INSERT INTO outbox_events (
             <include refid="outboxColumns"/>
         ) VALUES (
@@ -54,6 +61,10 @@
     <!--
       poller 只 claim PENDING due rows，并在短事务内改成 PROCESSING。
       SKIP LOCKED 允许多个 application instance 并发 claim，不会处理同一条 row。
+      查询样例：now='2026-07-03T10:20:00Z'，limit=50。
+      索引样例：idx_outbox_publishable(status, next_attempt_at, created_at)
+      先找 status='PENDING' 且 next_attempt_at 到期的消息，再按 created_at 近似 FIFO 领取。
+      失败重试时 next_attempt_at 会被推迟；超过最大次数后通常进入 DEAD，作为 outbox 的 DLT-like 状态。
     -->
     <select id="findPublishableBatchForUpdate" resultMap="outboxEventRowMap">
         SELECT <include refid="outboxColumns"/>
@@ -69,6 +80,9 @@
     <!--
       recovery 独立扫描 lease 超时的 PROCESSING rows。
       这样正常 publication path 和 stuck event recovery path 边界更清楚。
+      查询样例：status='PROCESSING' 且 next_attempt_at='2026-07-03T10:15:00Z'，
+      now='2026-07-03T10:20:00Z'，说明 claim lease 已过期。
+      如果没有这条 recovery SQL，worker 在 Kafka ack 前宕机会让消息永久卡在 PROCESSING。
     -->
     <select id="findStuckProcessingBatchForUpdate" resultMap="outboxEventRowMap">
         SELECT <include refid="outboxColumns"/>
@@ -81,6 +95,11 @@
     </select>
 
     <select id="findByIdForUpdate" resultMap="outboxEventRowMap">
+        <!--
+          查询样例：id='88888888-8888-8888-8888-888888888811'。
+          finalize Kafka publish 前锁住 outbox row，并由 Java 层核对 lease_token；
+          旧 worker 即使晚回来，也不能覆盖新 worker 已经重试后的状态。
+        -->
         SELECT <include refid="outboxColumns"/>
         FROM outbox_events
         WHERE id = #{id}
@@ -88,6 +107,12 @@
     </select>
 
     <update id="updateDeliveryState">
+        <!--
+          更新样例：claim 时 status='PROCESSING'，lease_token='0f2b...'，
+          next_attempt_at='2026-07-03T10:25:00Z' 作为 lease deadline；
+          publish 成功后 status='PUBLISHED'，published_at='2026-07-03T10:21:03Z'，lease_token=NULL；
+          失败后 status='PENDING' 并增加 attempts，永久失败则 status='DEAD' 且 last_error 记录原因。
+        -->
         UPDATE outbox_events
         SET status = #{status},
             attempts = #{attempts},

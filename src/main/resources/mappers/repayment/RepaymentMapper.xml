@@ -27,6 +27,12 @@
     </sql>
 
     <insert id="insert">
+        <!--
+          插入样例：idempotency_key='repay-card-123-20260703-0001'，
+          statement_id='77777777-7777-7777-7777-777777777701'，amount=500.00，status='PENDING'。
+          PENDING 先保存请求 claim，后续 service 再锁 statement/account 完成收款；
+          如果直接先改账单再写 repayment，duplicate retry 就缺少可查询的 idempotency anchor。
+        -->
         INSERT INTO repayments (
             <include refid="repaymentColumns"/>
         ) VALUES (
@@ -46,7 +52,11 @@
     </insert>
 
     <select id="findByIdempotencyKeyForUpdate" resultMap="repaymentRowMap">
-        <!-- duplicate retry 会在这里等待 idempotency winner 完成，再读最终状态。 -->
+        <!--
+          查询样例：idempotencyKey='repay-card-123-20260703-0001'。
+          对应索引：uk_repayments_idempotency_key(idempotency_key)。
+          duplicate retry 会在这里等待 idempotency winner 完成，再读最终 RECEIVED 状态。
+        -->
         SELECT <include refid="repaymentColumns"/>
         FROM repayments
         WHERE idempotency_key = #{idempotencyKey}
@@ -54,12 +64,22 @@
     </select>
 
     <select id="findById" resultMap="repaymentRowMap">
+        <!--
+          查询样例：id='99999999-9999-9999-9999-999999999901'。
+          访问路径：走 repayments.PRIMARY KEY(id)，用于读取支付结果，不承担并发保护。
+        -->
         SELECT <include refid="repaymentColumns"/>
         FROM repayments
         WHERE id = #{id}
     </select>
 
     <update id="update">
+        <!--
+          更新样例：status='RECEIVED'，credit_account_id='11111111-1111-1111-1111-111111111111'，
+          received_at='2026-07-03T09:30:00Z'。
+          这一步必须和 statement.paid_amount、credit_accounts.posted_balance 更新放在同一个 transaction boundary；
+          否则会出现 repayment 成功但账单未减少，或账单减少但 repayment 仍是 PENDING 的半成功状态。
+        -->
         UPDATE repayments
         SET credit_account_id = #{creditAccountId,jdbcType=CHAR},
             status = #{status},

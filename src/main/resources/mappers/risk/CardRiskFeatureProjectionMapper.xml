@@ -17,11 +17,16 @@
     <!--
       MySQL performs the counter update atomically. The consumer Inbox prevents
       the same event from incrementing these counters twice after redelivery.
+      样例：cardId='card-123'，status='APPROVED'，
+      decidedAt='2026-07-03T10:15:00.120Z'。
     -->
     <insert id="upsertDecision">
         <!--
           ON DUPLICATE KEY UPDATE 把 insert-or-increment 合成一条原子 SQL。
           如果先 SELECT 再 UPDATE，并发 consumer/replay 会更容易丢计数。
+          防重复边界：Inbox 负责挡同一 event 的 redelivery；
+          这里的 ON DUPLICATE KEY 负责同一张卡的不同 authorization event 并发更新同一 projection row。
+          GREATEST 让迟到事件不会把 last_decision_at 从 2026-07-03T10:15:00Z 倒退到 2026-07-03T10:10:00Z。
         -->
         INSERT INTO card_risk_features (
             card_id, authorization_count, approved_count, declined_count, last_decision_at
@@ -43,6 +48,11 @@
     </insert>
 
     <select id="findByCardId" resultMap="CardRiskFeatureResultMap">
+        <!--
+          查询样例：cardId='card-123'。
+          访问路径：走 card_risk_features.PRIMARY KEY(card_id)，RiskService 用它读取轻量 projection，
+          不需要回扫 authorization 历史表计算次数。
+        -->
         SELECT card_id,
                authorization_count,
                approved_count,

@@ -20,6 +20,20 @@ import org.springframework.transaction.annotation.Transactional;
  * 处理单个过期授权(expired authorization)，并在同一事务内释放 reserved credit。
  *
  * <p>一个 job 一个 transaction，可以缩短 DB lock 时间，也避免坏数据回滚同一轮里的其他 job。</p>
+ *
+ * <p>流程总览（mini trace，一个 job 一个 DB transaction）：</p>
+ * <pre>
+ * DelayJob AUTHORIZATION_EXPIRY 到期触发（expiresAt 已过）
+ *  -&gt; SELECT authorization FOR UPDATE（业务表才是 source of truth，job 只是执行计划）
+ *  -&gt; 非 APPROVED: 幂等 skip（已 posted/expired，retry/手工重放安全）
+ *  -&gt; now &lt; expiresAt: 抛异常（job 早跑是 bug，不能提前释放）
+ *  -&gt; load card（不锁）-&gt; creditAccountId
+ *  -&gt; SELECT credit_account FOR UPDATE（与新授权 reserve 串行化）
+ *  -&gt; account.release(reserved amount)
+ *  -&gt; authorization APPROVED -&gt; EXPIRED
+ *  -&gt; append Outbox event authorization.expired
+ *  -&gt; COMMIT（release/EXPIRED/event 三件事同事务）
+ * </pre>
  */
 @Service
 @Slf4j

@@ -8,6 +8,11 @@
         <!--
           source_event_id 唯一键让通知创建具备第二道幂等保护（Inbox claim 之外的兜底）。
           通知只表达意图；投递状态在 notification_deliveries，与本 INSERT 同事务批量写入。
+          插入样例：source_event_id='88888888-8888-8888-8888-888888888821'，
+          subject_type='AUTHORIZATION'，subject_id='66666666-6666-6666-6666-666666666660'，
+          recipient_key='card-123'，notification_type='AUTHORIZATION_APPROVED'。
+          防重复样例：同一个 Kafka event replay 时，consumer_inbox 先挡一次，
+          uk_notifications_source_event_id(source_event_id) 再挡住重复创建通知。
         -->
         INSERT INTO notifications (
             id, source_event_id, subject_type, subject_id, recipient_key, notification_type,
