@@ -37,7 +37,7 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
- * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+30s)
+ * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+processing-timeout-seconds)
  * t1  A 的 handler 业务事务执行很慢（锁等待/外部调用/GC 停顿）
  * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
  * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)，handler 再次执行
@@ -199,7 +199,7 @@ public class DelayJobWorker {
      */
     private DelayJob lockCurrentLease(DelayJob claimedJob) {
         // worker 收到的是 claim 事务提交后的内存快照。finalize 前必须重新 SELECT ... FOR UPDATE，
-        // 读取当前 DB row；否则 recoverer/新 worker 已经接管时，旧快照仍可能把状态写回 DONE/FAILED。
+        // 读取当前 DB row；否则 recoverer/新 worker 已经接管时，旧快照仍可能把状态写回 DONE 或 retry/DEAD。
         DelayJob job = delayJobRepository.findByIdForUpdate(claimedJob.id())
                 .orElseThrow(() -> new IllegalStateException(
                         "claimed delay job disappeared " + claimedJob.id()

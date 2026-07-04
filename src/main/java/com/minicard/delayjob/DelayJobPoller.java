@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * 定期実行(ていきじっこう)。</p>
  *
  * <p>@Scheduled 只负责周期性 poll、短事务 claim、提交 worker pool；
- * 业务处理和 DONE/FAILED finalize 都在 DelayJobWorker 内完成。</p>
+ * 业务处理和 DONE/retry/DEAD finalize 都在 DelayJobWorker 内完成。</p>
  */
 @Component
 // @ConditionalOnProperty 让本地/测试可以关闭后台扫描。
@@ -66,7 +66,7 @@ public class DelayJobPoller {
         // @Scheduled 线程只负责触发和提交，不能直接跑授权过期/自动还款这种可能持锁的业务。
         for (DelayJob job : jobs) {
             try {
-                // 阶段 3：worker 执行业务 handler，并在结束后自行 finalize DONE/FAILED。
+                // 阶段 3：worker 执行业务 handler，并在结束后自行 finalize 为 DONE、retry(PENDING) 或 DEAD。
                 // commit 后才 submit 给 worker pool；worker 会重新校验 PROCESSING lease 后再 finalize。
                 delayJobWorkerExecutor.execute(() -> worker.handleClaimedJob(job));
             } catch (TaskRejectedException exception) {

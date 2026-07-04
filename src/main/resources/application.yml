@@ -157,7 +157,7 @@ outbox:
     # 后台 publisher 再异步发 Kafka。它解决"DB 已提交但消息没发出去"的 partial failure。
     # 整个前缀绑定到 OutboxProperties（@ConfigurationProperties("outbox.publisher")）。
     enabled: true
-    # fixed-delay-ms 控制 poller 扫描 NEW/FAILED event 的频率；不是业务 SLA。
+    # fixed-delay-ms 控制 poller 扫描 due PENDING event 的频率；不是业务 SLA。
     # 真正的 correctness 来自 row lock / lease / retry / idempotency，而不是扫得越快越安全。
     # 对应代码：OutboxPoller 每轮扫 status='PENDING' AND next_attempt_at<=now（近似 FIFO）。
     fixed-delay-ms: 1000
@@ -269,7 +269,8 @@ statement:
     target-accounts-per-job: 1000
   jobs:
     # 分片 job 的执行配置。注意 statement_jobs 的 lease 字段和 outbox/delay-jobs 不同：
-    # 用 claim_until（deadline）+ claimed_by（worker 身份），而不是 next_attempt_at + lease_token。
+    # 用 claim_until（deadline）+ claim_token（owner identity），而不是 next_attempt_at + lease_token；
+    # claimed_by 只是排查日志里的 worker 名，不作为最终防 stale worker 的唯一凭据。
     enabled: true
     # 对应代码：StatementJobDispatcher 扫 statement_jobs status='PENDING'。
     fixed-delay-ms: 1000
@@ -278,7 +279,7 @@ statement:
     # 对应代码：StatementJobDispatcher 单轮领取的 LIMIT。分片 job 每个都要处理最多 target-accounts-per-job
     # 个账户，比单条消息重得多，所以此值远小于 outbox/delay-jobs 的领取上限。
     max-per-run: 20
-    # 对应字段：statement_jobs.attempts；达到上限置 DEAD。
+    # 对应字段：statement_jobs.attempt_count；达到上限置 DEAD。
     max-attempts: 10
     # 对应字段：statement_jobs.claim_until = claim 时刻 + 本值。
     # 300s 是因为一个分片要循环处理上千账户（每账户一个独立事务），远长于单条 publish/投递。

@@ -34,7 +34,8 @@ public class NotificationDeliveryClaimer {
     @Transactional
     public List<NotificationDelivery> claimDispatchableDeliveries() {
         Instant now = Instant.now(clock);
-        // 阶段 1：用 FOR UPDATE SKIP LOCKED 扫描 PENDING/FAILED 且 nextAttemptAt 已到的 delivery。
+        // 阶段 1：用 FOR UPDATE SKIP LOCKED 扫描 due PENDING delivery。
+        // 本模型没有 FAILED 状态；失败后 markFailed() 会回到 PENDING 并推迟 nextAttemptAt，或进入 DEAD。
         // 多实例并发时，被其他事务锁住的 row 会被跳过，不会阻塞整个投递扫描。
         List<NotificationDelivery> deliveries = deliveryRepository.findDispatchableBatchForUpdate(
                 now,
@@ -45,7 +46,7 @@ public class NotificationDeliveryClaimer {
             // 每次 claim 生成新的 lease token：它是本轮租约的身份证，worker finalize 时据此确认"还是我持有"。
             // 用 UUID 而非 nextAttemptAt 时间戳，避免 TIMESTAMP(6) 微秒截断导致的内存/回读不相等误判。
             String leaseToken = UUID.randomUUID().toString();
-            // 阶段 3：PENDING/FAILED -> PROCESSING，在短事务内提交。
+            // 阶段 3：PENDING -> PROCESSING，在短事务内提交。
             // lease 先 commit，worker 才开始调 provider；worker 宕机时 recoverer 在 lease 到期后放回。
             delivery.markProcessing(now, properties.processingTimeoutSeconds(), leaseToken);
             deliveryRepository.updateDeliveryState(delivery);

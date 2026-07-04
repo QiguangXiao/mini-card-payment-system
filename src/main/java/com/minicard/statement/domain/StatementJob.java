@@ -250,7 +250,7 @@ public final class StatementJob {
     }
 
     /**
-     * 保护 DONE/FAILED 只能从 PROCESSING lease finalize，避免未领取 job 被直接结束。
+     * 保护 DONE/retry/DEAD 只能从 PROCESSING lease finalize，避免未领取 job 被直接结束。
      */
     private void requireProcessing() {
         if (status != StatementJobStatus.PROCESSING) {

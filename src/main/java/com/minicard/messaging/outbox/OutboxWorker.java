@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
- * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+30s)
+ * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+processing-timeout-seconds)
  * t1  A 在事务外等 Kafka ack，broker 迟迟不回（或 GC 停顿/网络分区）
  * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
  * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)

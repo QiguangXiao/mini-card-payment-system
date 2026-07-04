@@ -25,7 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>recoverer 兜底的是"worker 在 claim 之后永远回不来"的时间线：</p>
  * <pre>
- * t0  worker claim:  PENDING -> PROCESSING(token=X, lease deadline=t0+30s)
+ * t0  worker claim:  PENDING -> PROCESSING(token=X, lease deadline=t0+processing-timeout-seconds)
  * t1  pod 宕机/provider 调用卡死：finalize 永远不会执行，row 停在 PROCESSING
  * t2  (>deadline) recoverer 扫描到超时 row -> 按一次失败处理:
  *       attempts+1 未达 maxAttempts -> PENDING(nextAttemptAt=now+backoff)
@@ -34,8 +34,9 @@ import org.springframework.transaction.annotation.Transactional;
  * </pre>
  *
  * <p>注意 t1 有两种可能：provider 根本没收到请求，或已发送成功但回执/finalize 前宕机。
- * recoverer 无法区分，只能统一重发——所以投递是 at-least-once，t3 会带着同一个
- * idempotencyKey（= delivery id）重试，由 provider 侧去重防止用户收到重复通知。
+     * recoverer 无法区分，只能统一重发——所以投递是 at-least-once，t3 会带着同一个
+     * idempotencyKey（= delivery id）重试。真实 provider 必须支持并接收这个幂等键；
+     * 否则系统仍可能重复通知用户，不能把本地重试误讲成端到端 exactly-once。
  * 若 t1 的 worker 只是慢而非死，t3 之后它迟到 finalize 会因 leaseToken 不匹配被拒
  * （见 NotificationDeliveryWorker 的 stale worker 时间线）。</p>
  */
