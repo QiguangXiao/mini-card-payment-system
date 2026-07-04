@@ -2,23 +2,22 @@ package com.minicard.notification.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 
-import com.minicard.notification.domain.delivery.NotificationContent;
+import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
+import com.minicard.notification.domain.delivery.NotificationDeliverySender;
 import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
-import com.minicard.notification.domain.delivery.NotificationDispatch;
-import com.minicard.notification.domain.delivery.NotificationRecipient;
-import com.minicard.notification.domain.delivery.NotificationRecipientResolver;
-import com.minicard.notification.domain.delivery.NotificationSender;
-import com.minicard.notification.domain.delivery.NotificationTemplateRenderer;
-import com.minicard.notification.domain.delivery.ProviderReceipt;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
 /**
- * 投递 worker：解析收件人 + 渲染模板 + 调 provider（事务外），再在独立短事务里 finalize。
+ * 投递 worker：领取后的 delivery 在事务外调单渠道 sender，再在独立短事务里 finalize。
  *
  * <p>关键词：投递执行, 事务外副作用, lease 校验, delivery worker,
  * side-effect outside tx, lease revalidation, 配信ワーカー(はいしんワーカー)。</p>
@@ -30,22 +29,21 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 send / finalize 短事务）：</p>
  * <pre>
  * 前置: claimer 短事务把 PENDING 改成 PROCESSING + 新 leaseToken（本类拿到的是快照）
- * 1. resolve recipient by recipientKey（delivery row 只存稳定业务 key，不存地址）；
- *    该渠道无地址: markFailed（业务失败走 retry/DEAD，不假装 SENT）
- * 2. render template（type/channel/subjectId，不回查 Notification aggregate）
- * 3. [事务外] provider send（timeout/retry/circuit breaker；idempotencyKey = delivery id）
- * 4. 成功: finalize 短事务
- *    4.1 SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
+ * 1. 按 channel 从注册表选择 NotificationDeliverySender（启动期已 fail fast 校验完整性）
+ * 2. [事务外] sender.send(delivery)：sender 内部组装地址/文案，并调用 provider
+ *    （Retry + CircuitBreaker；真实 HTTP timeout 放在 HTTP client/SDK）
+ * 3. 成功: finalize 短事务
+ *    3.1 SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
  *        lease 已变则 skip（迟到回执不能覆盖新 owner 的结果）
- *    4.2 markSent(providerMessageId)，释放 lease
- * 5. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验，
+ *    3.2 markSent(providerMessageId)，释放 lease
+ * 4. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验，
  *    markFailed: attempts+backoff 回 PENDING 或进 DEAD
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
  * <pre>
  * t0  worker A claim:  PENDING -> PROCESSING(token=A, lease deadline=t0+processing-timeout-seconds)
- * t1  A 在事务外等 provider 回执，provider 响应很慢（timeout/retry 耗时叠加）
+ * t1  A 在事务外等 provider 回执，provider 响应很慢（HTTP client timeout / retry 耗时叠加）
  * t2  deadline 已过，recoverer 扫描: markProcessingTimedOut -> PENDING（token 清空）
  * t3  worker B claim:  PENDING -> PROCESSING(token=B, 新 deadline)，再次调 provider
  * t4  B 拿到回执 -> finalize: DB token=B 与自己相符 -> SENT(providerMessageId)
@@ -54,8 +52,8 @@ import org.springframework.transaction.support.TransactionOperations;
  *
  * <p>t5 若不 skip，A 会覆盖 B 已写入的 providerMessageId（A 失败时甚至把 SENT 打回
  * PENDING，触发第三次发送）。且 t1 和 t3 都可能真的发出了推送——所以投递是 at-least-once，
-     * 因此必须把 idempotencyKey（= delivery id，跨 retry 不变）透传给支持幂等的 provider；
-     * 若真实 provider 不支持幂等，仍要接受 at-least-once 投递可能让用户收到重复通知。</p>
+ * 因此必须把 idempotencyKey（= delivery id，跨 retry 不变）透传给支持幂等的 provider；
+ * 若真实 provider 不支持幂等，仍要接受 at-least-once 投递可能让用户收到重复通知。</p>
  */
 @Service
 @Slf4j
@@ -63,64 +61,44 @@ public class NotificationDeliveryWorker {
 
     private final NotificationDeliveryRepository deliveryRepository;
     private final NotificationDeliveryProperties properties;
-    private final NotificationRecipientResolver recipientResolver;
-    private final NotificationTemplateRenderer templateRenderer;
-    private final NotificationSender resilientSender;
+    private final Map<NotificationChannel, NotificationDeliverySender> senders;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
 
     public NotificationDeliveryWorker(
             NotificationDeliveryRepository deliveryRepository,
             NotificationDeliveryProperties properties,
-            NotificationRecipientResolver recipientResolver,
-            NotificationTemplateRenderer templateRenderer,
-            NotificationSender resilientSender,
+            List<NotificationDeliverySender> deliverySenders,
             Clock clock,
             TransactionOperations transactionOperations
     ) {
         this.deliveryRepository = deliveryRepository;
         this.properties = properties;
-        // resolver/renderer/sender 三个端口分开：收件人解析、内容渲染、外部发送是不同失败点，
-        // 分开后日志和 retry 语义更清楚，测试也可以单独替换某一环。
-        this.recipientResolver = recipientResolver;
-        this.templateRenderer = templateRenderer;
-        this.resilientSender = resilientSender;
+        // 启动时把 List 收成 EnumMap：热路径 O(1) 查找，并把"缺渠道实现"提前暴露为启动失败。
+        // 如果等到运行期才发现没有 EMAIL sender，该渠道所有 delivery 会白白 retry 到 DEAD。
+        this.senders = sendersByChannel(deliverySenders);
         this.clock = clock;
         this.transactionOperations = transactionOperations;
     }
 
     /**
-     * 执行一条已领取的投递记录，完成收件人解析、模板渲染、provider 调用和状态 finalize。
+     * 执行一条已领取的投递记录，完成单渠道 provider 调用和状态 finalize。
      */
     public void handleClaimedDelivery(NotificationDelivery claimed) {
         try {
-            // 第一步：根据 recipientKey 解析收件人。delivery row 持有的是稳定业务 key，
-            // 不是具体 email/device token；这样用户联系方式变化时仍可由 resolver 决定最新地址。
-            NotificationRecipient recipient = recipientResolver.resolve(claimed.recipientKey());
-            // 第二步：按渠道取地址。APP_PUSH 和 EMAIL 的缺失地址是业务失败，不是系统 crash。
-            String address = recipient.addressFor(claimed.channel());
-            if (address == null || address.isBlank()) {
-                // 收件人在该渠道没有地址：当作一次失败，走退避重试，最终 DEAD 等人工处理。
-                // 不静默标 SENT——那会假装"已通知"，用户其实什么都没收到。
-                markFailed(claimed, "no recipient address for channel " + claimed.channel(), null);
-                return;
+            // 阶段 1：按 delivery.channel() 找到唯一 sender。注册表在构造器已校验完整性，
+            // 所以这里的 null 只可能来自未来 enum/配置不一致，仍按配置错误 fail fast。
+            NotificationDeliverySender sender = senders.get(claimed.channel());
+            if (sender == null) {
+                throw new IllegalStateException("no sender registered for channel " + claimed.channel());
             }
 
-            // 第三步：用 notificationType/channel/subjectId 渲染本次投递内容。
-            // worker 不回查 Notification aggregate；delivery row 已经保存了发送需要的不可变快照。
-            NotificationContent content = templateRenderer.render(
-                    claimed.notificationType(), claimed.channel(), claimed.subjectId());
-            // 第四步：组装发给 sender 的自洽请求。idempotencyKey 来自 delivery id，
-            // 跨 retry 保持不变，方便 provider 按同一 key 去重。
-            NotificationDispatch dispatch = new NotificationDispatch(
-                    claimed.channel(), address, content, claimed.idempotencyKey());
-
-            // 第五步：真正调用外部 provider。这里故意在 DB transaction 外执行，
-            // 避免等待网络 timeout/retry 时占住 notification_deliveries row lock。
-            // provider 调用在事务外，由 ResilientNotificationSender 套 timeout/retry/circuit breaker。
-            ProviderReceipt receipt = resilientSender.send(dispatch);
-            // 第六步：provider 返回成功回执后，才在短事务里校验 lease 并标 SENT。
-            markSent(claimed, receipt);
+            // 阶段 2：事务外调用 provider。sender 内部负责该渠道的地址/文案/Resilience4j；
+            // worker 不关心 email/push 细节，只拿 providerMessageId 回来推进状态机。
+            // 这样状态机边界更清楚：DB lease/finalize 在 worker，外部副作用在 sender。
+            String providerMessageId = sender.send(claimed);
+            // 阶段 3：provider 返回成功回执后，才在短事务里校验 lease 并标 SENT。
+            markSent(claimed, providerMessageId);
         } catch (RuntimeException exception) {
             // 任一环失败都走统一失败 finalize：记录 lastError、attempts 和下一次 retry 时间。
             // 不在这里吞异常后直接返回，否则 PROCESSING lease 会一直等 recoverer 才能释放。
@@ -152,7 +130,7 @@ public class NotificationDeliveryWorker {
      * <p>事务归属：本方法通过 {@code TransactionOperations.executeWithoutResult(...)}
      * 自己开启短事务；provider 调用和 retry/circuit breaker 都已经在事务外完成。</p>
      */
-    private void markSent(NotificationDelivery claimed, ProviderReceipt receipt) {
+    private void markSent(NotificationDelivery claimed, String providerMessageId) {
         // 成功 finalize 单独开短事务：只做 lease revalidation 和状态更新，不包住 provider 网络调用。
         transactionOperations.executeWithoutResult(status -> {
             NotificationDelivery delivery = lockCurrentLease(claimed);
@@ -160,12 +138,12 @@ public class NotificationDeliveryWorker {
                 return;
             }
             // SENT 记录 providerMessageId 作为已送达证据；同时释放 leaseToken，避免后续 worker 误判仍可处理。
-            delivery.markSent(Instant.now(clock), receipt.providerMessageId());
+            delivery.markSent(Instant.now(clock), providerMessageId);
             deliveryRepository.updateDeliveryState(delivery);
             log.info(
                     "notification_delivery_sent deliveryId={} channel={} type={} messageId={}",
                     delivery.id(), delivery.channel(), delivery.notificationType(),
-                    receipt.providerMessageId()
+                    providerMessageId
             );
         });
     }
@@ -198,7 +176,7 @@ public class NotificationDeliveryWorker {
     /**
      * 重新锁定当前 delivery row 并确认本 worker 仍持有 PROCESSING lease。
      *
-     * <p>事务归属：只能在 {@link #markSent(NotificationDelivery, ProviderReceipt)}
+     * <p>事务归属：只能在 {@link #markSent(NotificationDelivery, String)}
      * 或 {@link #markFailed(NotificationDelivery, String, RuntimeException)}
      * 创建的 finalize 短事务内部调用。</p>
      */
@@ -223,5 +201,26 @@ public class NotificationDeliveryWorker {
             return null;
         }
         return delivery;
+    }
+
+    private Map<NotificationChannel, NotificationDeliverySender> sendersByChannel(
+            List<NotificationDeliverySender> deliverySenders
+    ) {
+        Map<NotificationChannel, NotificationDeliverySender> result = new EnumMap<>(NotificationChannel.class);
+        for (NotificationDeliverySender sender : deliverySenders) {
+            NotificationDeliverySender previous = result.put(sender.channel(), sender);
+            if (previous != null) {
+                // 同一 channel 两个 sender 是 wiring 歧义：启动即失败，避免运行期随机选中一个。
+                throw new IllegalStateException("duplicate sender for channel " + sender.channel());
+            }
+        }
+        EnumSet<NotificationChannel> missingChannels = EnumSet.allOf(NotificationChannel.class);
+        missingChannels.removeAll(result.keySet());
+        if (!missingChannels.isEmpty()) {
+            // 缺 sender 是启动期配置错误，不是某条 delivery 的 transient provider failure。
+            // fail fast 比让整个渠道的 delivery 全部 retry 到 DEAD 更便宜、更容易排查。
+            throw new IllegalStateException("missing sender for channel(s) " + missingChannels);
+        }
+        return result;
     }
 }

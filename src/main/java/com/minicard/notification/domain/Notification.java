@@ -70,7 +70,7 @@ public final class Notification {
      *
      * <p>提醒：当前项目还没有 User/Cardholder 聚合，recipientKey 暂时是账户/卡线索
      * (authorization/transaction 用 cardId，repayment 用 creditAccountId)。接真实用户模型时，
-     * 这里应改成 customerId，并由 NotificationRecipientResolver 去查联系方式与渠道偏好。</p>
+     * 这里应改成 customerId，并由 sender/未来的 channel selector 去查联系方式与渠道偏好。</p>
      */
     public static Notification requestFromEvent(
             UUID sourceEventId,

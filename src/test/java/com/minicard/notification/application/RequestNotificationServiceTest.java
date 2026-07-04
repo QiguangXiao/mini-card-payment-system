@@ -4,7 +4,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import com.minicard.messaging.inbox.ConsumerInboxRepository;
@@ -16,8 +15,6 @@ import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
-import com.minicard.notification.domain.delivery.NotificationRecipient;
-import com.minicard.notification.domain.delivery.NotificationRecipientResolver;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -36,29 +33,20 @@ class RequestNotificationServiceTest {
     private final ConsumerInboxRepository inboxRepository = mock(ConsumerInboxRepository.class);
     private final NotificationRepository notificationRepository = mock(NotificationRepository.class);
     private final NotificationDeliveryRepository deliveryRepository = mock(NotificationDeliveryRepository.class);
-    private final NotificationRecipientResolver recipientResolver = mock(NotificationRecipientResolver.class);
 
     private final RequestNotificationService service = new RequestNotificationService(
             inboxRepository,
             notificationRepository,
             deliveryRepository,
-            recipientResolver,
             Clock.fixed(NOW, ZoneOffset.UTC)
     );
 
     @Test
-    // 测试目的：验证正常路径会把一条 Notification 意图 fan-out 成每个启用渠道各一条 delivery。
-    // variant：收件人同时有 APP_PUSH 和 EMAIL，期望两条 delivery 都是 PENDING，后续由 worker 独立投递。
-    void fansOutOneDeliveryPerEnabledChannel() {
+    // 测试目的：验证正常路径会把一条 Notification 意图 fan-out 成当前系统支持的每个渠道各一条 delivery。
+    // variant：当前 enum 有 APP_PUSH 和 EMAIL，期望两条 delivery 都是 PENDING，后续由 worker 独立投递。
+    void fansOutOneDeliveryPerSupportedChannel() {
         when(inboxRepository.claim(any(), any(), any())).thenReturn(true);
         when(notificationRepository.insertIfAbsent(any(Notification.class))).thenReturn(true);
-        when(recipientResolver.resolve("card-123")).thenReturn(new NotificationRecipient(
-                "card-123",
-                Map.of(
-                        NotificationChannel.APP_PUSH, "push-token-card-123",
-                        NotificationChannel.EMAIL, "user-card-123@example.com"
-                )
-        ));
 
         service.requestNotification(approvedCommand());
 
@@ -80,10 +68,6 @@ class RequestNotificationServiceTest {
                 .thenReturn(true)
                 .thenReturn(false);
         when(notificationRepository.insertIfAbsent(any(Notification.class))).thenReturn(true);
-        when(recipientResolver.resolve(any())).thenReturn(new NotificationRecipient(
-                "card-123",
-                Map.of(NotificationChannel.APP_PUSH, "push-token-card-123")
-        ));
         RequestNotificationCommand command = approvedCommand();
 
         service.requestNotification(command);

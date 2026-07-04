@@ -227,10 +227,8 @@ notification:
     # 对应代码：WorkerExecutorConfiguration.notificationDeliveryWorkerExecutor。
     worker-pool-size: 4
     worker-queue-capacity: 100
-    # 对应代码：NotificationDeliveryConfiguration.notificationSenderExecutor——TimeLimiter 需要独立线程跑 send，
-    # 所以 sender 线程池和 worker 线程池分开；senderThreads 应 >= worker-pool-size，否则 worker 会等 sender 空闲。
-    sender-threads: 4
-    # 模拟 provider 的延迟/失败注入：默认 0 失败，改大可演示 TimeLimiter 超时与重试/断路/DEAD。
+    # 模拟 provider 的延迟/失败注入：默认 0 失败；改大可演示 Retry/CircuitBreaker 与 durable retry/DEAD。
+    # provider HTTP 硬超时应由真实 HTTP client/SDK 配置，本项目不再为通知发送引入 TimeLimiter 专用线程池。
     simulated-latency-millis: 20
     simulated-failure-rate-percent: 0
 
@@ -377,8 +375,8 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 2
-      # 每渠道独立断路器：push provider 故障不会连带把 email 熔断。slow-call 阈值让"慢调用"也算失败，
-      # 配合 TimeLimiter 一起把"又慢又错"的 provider 快速隔离。
+      # 每渠道独立断路器：push provider 故障不会连带把 email 熔断。
+      # slow-call 阈值让"很慢但没抛异常"的 provider 也能被统计并隔离。
       notificationPush:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
@@ -405,12 +403,6 @@ resilience4j:
         wait-duration: 200ms
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
-  timelimiter:
-    instances:
-      # 单次 provider 调用的硬超时；超时计为失败，进入 Retry/CircuitBreaker。
-      notificationDelivery:
-        timeout-duration: 2s
-        cancel-running-future: true
   bulkhead:
     instances:
       externalRisk:

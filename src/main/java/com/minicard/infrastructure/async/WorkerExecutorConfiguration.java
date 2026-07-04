@@ -4,6 +4,7 @@ import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.outbox.OutboxProperties;
 import com.minicard.notification.application.NotificationDeliveryProperties;
 import com.minicard.statement.application.StatementProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -21,6 +22,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 // @Configuration 让下面的 @Bean 方法被 Spring 管理，确保 executor 是 singleton 并参与生命周期关闭。
 // 如果业务代码自己 new ThreadPoolTaskExecutor，shutdown、命名和注入都会分散，排查线程问题更难。
 @Configuration
+// 通知发送压平后不再有独立 sender executor；这里注册投递配置，并创建唯一需要的 worker pool。
+@EnableConfigurationProperties(NotificationDeliveryProperties.class)
 public class WorkerExecutorConfiguration {
 
     /**

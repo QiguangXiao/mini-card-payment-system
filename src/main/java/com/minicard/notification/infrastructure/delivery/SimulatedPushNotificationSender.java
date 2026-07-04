@@ -1,20 +1,31 @@
 package com.minicard.notification.infrastructure.delivery;
 
-import com.minicard.notification.application.NotificationDeliveryProperties;
 import com.minicard.notification.domain.delivery.NotificationChannel;
+import com.minicard.notification.domain.delivery.NotificationDelivery;
+import com.minicard.notification.domain.delivery.NotificationDeliverySender;
 import org.springframework.stereotype.Component;
 
 /**
- * APP_PUSH 渠道的模拟 sender。
+ * APP_PUSH 渠道的 delivery sender。
  *
- * <p>真实实现会调用 APNs/FCM 等推送网关；这里只演示渠道隔离：push 与 email 是两个独立 sender，
- * 各自有独立的 Resilience4j 断路器，一个 provider 故障不会拖垮另一个。</p>
+ * <p>关键词：App 推送, provider sender, retry circuit breaker, push delivery,
+ * APNs FCM, プッシュ通知(プッシュつうち)。</p>
+ *
+ * <p>当前没有设备 token 表，所以 push token 由 recipientKey 合成；真实系统会在本类内替换为
+ * device token 查询。它与 EMAIL 使用不同 circuit breaker，provider 故障互不拖累。</p>
  */
 @Component
-public class SimulatedPushNotificationSender extends SimulatedChannelSender {
+public class SimulatedPushNotificationSender implements NotificationDeliverySender {
 
-    public SimulatedPushNotificationSender(NotificationDeliveryProperties properties) {
-        super(properties);
+    private final SimulatedProvider simulatedProvider;
+    private final ResilientCallHelper resilientCallHelper;
+
+    public SimulatedPushNotificationSender(
+            SimulatedProvider simulatedProvider,
+            ResilientCallHelper resilientCallHelper
+    ) {
+        this.simulatedProvider = simulatedProvider;
+        this.resilientCallHelper = resilientCallHelper;
     }
 
     @Override
@@ -23,7 +34,21 @@ public class SimulatedPushNotificationSender extends SimulatedChannelSender {
     }
 
     @Override
-    protected String providerName() {
-        return "push";
+    public String send(NotificationDelivery delivery) {
+        // 阶段 1：当前 demo 用 recipientKey 合成 device token。未来接真实移动端设备表时，只替换这里。
+        String recipientAddress = "push-token-" + delivery.recipientKey();
+        // 阶段 2：push 文案保持短；delivery 已经快照 type/subjectId，sender 不回查业务表。
+        String title = NotificationMessageTemplates.titleFor(delivery.notificationType());
+        String body = NotificationMessageTemplates.bodyFor(
+                delivery.notificationType(), delivery.channel(), delivery.subjectId());
+        // 阶段 3：同步调用 provider，并套 Retry + CircuitBreaker；push/email 的 breaker name 分开。
+        return resilientCallHelper.call("notificationPush", () -> simulatedProvider.send(
+                "push",
+                channel(),
+                recipientAddress,
+                title,
+                body,
+                delivery.idempotencyKey()
+        ));
     }
 }

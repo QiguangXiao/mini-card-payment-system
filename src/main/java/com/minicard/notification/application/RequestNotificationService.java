@@ -3,7 +3,6 @@ package com.minicard.notification.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 
 import com.minicard.messaging.inbox.ConsumerInboxRepository;
 import com.minicard.notification.domain.Notification;
@@ -11,15 +10,13 @@ import com.minicard.notification.domain.NotificationRepository;
 import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
-import com.minicard.notification.domain.delivery.NotificationRecipient;
-import com.minicard.notification.domain.delivery.NotificationRecipientResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 从 integration event 创建通知意图、并按收件人渠道扇出投递记录的 application use case。
+ * 从 integration event 创建通知意图、并按当前支持的渠道扇出投递记录的 application use case。
  *
  * <p>关键词：通知请求, Inbox 幂等, 渠道扇出, notification request,
  * consumer idempotency, delivery fan-out, 通知依頼(つうちいらい)。</p>
@@ -38,8 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
  * Kafka listener 收到 integration event（at-least-once，可能重放）
  * 1. claim consumer inbox (consumer_name, event_id)；重复消息: return（不再创建第二批投递）
  * 2. INSERT Notification 意图（source_event_id 唯一键 = 第二道幂等保护）
- * 3. resolve recipient，取启用渠道集合（enum 排序保证确定性）；
- *    无渠道: 意图保留 + warn，不让 Kafka retry
+ * 3. fan-out 到当前系统已实现的 channel（APP_PUSH/EMAIL；enum 顺序保证确定性）
  * 4. fan-out: 每渠道一条 PENDING notification_delivery，批量 INSERT（同事务）
  * 5. COMMIT 后 listener 正常返回，Kafka offset 才提交
  *    （任一步抛异常: 整体回滚，offset 不提交，重放时重新走 claim）
@@ -55,7 +51,6 @@ public class RequestNotificationService {
     private final ConsumerInboxRepository inboxRepository;
     private final NotificationRepository notificationRepository;
     private final NotificationDeliveryRepository deliveryRepository;
-    private final NotificationRecipientResolver recipientResolver;
     private final Clock clock;
 
     /**
@@ -95,28 +90,15 @@ public class RequestNotificationService {
             return;
         }
 
-        // 阶段 3：解析收件人，再把一条 Notification 意图 fan-out 成多条 per-channel delivery。
-        // 当前 resolver 是 stub（无 User/Cardholder 域），所以 recipientKey 只是 cardId/creditAccountId 线索；
-        // 未来接真实用户模型时，这里仍只依赖 resolver 输出，不让 Kafka listener 知道联系方式细节。
-        NotificationRecipient recipient = recipientResolver.resolve(notification.recipientKey());
-        // channels() 返回启用渠道集合，例如 APP_PUSH、EMAIL。没有渠道不代表上游事件坏了，
-        // 而是收件人偏好/联系方式缺失；因此保留 Notification 意图并 warn，不让 Kafka retry 同一消息。
-        Set<NotificationChannel> enabledChannels = recipient.channels();
-        // 排序只为确定性：Map/Set 遍历顺序不该影响测试、日志或批量 insert 顺序。
-        // 这里按 enum 自然顺序排序，未来新增 SMS/LINE 时插入顺序仍稳定。
-        List<NotificationChannel> orderedChannels = enabledChannels.stream()
-                .sorted()
-                .toList();
+        // 阶段 3：把一条 Notification 意图 fan-out 成多条 per-channel delivery。
+        // 当前项目没有 User/Preference 域，APP_PUSH/EMAIL 都是 demo 渠道；因此这里按系统已实现的 enum 全量扇出。
+        // 未来如果引入"用户关闭 email"等偏好，再增加 NotificationChannelSelector，而不是恢复一串过早端口。
+        List<NotificationChannel> orderedChannels = List.of(NotificationChannel.values());
         // 每个 channel 各自生成一条 PENDING delivery row。这样 push/email 可以独立 claim、retry、DEAD；
         // 如果只在 Notification 上放一个状态，就无法表达"push 已发、email 还在重试"。
         List<NotificationDelivery> deliveries = orderedChannels.stream()
                 .map(channel -> NotificationDelivery.pendingFor(notification, channel, now))
                 .toList();
-        if (deliveries.isEmpty()) {
-            // 没有任何渠道：通知意图已落库但无人投递。记一条 warn，便于发现 resolver/偏好配置问题。
-            log.warn("notification_no_delivery_channels eventId={} recipientKey={}",
-                    command.sourceEventId(), notification.recipientKey());
-        }
         // 阶段 4：与 Notification 意图在同一个 transaction 内批量插入 delivery rows。
         // 如果这里失败，整个事务回滚，listener 抛异常，Kafka offset 不会提交；下一次重放会重新 claim/insert。
         // 批量插入比逐条 insert 少 DB round trip；(notification_id, channel) 唯一键在 DB 层兜底防重复。

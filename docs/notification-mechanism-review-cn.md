@@ -5,6 +5,13 @@
 > `DEAD`, Resilience4j, provider idempotency, effectively-once, 配信(はいしん),
 > 通知(つうち)。
 
+> [!NOTE]
+> 这份文档保留为“重构前的分层 review 与取舍记录”。当前代码已经采纳更激进的精简方案：
+> `NotificationDeliveryWorker -> NotificationDeliverySender(push/email) -> SimulatedProvider`，
+> 并删除了 `NotificationRecipientResolver`、`NotificationTemplateRenderer`、`ResilientNotificationSender`、
+> `NotificationDispatch`、`ProviderReceipt` 和通知专用 `TimeLimiter` 线程池。当前实现细节以
+> [notification-delivery-design-cn.md](notification-delivery-design-cn.md) 为准。
+
 这份文档回答三个问题：
 
 1. 当前 `notification` 模块到底怎么跑？
@@ -12,7 +19,9 @@
 3. 如果要缩减类，缩减后会变成什么样，代价是什么？
 
 > [!IMPORTANT]
-> 本文按当前代码事实写，不按历史设计或未来理想图写。当前实现里
+> 本文原按当时代码事实写，不按更早历史设计或未来理想图写。后续压平 sender 层后，当前实现以
+> `notification-delivery-design-cn.md` 和代码为准；本段以下仍可作为理解旧分层取舍的 review 记录。
+> 当前实现里
 > `NotificationDelivery` 已经有独立 `lease_token` 字段。`nextAttemptAt`
 > 表达 PENDING 的下次可投递时间、PROCESSING 的 lease deadline；
 > `leaseToken` 表达本轮 worker ownership。worker finalize 时比较

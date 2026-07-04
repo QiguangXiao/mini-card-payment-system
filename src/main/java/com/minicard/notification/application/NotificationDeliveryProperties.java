@@ -29,9 +29,7 @@ public record NotificationDeliveryProperties(
         int workerPoolSize,
         /** 投递 worker queue 容量，满时触发 TaskRejectedException 并回 retry。 */
         int workerQueueCapacity,
-        /** provider 调用 supplyAsync 用的线程数（供 Resilience4j TimeLimiter 取消超时任务）。 */
-        int senderThreads,
-        /** 模拟 provider 注入的延迟毫秒（用于演示 TimeLimiter 超时）。 */
+        /** 模拟 provider 注入的延迟毫秒（用于演示 slow-call 断路和 lease/retry 关系）。 */
         long simulatedLatencyMillis,
         /** 模拟 provider 注入的失败率百分比（用于演示重试/断路/DEAD）。 */
         int simulatedFailureRatePercent
@@ -43,8 +41,7 @@ public record NotificationDeliveryProperties(
                 || processingTimeoutSeconds <= 0
                 || maxAttempts <= 0
                 || workerPoolSize <= 0
-                || workerQueueCapacity < 0
-                || senderThreads <= 0) {
+                || workerQueueCapacity < 0) {
             throw new IllegalArgumentException("notification delivery properties must be positive");
         }
         if (simulatedLatencyMillis < 0
