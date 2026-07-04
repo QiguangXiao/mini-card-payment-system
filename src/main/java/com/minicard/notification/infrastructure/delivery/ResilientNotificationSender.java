@@ -1,6 +1,7 @@
 package com.minicard.notification.infrastructure.delivery;
 
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -124,6 +125,13 @@ public class ResilientNotificationSender implements NotificationSender {
                 // 同一渠道两个实现是配置歧义，启动即失败，避免运行期随机用到其中一个。
                 throw new IllegalStateException("duplicate sender for channel " + sender.channel());
             }
+        }
+        EnumSet<NotificationChannel> missingChannels = EnumSet.allOf(NotificationChannel.class);
+        missingChannels.removeAll(result.keySet());
+        if (!missingChannels.isEmpty()) {
+            // 缺 sender 是启动期 wiring/config 错误，不是某条 delivery 的 transient provider failure。
+            // fail fast 可以避免某个渠道的所有投递运行后才一路 retry 到 DEAD。
+            throw new IllegalStateException("missing sender for channel(s) " + missingChannels);
         }
         return result;
     }
