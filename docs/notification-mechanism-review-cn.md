@@ -7,7 +7,8 @@
 
 > [!NOTE]
 > 这份文档保留为“重构前的分层 review 与取舍记录”。当前代码已经采纳更激进的精简方案：
-> `NotificationDeliveryWorker -> NotificationDeliverySender(push/email) -> SimulatedProvider`，
+> `NotificationDeliveryWorker -> NotificationDeliverySender(push/email) -> NotificationProviderClient(Feign)
+> -> SimulatedNotificationProviderController`，
 > 并删除了 `NotificationRecipientResolver`、`NotificationTemplateRenderer`、`ResilientNotificationSender`、
 > `NotificationDispatch`、`ProviderReceipt` 和通知专用 `TimeLimiter` 线程池。当前实现细节以
 > [notification-delivery-design-cn.md](notification-delivery-design-cn.md) 为准。

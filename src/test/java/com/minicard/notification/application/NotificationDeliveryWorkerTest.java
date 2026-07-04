@@ -28,7 +28,8 @@ class NotificationDeliveryWorkerTest {
     private NotificationDeliveryWorker newWorker(List<NotificationDeliverySender> senders) {
         return new NotificationDeliveryWorker(
                 mock(NotificationDeliveryRepository.class),
-                new NotificationDeliveryProperties(true, 1000, 5000, 50, 30, 8, 4, 100, 0, 0),
+                new NotificationDeliveryProperties(
+                        "http://localhost:8080", true, 1000, 5000, 50, 30, 8, 4, 100, 0, 0),
                 senders,
                 Clock.systemUTC(),
                 mock(TransactionOperations.class)

@@ -87,6 +87,22 @@ class NotificationDeliveryTest {
     }
 
     @Test
+    // 测试目的：验证 provider 4xx 这类 permanent failure 不消耗完整 retry budget。
+    // variant：PROCESSING delivery 收到永久失败后直接 DEAD，并释放 lease，等待人工修 contract/config。
+    void permanentFailureGoesDeadImmediately() {
+        NotificationDelivery delivery = pushDelivery();
+        delivery.markProcessing(NOW, 30, "lease-token-1");
+
+        delivery.markPermanentFailed("provider 400 bad request", NOW.plusSeconds(1));
+
+        assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.DEAD);
+        assertThat(delivery.attempts()).isEqualTo(1);
+        assertThat(delivery.nextAttemptAt()).isEqualTo(NOW.plusSeconds(1));
+        assertThat(delivery.lastError()).isEqualTo("provider 400 bad request");
+        assertThat(delivery.leaseToken()).isNull();
+    }
+
+    @Test
     // 测试目的：验证 recoverer 把超时 PROCESSING lease 当作一次失败处理。
     // variant：worker 可能宕机或卡死，timeout 后 attempts+1 并回到 PENDING 等待下一轮。
     void processingTimeoutCountsAsOneFailure() {

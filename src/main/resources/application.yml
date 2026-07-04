@@ -71,6 +71,12 @@ spring:
             # 如果不显式设置，供应商 brownout 时 socket 等待可能先耗尽 Hikari/Tomcat，再等 CircuitBreaker 反应。
             connect-timeout: 300
             read-timeout: 800
+          notification-provider:
+            # 通知 provider 在异步 worker、DB transaction 外调用；这里的 timeout 只钉住 worker 线程，不钉住用户请求。
+            # read-timeout 必须大于 notificationPush/Email 的 slow-call-duration-threshold：
+            # 1s~2s 之间的"慢但成功"会被 CircuitBreaker 统计；超过 2s 的等待由 Feign 硬切断。
+            connect-timeout: 300
+            read-timeout: 2000
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -209,6 +215,9 @@ delay-jobs:
 notification:
   delivery:
     # 整个前缀绑定到 NotificationDeliveryProperties；表结构与 outbox_events 对称。
+    # Feign client 默认回环调用本应用里的 SimulatedNotificationProviderController；
+    # 生产接真实 provider 时改成 SendGrid/FCM/APNs wrapper 的 base URL。
+    provider-base-url: ${NOTIFICATION_PROVIDER_BASE_URL:http://localhost:8080}
     # 关掉后只创建 PENDING delivery、不实际外发，便于迁移/排查时隔离副作用。
     enabled: true
     # 对应代码：NotificationDeliveryPoller 扫 notification_deliveries status='PENDING' AND next_attempt_at<=now。
@@ -376,25 +385,31 @@ resilience4j:
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 2
       # 每渠道独立断路器：push provider 故障不会连带把 email 熔断。
-      # slow-call 阈值让"很慢但没抛异常"的 provider 也能被统计并隔离。
+      # slow-call 阈值必须小于 Feign read-timeout；否则慢调用会先被 timeout 截断，只剩 failure 统计。
       notificationPush:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
         minimum-number-of-calls: 5
         failure-rate-threshold: 50
-        slow-call-duration-threshold: 2s
+        slow-call-duration-threshold: 1s
         slow-call-rate-threshold: 100
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 3
+        # provider 4xx 是请求/配置永久错误，不代表 push provider brownout；不计入断路器失败率。
+        ignore-exceptions:
+          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
       notificationEmail:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
         minimum-number-of-calls: 5
         failure-rate-threshold: 50
-        slow-call-duration-threshold: 2s
+        slow-call-duration-threshold: 1s
         slow-call-rate-threshold: 100
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 3
+        # provider 4xx 是请求/配置永久错误，不代表 email provider brownout；不计入断路器失败率。
+        ignore-exceptions:
+          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
   retry:
     instances:
       # intra-attempt 快速重试：对 provider 抖动做几次内存级退避重试；跨重启的 durable 重试由投递状态机负责。
@@ -403,6 +418,13 @@ resilience4j:
         wait-duration: 200ms
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
+        # 断路器已经 OPEN 时，CallNotPermittedException 表示"本轮不要再打 provider"；
+        # 如果 retry 继续重试，只会快速失败 3 次并制造噪声，不能提高成功率。
+        # NotificationDeliveryPermanentException 来自 Feign ErrorDecoder 对 4xx 的分类：
+        # 这类请求契约/认证/配置错误不靠重试恢复，应交给 worker 直接 DEAD。
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
   bulkhead:
     instances:
       externalRisk:

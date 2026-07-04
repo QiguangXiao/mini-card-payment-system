@@ -13,6 +13,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "notification.delivery")
 public record NotificationDeliveryProperties(
+        /** 模拟 notification provider 的 base URL；本地默认回环到同一个 Spring Boot 应用。 */
+        String providerBaseUrl,
         /** 是否启用投递 poller/recoverer。关掉后只创建 PENDING delivery，不实际外发。 */
         boolean enabled,
         /** poller 扫描间隔，毫秒。 */
@@ -35,6 +37,9 @@ public record NotificationDeliveryProperties(
         int simulatedFailureRatePercent
 ) {
     public NotificationDeliveryProperties {
+        if (providerBaseUrl == null || providerBaseUrl.isBlank()) {
+            throw new IllegalArgumentException("notification provider base url must not be blank");
+        }
         if (fixedDelayMs <= 0
                 || recoveryFixedDelayMs <= 0
                 || batchSize <= 0

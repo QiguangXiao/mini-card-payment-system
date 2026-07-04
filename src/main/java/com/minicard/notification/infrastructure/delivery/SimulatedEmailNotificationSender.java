@@ -17,14 +17,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class SimulatedEmailNotificationSender implements NotificationDeliverySender {
 
-    private final SimulatedProvider simulatedProvider;
+    private final NotificationProviderClient notificationProviderClient;
     private final ResilientCallHelper resilientCallHelper;
 
     public SimulatedEmailNotificationSender(
-            SimulatedProvider simulatedProvider,
+            NotificationProviderClient notificationProviderClient,
             ResilientCallHelper resilientCallHelper
     ) {
-        this.simulatedProvider = simulatedProvider;
+        this.notificationProviderClient = notificationProviderClient;
         this.resilientCallHelper = resilientCallHelper;
     }
 
@@ -41,14 +41,20 @@ public class SimulatedEmailNotificationSender implements NotificationDeliverySen
         String title = NotificationMessageTemplates.titleFor(delivery.notificationType());
         String body = NotificationMessageTemplates.bodyFor(
                 delivery.notificationType(), delivery.channel(), delivery.subjectId());
-        // 阶段 3：同步调用 provider，并套 Retry + CircuitBreaker。真实 HTTP timeout 在 SDK/HTTP client 配。
-        return resilientCallHelper.call("notificationEmail", () -> simulatedProvider.send(
-                "email",
-                channel(),
-                recipientAddress,
-                title,
-                body,
-                delivery.idempotencyKey()
-        ));
+        NotificationProviderClient.NotificationProviderRequest request =
+                new NotificationProviderClient.NotificationProviderRequest(
+                        "email",
+                        channel(),
+                        recipientAddress,
+                        title,
+                        body,
+                        delivery.idempotencyKey()
+                );
+        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker。
+        // 硬超时由 spring.cloud.openfeign.client.config.notification-provider 控制，不放进 R4j TimeLimiter。
+        return resilientCallHelper.call(
+                "notificationEmail",
+                () -> notificationProviderClient.send(request).providerMessageId()
+        );
     }
 }

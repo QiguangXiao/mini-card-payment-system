@@ -17,14 +17,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class SimulatedPushNotificationSender implements NotificationDeliverySender {
 
-    private final SimulatedProvider simulatedProvider;
+    private final NotificationProviderClient notificationProviderClient;
     private final ResilientCallHelper resilientCallHelper;
 
     public SimulatedPushNotificationSender(
-            SimulatedProvider simulatedProvider,
+            NotificationProviderClient notificationProviderClient,
             ResilientCallHelper resilientCallHelper
     ) {
-        this.simulatedProvider = simulatedProvider;
+        this.notificationProviderClient = notificationProviderClient;
         this.resilientCallHelper = resilientCallHelper;
     }
 
@@ -41,14 +41,19 @@ public class SimulatedPushNotificationSender implements NotificationDeliverySend
         String title = NotificationMessageTemplates.titleFor(delivery.notificationType());
         String body = NotificationMessageTemplates.bodyFor(
                 delivery.notificationType(), delivery.channel(), delivery.subjectId());
-        // 阶段 3：同步调用 provider，并套 Retry + CircuitBreaker；push/email 的 breaker name 分开。
-        return resilientCallHelper.call("notificationPush", () -> simulatedProvider.send(
-                "push",
-                channel(),
-                recipientAddress,
-                title,
-                body,
-                delivery.idempotencyKey()
-        ));
+        NotificationProviderClient.NotificationProviderRequest request =
+                new NotificationProviderClient.NotificationProviderRequest(
+                        "push",
+                        channel(),
+                        recipientAddress,
+                        title,
+                        body,
+                        delivery.idempotencyKey()
+                );
+        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker；push/email 的 breaker name 分开。
+        return resilientCallHelper.call(
+                "notificationPush",
+                () -> notificationProviderClient.send(request).providerMessageId()
+        );
     }
 }

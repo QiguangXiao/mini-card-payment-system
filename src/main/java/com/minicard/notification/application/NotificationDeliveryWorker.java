@@ -11,6 +11,7 @@ import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import com.minicard.notification.domain.delivery.NotificationDeliverySender;
+import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,8 +37,9 @@ import org.springframework.transaction.support.TransactionOperations;
  *    3.1 SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
  *        lease 已变则 skip（迟到回执不能覆盖新 owner 的结果）
  *    3.2 markSent(providerMessageId)，释放 lease
- * 4. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验，
- *    markFailed: attempts+backoff 回 PENDING 或进 DEAD
+ * 4. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验
+ *    4.1 transient failure(timeout/5xx): markFailed，attempts+backoff 回 PENDING 或进 DEAD
+ *    4.2 permanent failure(provider 4xx): markPermanentFailed，直接 DEAD，避免无意义重试
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
@@ -99,6 +101,10 @@ public class NotificationDeliveryWorker {
             String providerMessageId = sender.send(claimed);
             // 阶段 3：provider 返回成功回执后，才在短事务里校验 lease 并标 SENT。
             markSent(claimed, providerMessageId);
+        } catch (NotificationDeliveryPermanentException exception) {
+            // provider 4xx 等永久失败：请求/凭证/endpoint 不修，retry 多少次都不会成功。
+            // 直接 DEAD 让问题尽快暴露给人工/admin，而不是白白消耗 8 次 durable retry。
+            markPermanentFailed(claimed, exception.getMessage(), exception);
         } catch (RuntimeException exception) {
             // 任一环失败都走统一失败 finalize：记录 lastError、attempts 和下一次 retry 时间。
             // 不在这里吞异常后直接返回，否则 PROCESSING lease 会一直等 recoverer 才能释放。
@@ -167,6 +173,25 @@ public class NotificationDeliveryWorker {
             deliveryRepository.updateDeliveryState(delivery);
             log.warn(
                     "notification_delivery_failed deliveryId={} channel={} attempts={} status={}",
+                    delivery.id(), delivery.channel(), delivery.attempts(), delivery.status(),
+                    exception
+            );
+        });
+    }
+
+    /**
+     * 在独立短事务中记录永久性失败，并直接进入 DEAD。
+     */
+    private void markPermanentFailed(NotificationDelivery claimed, String error, RuntimeException exception) {
+        transactionOperations.executeWithoutResult(status -> {
+            NotificationDelivery delivery = lockCurrentLease(claimed);
+            if (delivery == null) {
+                return;
+            }
+            delivery.markPermanentFailed(error, Instant.now(clock));
+            deliveryRepository.updateDeliveryState(delivery);
+            log.warn(
+                    "notification_delivery_permanent_failed deliveryId={} channel={} attempts={} status={}",
                     delivery.id(), delivery.channel(), delivery.attempts(), delivery.status(),
                     exception
             );

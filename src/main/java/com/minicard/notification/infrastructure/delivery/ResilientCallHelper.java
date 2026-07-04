@@ -2,6 +2,7 @@ package com.minicard.notification.infrastructure.delivery;
 
 import java.util.function.Supplier;
 
+import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.Retry;
@@ -19,10 +20,18 @@ import org.springframework.stereotype.Component;
  * 不会重新长成一个 ResilientNotificationSender 门面。</p>
  *
  * <p>HTTP client 层指 Feign/WebClient/OkHttp/Apache HttpClient/供应商 SDK 这些真正发网络请求的地方。
- * 当前项目调用的是 {@link SimulatedProvider} 的内部函数，所以没有 connect/read timeout 可配；
- * 未来换成 Feign 调 SendGrid/FCM 等外部 API 时，应在 Feign 或底层 HTTP client 配置超时。
+ * 当前 notification provider 已经通过 Feign 调本地模拟 controller，所以 connect/read timeout
+ * 由 {@code spring.cloud.openfeign.client.config.notification-provider} 配置。
  * 超时抛出的异常再进入本 helper，被 Retry 和 CircuitBreaker 统计。这里不引入 Resilience4j TimeLimiter，
  * 避免为了硬超时重新带回额外线程池和 async future。</p>
+ *
+ * <p>重试预算只放在 Resilience4j 这一层：Spring Cloud OpenFeign 默认 {@code Retryer.NEVER_RETRY}，
+ * 这个默认应保持不变。若未来给 Feign 自己也配置 retry，会变成 R4j 次数 × Feign 次数的真实 HTTP 请求，
+ * 虽然 idempotencyKey 能降低重复副作用，但会放大 provider 压力和排障噪声。</p>
+ *
+ * <p>异常分类由 {@link NotificationProviderFeignConfiguration} 先做第一层翻译：
+ * timeout、连接失败、5xx 仍按 transient failure 进入 retry；4xx 会被转换成
+ * {@link NotificationDeliveryPermanentException}，不做 R4j retry，worker 也会直接 DEAD。</p>
  */
 @Component
 public class ResilientCallHelper {
@@ -59,6 +68,10 @@ public class ResilientCallHelper {
         try {
             // providerCall 返回 providerMessageId。worker 后续用这个回执 id markSent。
             return decorated.get();
+        } catch (NotificationDeliveryPermanentException exception) {
+            // 4xx 已由 ErrorDecoder 翻译成 permanent failure。不要包装成 IllegalStateException，
+            // 否则 worker 看不到类型，只能按 transient failure 消耗 durable retry。
+            throw exception;
         } catch (RuntimeException exception) {
             // CallNotPermittedException(断路打开) / provider exception / retry exhausted 都到这里。
             // worker 会统一 markFailed，推进 durable retry/DEAD；helper 不直接碰 DB 状态机。

@@ -27,6 +27,7 @@ import lombok.experimental.Accessors;
  * PROCESSING -> SENT        markSent()                 worker finalize：provider 已回执（终态）
  * PROCESSING -> PENDING     markFailed()               worker 失败 finalize / recoverer lease 超时，backoff 后重试
  * PROCESSING -> DEAD        markFailed()               attempts >= maxAttempts（终态，等人工重放）
+ * PROCESSING -> DEAD        markPermanentFailed()      provider 4xx 等永久失败，不消耗完整 retry budget
  * </pre>
  *
  * <p>划分逻辑：没有任何 API 直接推动投递状态——上游（messaging listener）只负责创建 PENDING 行，
@@ -246,6 +247,22 @@ public final class NotificationDelivery {
         long delaySeconds = Math.min(1L << Math.min(attempts - 1, 6), MAX_RETRY_DELAY_SECONDS);
         status = NotificationDeliveryStatus.PENDING;
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
+    }
+
+    /**
+     * 记录永久性投递失败，并直接进入 DEAD。
+     *
+     * <p>典型来源是 provider 4xx：请求格式、认证、权限或 endpoint 配错。继续自动 retry 不会让它恢复，
+     * 反而会把同一条坏请求打满 8 次并掩盖真正需要人工修复的 contract/config 问题。</p>
+     */
+    public void markPermanentFailed(String error, Instant failedAt) {
+        attempts++;
+        lastError = truncate(requireText(error, "error"));
+        Instant actualFailedAt = Objects.requireNonNull(failedAt);
+        updatedAt = actualFailedAt;
+        leaseToken = null;
+        status = NotificationDeliveryStatus.DEAD;
+        nextAttemptAt = actualFailedAt;
     }
 
     /**
