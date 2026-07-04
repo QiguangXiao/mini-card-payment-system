@@ -23,6 +23,8 @@ class DelayJobWorkerTest {
     private static final Instant NOW = Instant.parse("2026-06-08T00:00:00Z");
 
     @Test
+    // 测试目的：验证 handler 成功后，worker 在 finalize 短事务中把 job 标记 DONE。
+    // variant：jobType 有对应 handler，handler 正常返回，DelayJob 不再进入 retry。
     void handlesClaimedJobAndMarksItDone() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJobHandler handler = mock(DelayJobHandler.class);
@@ -39,6 +41,8 @@ class DelayJobWorkerTest {
     }
 
     @Test
+    // 测试目的：验证 handler 抛异常会推进 retry/backoff，而不是让 job 卡在 PROCESSING。
+    // variant：第一次失败未达 maxAttempts，状态回 PENDING，attempts+1。
     void failedJobIsKeptPendingUntilMaxAttempts() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJobHandler handler = mock(DelayJobHandler.class);
@@ -58,6 +62,8 @@ class DelayJobWorkerTest {
     }
 
     @Test
+    // 测试目的：验证迟到 worker 不会覆盖新 lease owner 的处理结果。
+    // variant：DB current row 已被重新 claim 成另一个 token，旧 worker 即使 handler 成功也不 update。
     void staleWorkerDoesNotOverwriteChangedLease() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJobHandler handler = mock(DelayJobHandler.class);

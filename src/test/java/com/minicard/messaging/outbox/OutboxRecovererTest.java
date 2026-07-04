@@ -18,6 +18,8 @@ class OutboxRecovererTest {
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");
 
     @Test
+    // 测试目的：验证 recoverer 会把超时 PROCESSING lease 当作一次 publish failure。
+    // variant：过期 event 回到 PENDING、attempts+1、leaseToken 清空，等待下一轮重新发布。
     void recoversExpiredProcessingLeaseForRetry() {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         OutboxEvent event = pendingEvent();

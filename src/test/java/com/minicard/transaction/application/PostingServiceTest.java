@@ -74,6 +74,8 @@ class PostingServiceTest {
     }
 
     @Test
+    // 测试目的：验证 presentment happy path 会把 APPROVED authorization 入账为 POSTED transaction。
+    // variant：金额完全匹配、account 有 reserved hold，锁顺序应为 account -> transaction claim。
     void postsApprovedAuthorizationIntoCardTransaction() {
         UUID accountId = UUID.randomUUID();
         Authorization authorization = approvedAuthorization("card-123", "100.00");
@@ -108,6 +110,8 @@ class PostingServiceTest {
     }
 
     @Test
+    // 测试目的：验证 network_transaction_id 的幂等重试直接返回已 POSTED transaction。
+    // variant：claim=false 且已存在交易，不再锁 account、不再更新 authorization 或发布事件。
     void returnsExistingPostedTransactionForIdempotentRetry() {
         UUID accountId = UUID.randomUUID();
         Authorization authorization = approvedAuthorization("card-123", "100.00");
@@ -131,6 +135,8 @@ class PostingServiceTest {
     }
 
     @Test
+    // 测试目的：验证非 APPROVED authorization 不能被 presentment 入账。
+    // variant：authorization 已 EXPIRED，业务拒绝而不是释放/扣减 account。
     void rejectsPresentmentWhenAuthorizationIsNotApproved() {
         UUID authorizationId = UUID.randomUUID();
         Authorization authorization = Authorization.restore(

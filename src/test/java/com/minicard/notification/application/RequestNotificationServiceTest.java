@@ -47,6 +47,8 @@ class RequestNotificationServiceTest {
     );
 
     @Test
+    // 测试目的：验证正常路径会把一条 Notification 意图 fan-out 成每个启用渠道各一条 delivery。
+    // variant：收件人同时有 APP_PUSH 和 EMAIL，期望两条 delivery 都是 PENDING，后续由 worker 独立投递。
     void fansOutOneDeliveryPerEnabledChannel() {
         when(inboxRepository.claim(any(), any(), any())).thenReturn(true);
         when(notificationRepository.insertIfAbsent(any(Notification.class))).thenReturn(true);
@@ -71,6 +73,8 @@ class RequestNotificationServiceTest {
     }
 
     @Test
+    // 测试目的：验证 Kafka redelivery/重复 event 先被 Inbox claim 挡住。
+    // variant：第一次 claim=true，第二次 claim=false；第二次不应再写 Notification 或 delivery rows。
     void duplicateDeliveryDoesNotCreateAnotherNotificationOrDeliveries() {
         when(inboxRepository.claim(any(), any(), any()))
                 .thenReturn(true)
@@ -92,6 +96,8 @@ class RequestNotificationServiceTest {
     }
 
     @Test
+    // 测试目的：验证 source_event_id 唯一键作为第二道幂等保护。
+    // variant：Inbox claim 成功但 Notification insert 冲突，说明已有意图，不应继续 fan-out delivery。
     void notificationInsertConflictSkipsDeliveryCreation() {
         when(inboxRepository.claim(any(), any(), any())).thenReturn(true);
         // source_event_id 唯一键冲突：第二道幂等保护命中，连带不创建投递。

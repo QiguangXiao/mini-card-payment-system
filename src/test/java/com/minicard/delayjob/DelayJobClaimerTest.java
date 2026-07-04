@@ -18,6 +18,8 @@ class DelayJobClaimerTest {
     private static final Instant NOW = Instant.parse("2026-06-08T00:00:00Z");
 
     @Test
+    // 测试目的：验证 DelayJob claim 只在短事务中把 due PENDING job 改成 PROCESSING lease。
+    // variant：repository 返回 1 条到期 job，claimer 写入 60s deadline、新 leaseToken，并持久化状态。
     void claimsDueJobsInShortTransaction() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJob job = job();

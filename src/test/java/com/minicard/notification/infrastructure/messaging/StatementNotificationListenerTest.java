@@ -31,6 +31,8 @@ class StatementNotificationListenerTest {
             new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Test
+    // 测试目的：验证 statement.closed 会被翻译成账单已出通知 command。
+    // variant：statementId 是 subjectId，creditAccountId/recipientKey 负责后续收件人解析。
     void closedEventRequestsStatementNotification() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         StatementNotificationListener listener = listener(service);
@@ -55,6 +57,8 @@ class StatementNotificationListenerTest {
     }
 
     @Test
+    // 测试目的：验证无关 statement event 被正常跳过。
+    // variant：合法 envelope 但 eventType 不匹配，不应创建 Notification 或 delivery。
     void irrelevantStatementEventIsSkipped() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         StatementNotificationListener listener = listener(service);

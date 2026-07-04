@@ -47,6 +47,8 @@ class StatementCycleServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    // 测试目的：验证关账日次日会创建本周期的 sharded statement jobs。
+    // variant：2500 个账户、每片 1000 个账户，期望生成 3 个 shard，due date 严格晚于 periodEnd。
     void createsShardedJobsForTheClosedCycleOnTheDayAfterCloseDate() {
         // close-day=31 表示月末关账：runDate=7/1 的“昨天”6/30 是 6 月关账日。
         when(billingRepository.countBillableAccounts(any(), any())).thenReturn(2500L);
@@ -74,6 +76,8 @@ class StatementCycleServiceTest {
     }
 
     @Test
+    // 测试目的：验证非关账日后的普通日期不会误创建 statement jobs。
+    // variant：runDate=7/2，昨天不是 close date，跳过 billing account 统计和 job insert。
     void skipsWhenRunDateDoesNotFollowACloseDate() {
         // runDate=7/2 的“昨天”7/1 不是关账日（关账日是月末），不应创建任何 job。
         int shardCount = service.createDueJobs(LocalDate.parse("2026-07-02"));
@@ -84,6 +88,8 @@ class StatementCycleServiceTest {
     }
 
     @Test
+    // 测试目的：验证已有 cycle job 时快速跳过，避免重复创建分片。
+    // variant：existsForCycle=true，不再 count billable accounts，也不 insertAll。
     void skipsCloseCycleWhenStatementJobsAlreadyExist() {
         when(jobRepository.existsForCycle(LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30")))
                 .thenReturn(true);
@@ -97,6 +103,8 @@ class StatementCycleServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    // 测试目的：验证 scheduler 入口是 reconciliation，而不是只处理昨天一个 edge trigger。
+    // variant：lookback=2，5 月 cycle 已存在、6 月缺失，只补建 6 月 jobs。
     void schedulerEntryReconcilesRecentClosedCyclesAndCreatesOnlyMissingOnes() {
         // CLOCK 的 JST 日期是 2026-07-01；lookback=2 会检查 6/30 和 5/31 两个已过去关账日。
         when(jobRepository.existsForCycle(LocalDate.parse("2026-05-01"), LocalDate.parse("2026-05-31")))
@@ -131,6 +139,8 @@ class StatementCycleServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    // 测试目的：验证 due date 使用 BusinessDayCalendar 顺延。
+    // variant：下月 payment base day 落在非营业日，最终 due date 顺延到下一个营业日。
     void dueDateFollowsBusinessDayCalendarWhenBaseDayIsWeekend() {
         // 0 账户仍创建 1 个空分片，便于单独断言 due date。
         when(billingRepository.countBillableAccounts(any(), any())).thenReturn(0L);

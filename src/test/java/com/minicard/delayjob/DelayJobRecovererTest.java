@@ -18,6 +18,8 @@ class DelayJobRecovererTest {
     private static final Instant NOW = Instant.parse("2026-06-08T00:00:00Z");
 
     @Test
+    // 测试目的：验证 recoverer 会把过期 PROCESSING lease 当作一次 job failure。
+    // variant：超时 job 回 PENDING、attempts+1、leaseToken 清空，后续可重新执行 future business action。
     void recoversExpiredProcessingLeaseForRetry() {
         DelayJobRepository repository = mock(DelayJobRepository.class);
         DelayJob job = job();

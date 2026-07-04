@@ -14,6 +14,8 @@ import static org.mockito.Mockito.when;
 class DelayJobPollerTest {
 
     @Test
+    // 测试目的：验证 poller 不执行业务 handler，只把已 claim job 提交给 worker executor。
+    // variant：SyncTaskExecutor 让提交同步执行，断言 worker.handleClaimedJob 被调用。
     void submitsClaimedJobsToWorkerExecutor() {
         DelayJobClaimer claimer = mock(DelayJobClaimer.class);
         DelayJobWorker worker = mock(DelayJobWorker.class);

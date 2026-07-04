@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 class ResilientNotificationSenderTest {
 
     @Test
+    // 测试目的：验证缺 channel sender 属于启动期 wiring/config 错误。
+    // variant：只注册 APP_PUSH，缺 EMAIL 时构造器 fail fast，避免运行期 delivery 批量 retry 到 DEAD。
     void constructorFailsFastWhenAChannelSenderIsMissing() {
         assertThatThrownBy(() -> newSender(List.of(sender(NotificationChannel.APP_PUSH))))
                 .isInstanceOf(IllegalStateException.class)

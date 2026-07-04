@@ -16,6 +16,8 @@ class OutboxPollerTest {
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");
 
     @Test
+    // 测试目的：验证 poller 只负责调 claimer 并把已 claim event 交给 worker executor。
+    // variant：使用 SyncTaskExecutor 让异步提交同步执行，便于断言 worker 被调用。
     void submitsClaimedEventsToWorkerExecutor() {
         OutboxClaimer claimer = mock(OutboxClaimer.class);
         OutboxWorker worker = mock(OutboxWorker.class);

@@ -31,6 +31,8 @@ class AuthorizationNotificationListenerTest {
             new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Test
+    // 测试目的：验证 notification consumer 只把 authorization.approved 转成通知 command。
+    // variant：body envelope 的 eventType 是真相，payload 提供 authorizationId/cardId 作为 subject/recipient。
     void approvedEventRequestsApprovedNotification() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         AuthorizationNotificationListener listener = listener(service);
@@ -54,6 +56,8 @@ class AuthorizationNotificationListenerTest {
     }
 
     @Test
+    // 测试目的：验证同 topic 上无关 authorization event 会被跳过。
+    // variant：authorization.posted 合法但不是通知关注的类型，不应调用 RequestNotificationService。
     void authorizationPostedEventIsSkipped() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         AuthorizationNotificationListener listener = listener(service);

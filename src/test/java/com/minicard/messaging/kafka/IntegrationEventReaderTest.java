@@ -21,6 +21,8 @@ class IntegrationEventReaderTest {
     private final IntegrationEventReader reader = new IntegrationEventReader(objectMapper);
 
     @Test
+    // 测试目的：验证 reader 能解析 self-describing body envelope，并读取 payload 字段。
+    // variant：headers 与 body 一致时正常读取，但 dispatch 仍以后续 body eventType 为准。
     void readsJsonPayloadWithMatchingHeaders() throws Exception {
         IntegrationEvent event = event("authorization.approved", 1);
         ConsumerRecord<String, String> record = record(
@@ -40,6 +42,8 @@ class IntegrationEventReaderTest {
     }
 
     @Test
+    // 测试目的：验证缺少 payload 属于 event contract failure。
+    // variant：body envelope 没有 payload，listener 应抛 EventContractException，由 Kafka error handler 投 DLT。
     void rejectsMissingPayloadAsContractFailure() throws Exception {
         IntegrationEvent event = new IntegrationEvent(
                 UUID.randomUUID(),
@@ -60,6 +64,8 @@ class IntegrationEventReaderTest {
     }
 
     @Test
+    // 测试目的：验证 header 只是 observability hint，不是消费必需条件。
+    // variant：console-producer/手工 replay 无 header，body envelope 完整时仍可消费。
     void readsPayloadWithoutAnyHeaders() throws Exception {
         // envelope 是 self-describing 的：console-producer 手工 replay 的消息没有 header，
         // 也必须能被正常消费。如果 read() 强依赖 header，self-describing envelope 就名存实亡。
@@ -74,6 +80,8 @@ class IntegrationEventReaderTest {
     }
 
     @Test
+    // 测试目的：验证 payload 字段类型错误会变成 contract failure。
+    // variant：approvedAt 不是 ISO-8601 instant，避免 consumer 用错误时间继续执行业务。
     void rejectsInvalidInstantPayloadFieldAsContractFailure() {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("approvedAt", "not-an-instant");

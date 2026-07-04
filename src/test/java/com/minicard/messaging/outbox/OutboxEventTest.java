@@ -12,6 +12,8 @@ class OutboxEventTest {
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");
 
     @Test
+    // 测试目的：验证 PENDING -> PROCESSING 会写入 lease deadline 和 owner token。
+    // variant：nextAttemptAt 在 PROCESSING 阶段临时表示 deadline，不再表示 retry 时间。
     void marksEventProcessingWithLeaseDeadline() {
         OutboxEvent event = pendingEvent();
 
@@ -23,6 +25,8 @@ class OutboxEventTest {
     }
 
     @Test
+    // 测试目的：验证 publish failure 走统一 retry/backoff/DEAD 状态机。
+    // variant：前两次失败回 PENDING 并指数退避，第三次达到 maxAttempts 进入 DEAD。
     void retriesWithExponentialBackoffBeforeBecomingDead() {
         OutboxEvent event = pendingEvent();
 
@@ -40,6 +44,8 @@ class OutboxEventTest {
     }
 
     @Test
+    // 测试目的：验证 broker ack 后的成功终态。
+    // variant：PROCESSING event markPublished 后进入 PUBLISHED，清空 lastError 和 leaseToken。
     void marksAcknowledgedEventPublished() {
         OutboxEvent event = pendingEvent();
         event.markProcessing(NOW, 30, "lease-token-1");

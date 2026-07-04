@@ -73,6 +73,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证授权 happy path 会预占额度并产生 APPROVED 事件/过期 DelayJob。
+    // variant：card active、risk approve、available credit 足够，服务应锁 account 后 reserve。
     void approvesAndReservesAvailableCredit() {
         arrangeNewClaim();
         CreditAccount account = activeAccount("1000.00", "0.00");
@@ -96,6 +98,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证单笔限额是 cheap policy check，会在查卡/锁账户前拒绝。
+    // variant：金额超过 JPY limit，状态 DECLINED，且不触碰 card/account repository。
     void declinesWithoutReservingWhenPolicyRejectsRequest() {
         arrangeNewClaim();
 
@@ -111,6 +115,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证未配置币种会在账户锁之前直接拒绝。
+    // variant：USD 不在 AuthorizationPolicyProperties，避免后续业务对象被无意义加载。
     void declinesUnsupportedCurrencyBeforeLoadingCard() {
         arrangeNewClaim();
 
@@ -127,6 +133,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证额度不足时只 DECLINE authorization，不更新 account。
+    // variant：reserved 已占用 950/1000，再请求 100，available credit 不足。
     void declinesWhenAvailableCreditIsInsufficient() {
         arrangeNewClaim();
         CreditAccount account = activeAccount("1000.00", "950.00");
@@ -146,6 +154,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证卡不存在会映射为业务拒绝原因，而不是系统异常。
+    // variant：card repository 返回 empty，authorization 进入 CARD_NOT_FOUND。
     void declinesWhenCardDoesNotExist() {
         arrangeNewClaim();
         when(cardRepository.findById("unknown-card")).thenReturn(Optional.empty());
@@ -157,6 +167,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证 blocked card 在锁账户前被拒绝。
+    // variant：卡状态 BLOCKED，不能继续 reserve credit。
     void declinesWhenCardIsBlocked() {
         arrangeNewClaim();
         when(cardRepository.findById("card-blocked")).thenReturn(Optional.of(new Card(
@@ -172,6 +184,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证 expired card 在锁账户前被拒绝。
+    // variant：卡状态 EXPIRED，不能继续 reserve credit。
     void declinesWhenCardIsExpired() {
         arrangeNewClaim();
         when(cardRepository.findById("card-expired")).thenReturn(Optional.of(new Card(
@@ -187,6 +201,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证同 idempotency key 的相同请求直接返回第一次结果。
+    // variant：claim=false 表示 duplicate loser，读取 winner 后不重复 reserve、schedule 或 publish。
     void returnsExistingIdempotentResultWithoutReservingAgain() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
         when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
@@ -204,6 +220,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证同 idempotency key 但不同请求体会触发冲突。
+    // variant：金额从 100 改成 200，fingerprint 不一致，不能返回旧授权伪装成功。
     void rejectsDifferentRequestUsingSameIdempotencyKey() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
         when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
@@ -215,6 +233,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证普通查询路径按 authorization id 读取历史结果。
+    // variant：repository 命中，service.get 返回同一个 domain object。
     void getsAuthorizationById() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
         when(authorizationRepository.findById(existing.id())).thenReturn(Optional.of(existing));
@@ -223,6 +243,8 @@ class AuthorizationServiceTest {
     }
 
     @Test
+    // 测试目的：验证普通查询路径找不到时抛出明确异常。
+    // variant：repository empty，API 层可把它映射成 404。
     void throwsWhenAuthorizationDoesNotExist() {
         UUID id = UUID.fromString("8f2d8907-0471-4209-9862-73e09f62cd1f");
         when(authorizationRepository.findById(id)).thenReturn(Optional.empty());

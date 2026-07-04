@@ -64,6 +64,8 @@ class StatementGenerationServiceTest {
     }
 
     @Test
+    // 测试目的：验证账单生成 happy path 会锁账户、锁候选交易、创建 statement/lines 并标记交易已出账。
+    // variant：两笔 unbilled posted transactions 均有 ledger entry，生成 total/minimum payment 和 statement.closed 事件。
     void generatesStatementFromUnbilledPostedTransactions() {
         CreditAccount account = account();
         StatementLineSource first = lineSource("ntx-001", "1000.00");
@@ -111,6 +113,8 @@ class StatementGenerationServiceTest {
     }
 
     @Test
+    // 测试目的：验证同一 account+cycle 已有 statement 时直接幂等返回。
+    // variant：findByCycleForUpdate 命中已有账单，不再扫描交易、不排自动还款、不重复发事件。
     void returnsExistingStatementForSameBillingCycle() {
         CreditAccount account = account();
         Statement existing = existingStatement();
@@ -133,6 +137,8 @@ class StatementGenerationServiceTest {
     }
 
     @Test
+    // 测试目的：验证没有可出账交易时拒绝生成 0 元账单。
+    // variant：ledger 完整但候选交易为空，抛 StatementGenerationException 且不写 statement。
     void rejectsGenerationWhenNoUnbilledPostedTransactionsExist() {
         CreditAccount account = account();
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
@@ -161,6 +167,8 @@ class StatementGenerationServiceTest {
     }
 
     @Test
+    // 测试目的：验证 posted transaction 缺 ledger entry 时应 retry，而不是生成残缺账单。
+    // variant：missing-ledger 检查命中，直接抛 retryable failure，不插入 statement 或排自动还款。
     void retriesWhenPostedTransactionsAreWaitingForLedgerEntries() {
         CreditAccount account = account();
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));

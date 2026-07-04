@@ -31,6 +31,8 @@ class RepaymentNotificationListenerTest {
             new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Test
+    // 测试目的：验证 repayment.received 会被翻译成还款成功通知 command。
+    // variant：payload 的 statementId 作为 subject，creditAccountId/recipientKey 用于定位收件人。
     void receivedEventRequestsRepaymentNotification() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         RepaymentNotificationListener listener = listener(service);
@@ -56,6 +58,8 @@ class RepaymentNotificationListenerTest {
     }
 
     @Test
+    // 测试目的：验证无关 repayment event 会被跳过。
+    // variant：eventType 不匹配时 listener 正常 return，让 Kafka offset 可提交。
     void irrelevantRepaymentEventIsSkipped() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         RepaymentNotificationListener listener = listener(service);

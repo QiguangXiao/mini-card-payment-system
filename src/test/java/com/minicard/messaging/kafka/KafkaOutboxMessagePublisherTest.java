@@ -29,6 +29,8 @@ class KafkaOutboxMessagePublisherTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    // 测试目的：验证 producer 写出的 Kafka headers 与 body envelope 元信息一致。
+    // variant：header 不作为 consumer dispatch 真相，但要服务 kcat/DLT/排查，所以必须 mirror envelope。
     void headersMirrorEnvelopeFields() throws Exception {
         // header 是纯 observability 元数据，不参与 consumer correctness(consumer 只读 body)。
         // 但它必须和 envelope 一致：header 说谎不会丢消息，
@@ -51,6 +53,8 @@ class KafkaOutboxMessagePublisherTest {
     }
 
     @Test
+    // 测试目的：验证 eventType 前缀路由到对应 topic，并保留 partition key。
+    // variant：authorization.* 应发 authorization topic，同一 aggregate 依靠 key 保持 partition 内顺序。
     void routesEventTypePrefixToOwningTopicWithPartitionKey() {
         KafkaTemplate<String, String> kafkaTemplate = kafkaTemplate();
         KafkaOutboxMessagePublisher publisher = new KafkaOutboxMessagePublisher(kafkaTemplate, topics());
@@ -65,6 +69,8 @@ class KafkaOutboxMessagePublisherTest {
     }
 
     @Test
+    // 测试目的：验证未知 eventType 是开发/契约错误，不能猜 topic。
+    // variant：unsupported prefix 直接抛异常，避免消息发到无人消费的错误 topic。
     void rejectsUnsupportedEventTypeInsteadOfGuessingTopic() {
         KafkaOutboxMessagePublisher publisher =
                 new KafkaOutboxMessagePublisher(kafkaTemplate(), topics());

@@ -23,6 +23,8 @@ class OutboxWorkerTest {
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");
 
     @Test
+    // 测试目的：验证正常 publish 路径：事务外等 Kafka ack，随后 finalize 为 PUBLISHED。
+    // variant：RecordingPublisher 记录 publish 时 event 仍是 PROCESSING，最终由 worker 写 PUBLISHED。
     void publishesAndMarksEventPublished() {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         RecordingPublisher publisher = new RecordingPublisher();
@@ -39,6 +41,8 @@ class OutboxWorkerTest {
     }
 
     @Test
+    // 测试目的：验证 Kafka publish 失败会被 worker 转成可持久化 retry 状态。
+    // variant：publisher 抛异常，event 回 PENDING、attempts+1、nextAttemptAt 退避。
     void failedPublicationReturnsEventToPendingWithBackoff() {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         OutboxEvent event = claimedEvent();
@@ -57,6 +61,8 @@ class OutboxWorkerTest {
     }
 
     @Test
+    // 测试目的：验证 stale worker 不能覆盖 recoverer/新 worker 已接手的 lease。
+    // variant：claimed snapshot 和 DB current row 的 leaseToken 不同，即使 deadline 相同也跳过 finalize。
     void staleWorkerResultDoesNotOverrideNewerLease() {
         OutboxEventRepository repository = mock(OutboxEventRepository.class);
         OutboxEvent claimed = claimedEvent();

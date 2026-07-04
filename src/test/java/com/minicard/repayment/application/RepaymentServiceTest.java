@@ -70,6 +70,8 @@ class RepaymentServiceTest {
     }
 
     @Test
+    // 测试目的：验证还款 happy path 同事务更新 repayment、statement、credit account 和 cache invalidation。
+    // variant：部分还款 500/1500，statement 变 PARTIALLY_PAID，account postedBalance 下降。
     void receivesRepaymentAndUpdatesStatementAndAccount() {
         ReceiveRepaymentCommand command = command("500.00");
         Statement statement = statement("1500.00");
@@ -102,6 +104,8 @@ class RepaymentServiceTest {
     }
 
     @Test
+    // 测试目的：验证同 idempotency key 的还款重试返回第一次 RECEIVED 结果。
+    // variant：claim=false 代表 duplicate loser，不再锁 statement/account，也不重复发 event。
     void returnsExistingRepaymentForIdempotentRetry() {
         ReceiveRepaymentCommand command = command("500.00");
         Repayment existing = receivedRepayment(command);
@@ -121,6 +125,8 @@ class RepaymentServiceTest {
     }
 
     @Test
+    // 测试目的：验证锁内重新校验 remaining amount，阻止超额还款。
+    // variant：请求 2000 但 statement remaining 只有 1500，拒绝且不更新 account/statement。
     void rejectsRepaymentAboveStatementRemainingAmount() {
         ReceiveRepaymentCommand command = command("2000.00");
         Statement statement = statement("1500.00");

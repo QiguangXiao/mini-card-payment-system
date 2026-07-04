@@ -31,6 +31,8 @@ class CardTransactionNotificationListenerTest {
             new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Test
+    // 测试目的：验证 card_transaction.posted 会被翻译成交易入账通知 command。
+    // variant：payload 的 cardTransactionId/cardId 分别成为 subjectId/recipientKey。
     void postedEventRequestsPostedNotification() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         CardTransactionNotificationListener listener = listener(service);
@@ -54,6 +56,8 @@ class CardTransactionNotificationListenerTest {
     }
 
     @Test
+    // 测试目的：验证合法但无关的 card transaction event 直接跳过。
+    // variant：eventType 不匹配时不解析成通知 command，也不进入 retry/DLT。
     void irrelevantCardTransactionEventIsSkipped() throws Exception {
         RequestNotificationService service = mock(RequestNotificationService.class);
         CardTransactionNotificationListener listener = listener(service);

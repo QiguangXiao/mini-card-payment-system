@@ -15,6 +15,8 @@ class NotificationDeliveryTest {
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");
 
     @Test
+    // 测试目的：验证 delivery 创建时会快照 Notification 意图里的稳定字段。
+    // variant：新建 APP_PUSH delivery，状态应为 PENDING，attempts=0，且 provider 幂等键等于 delivery id。
     void pendingForSnapshotsNotificationFields() {
         NotificationDelivery delivery = pushDelivery();
 
@@ -32,6 +34,8 @@ class NotificationDeliveryTest {
     }
 
     @Test
+    // 测试目的：验证成功投递的完整状态机路径 PENDING -> PROCESSING -> SENT。
+    // variant：先写 lease deadline/token，再收到 provider receipt，终态必须清空 lease。
     void leaseThenSentReachesTerminalSuccess() {
         NotificationDelivery delivery = pushDelivery();
 
@@ -51,6 +55,8 @@ class NotificationDeliveryTest {
     }
 
     @Test
+    // 测试目的：验证 transient failure 会释放本轮 lease，允许后续重新 claim。
+    // variant：PROCESSING 状态下失败，状态回 PENDING，旧 leaseToken 必须清空。
     void failureReleasesLeaseToken() {
         NotificationDelivery delivery = pushDelivery();
         delivery.markProcessing(NOW, 30, "lease-token-1");
@@ -63,6 +69,8 @@ class NotificationDeliveryTest {
     }
 
     @Test
+    // 测试目的：验证 retry/backoff 和 maxAttempts DEAD 终态。
+    // variant：第一次失败回 PENDING 并推迟 nextAttemptAt；第二次达到上限进入 DEAD。
     void failureBacksOffThenGoesDeadAtMaxAttempts() {
         NotificationDelivery delivery = pushDelivery();
 
@@ -79,6 +87,8 @@ class NotificationDeliveryTest {
     }
 
     @Test
+    // 测试目的：验证 recoverer 把超时 PROCESSING lease 当作一次失败处理。
+    // variant：worker 可能宕机或卡死，timeout 后 attempts+1 并回到 PENDING 等待下一轮。
     void processingTimeoutCountsAsOneFailure() {
         NotificationDelivery delivery = pushDelivery();
         delivery.markProcessing(NOW, 30, "lease-token-1");

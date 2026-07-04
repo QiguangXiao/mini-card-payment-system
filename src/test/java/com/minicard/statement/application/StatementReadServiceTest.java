@@ -86,6 +86,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 L1/L2 miss 时回源 DB，并把结果放入 Caffeine L1。
+    // variant：同 JVM 连续读两次，第二次应命中 L1；首次回源后还要用版本信封 CAS 写回 Redis L2。
     void loadsFromDbThenServesSameJvmReadsFromCaffeineL1() {
         Statement statement = statement();
         String redisKey = redisKey(statement.id());
@@ -110,6 +112,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 L2 信封版本来自 statements.version，而不是 paidAmount 等业务字段。
+    // variant：还款后 version=1、paidAmount=500，Redis envelope 必须以 "1|" 开头。
     void redisEnvelopeUsesStatementVersionInsteadOfPaidAmount() {
         Statement statement = statement();
         statement.applyRepayment(
@@ -133,6 +137,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 Redis L2 命中时不访问 MySQL source of truth。
+    // variant：L2 存在 "<version>|json" 信封，read service 直接反序列化返回。
     void loadsFromRedisL2WithoutCallingDb() throws Exception {
         Statement statement = statement();
         String redisKey = redisKey(statement.id());
@@ -148,6 +154,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 tombstone 只是版本地板，不是可返回的真实缓存值。
+    // variant：L2 值为 "100|"，读路径应当作 miss 回源 DB，再写回真实值。
     void tombstoneInRedisIsTreatedAsMissAndReloadsFromDb() {
         // 墓碑信封 "<version>|"（'|' 后为空）应被当作 miss：读路径回源 DB 重建真值。
         Statement statement = statement();
@@ -162,6 +170,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证写路径只在事务提交后失效缓存，避免 rollback 后误删/误广播。
+    // variant：事务内调用 evictAfterCommit，commit 前不动 L2；afterCommit 写 tombstone 并广播 L1 失效。
     void evictInsideTransactionWritesTombstoneAndBroadcastsAfterCommit() {
         Statement statement = statement();
         statement.applyRepayment(
@@ -190,6 +200,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证收到跨 pod 广播后只清本地 L1，不再触碰 L2 或二次广播。
+    // variant：invalidateLocal 是订阅者动作，不能形成广播风暴。
     void invalidateLocalOnlyTouchesL1NotL2OrBroadcast() {
         // 订阅者收到其他 pod 的失效广播时只清本地 L1：绝不能再写 L2 或再广播，否则会形成广播风暴。
         UUID statementId = UUID.randomUUID();
@@ -202,6 +214,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 rebuild-lock winner 回源 DB 后释放 Redis 锁。
+    // variant：抢锁成功，读 DB、写 L2 后执行 release script，避免锁自然过期前阻塞其他请求。
     void rebuildLockWinnerReleasesLockAfterRebuild() {
         // 抢到锁的 winner 回源 DB 后必须释放锁：execute(RELEASE_SCRIPT, [lockKey], token)。
         Statement statement = statement();
@@ -217,6 +231,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 rebuild-lock loser 等待 winner 填充 L2 后复用缓存。
+    // variant：抢锁失败后自旋期间 L2 变为命中，loser 不应再回源 DB。
     void rebuildLockLoserWaitsThenReusesL2WithoutHittingDb() throws Exception {
         // loser 没抢到锁：自旋等待期间 winner 把 L2 填好，loser 直接复用，不回源 DB（防击穿核心收益）。
         Statement statement = statement();
@@ -234,6 +250,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 winner 未填充 L2 时 loser 会 fail-open 回源。
+    // variant：等待次数耗尽后自己读 DB，避免请求无限等在重建锁上。
     void rebuildLockLoserFailsOpenToDbWhenWinnerNeverPopulatesL2() {
         // winner 太慢/已死：loser 自旋耗尽后 fail-open 自己回源，绝不无限等在锁上。
         Statement statement = statement();
@@ -248,6 +266,8 @@ class StatementReadServiceTest {
     }
 
     @Test
+    // 测试目的：验证 Redis 锁不可用时缓存击穿保护 fail-open。
+    // variant：setIfAbsent 抛 RedisConnectionFailureException，GET 仍回源 DB 返回。
     void rebuildLockAcquireFailureFailsOpenToDb() {
         // 抢锁时 Redis 不可用：fail-open 回源，不让"击穿保护"本身变成 GET 的硬依赖。
         Statement statement = statement();
