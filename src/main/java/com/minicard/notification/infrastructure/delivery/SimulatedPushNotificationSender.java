@@ -51,6 +51,9 @@ public class SimulatedPushNotificationSender implements NotificationDeliverySend
                         delivery.idempotencyKey()
                 );
         // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker；push/email 的 breaker name 分开。
+        // lambda 在这里只被创建、不执行；真正的 HTTP 调用发生在 helper 内部 decorated.get()，
+        // 可能 0 次（断路打开/4xx）到 3 次（重试），重试共用同一份 request 和 idempotencyKey。
+        // 执行时序的逐步展开见 ResilientCallHelper.call 的 javadoc。
         return resilientCallHelper.call(
                 "notificationPush",
                 () -> notificationProviderClient.send(request).providerMessageId()

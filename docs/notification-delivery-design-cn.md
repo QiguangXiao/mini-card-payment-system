@@ -282,6 +282,82 @@ Retry( CircuitBreaker( provider.send ) )
 > 取舍：Resilience4j 的 3 次 × 投递的 8 次，最坏情况下对 provider 的总尝试是相乘的。我把 Resilience4j 次数
 > 压得很小（3），就是因为它只该抹瞬时抖动；扛长时间故障是 durable 那层的事。
 
+### 7.2 一次 send 的执行时序：lambda 从创建到执行（谁做了什么）
+
+第一次读 sender 里这段代码，最容易困惑的是"到底哪一行真正发了 HTTP"：
+
+```java
+return resilientCallHelper.call(
+        "notificationEmail",
+        () -> notificationProviderClient.send(request).providerMessageId()
+);
+```
+
+答案：**这一行没有发**。理解它的关键是把"组装"和"执行"分成两个时刻：
+
+1. **lambda 是装着代码的对象，创建 ≠ 执行**。`() -> ...` 只是 new 了一个 `Supplier` 对象——一个"信封"，
+   里面装着冻结的代码，并捕获了外面已构造好的 `request` 引用（闭包）。`Supplier` 只有一个方法 `get()`，
+   信封里的代码只在某人调 `get()` 时才运行。sender 把信封交给 helper，等于说："这是发送的方法，
+   什么时候执行、执行几次，由你决定。"
+2. **`decorateSupplier` 也不执行，只包装**。每包一层返回一个新 Supplier，其 `get()` 先做自己的事
+   （问断路器要许可 / 捕获异常决定重试），再调内层 `get()`。两层套完得到 `decorated`，仍然 0 次 HTTP。
+3. **`decorated.get()` 是唯一的执行触发点**。逐步展开见 `ResilientCallHelper.call` 的 javadoc；
+   真实 HTTP 次数是 0 次（断路 OPEN / 4xx permanent）、1 次（成功）或最多 3 次（transient 重试）。
+
+一次"第 1 次失败、第 2 次成功"的完整时间线：
+
+```text
+sender.send(delivery)
+ 1. 组装 request（地址/标题/正文/幂等键）              —— 纯内存，无网络
+ 2. 创建 lambda 信封（捕获 request）                   —— 无网络
+ 3. helper.call("notificationEmail", 信封)
+    3.1 从 registry 取 notificationEmail 断路器（共享有状态实例）和 notificationDelivery 重试规则
+    3.2 套两层娃得到 decorated                          —— 仍无网络
+    3.3 decorated.get()                                —— 从这里开始动真格
+        尝试1: 断路器 CLOSED 放行，拆信封：Feign 代理序列化 request，HTTP POST，
+               controller 注入失败抛 500，FeignException 抛回，断路器记一次失败
+        Retry: 不在 ignore 名单、attempt<3，睡 200ms
+        尝试2: 断路器再次放行，第二次 HTTP（同一个幂等键！），controller 成功返回 messageId，
+               断路器记一次成功，Retry 循环结束
+    3.4 返回 messageId
+ 4. sender 返回给 worker，worker 开 finalize 短事务 markSent
+```
+
+角色分工一句话版：**sender** 决定"做什么"（组装 request、创建信封），**helper** 决定"怎么执行"
+（取实例、套娃、触发）；**Retry 对象**是循环加退避，**CircuitBreaker 对象**是门卫加统计员
+（按名字取的共享实例，跨 delivery 累积滑动窗口）；**Feign 代理**是信封被拆开时真正干活的人——
+`NotificationProviderClient` 接口没有实现类，启动时由 OpenFeign 生成动态代理，负责注解转 URL、
+JSON 序列化、HTTP 收发。这就是装饰器模式：不改信封里的代码，靠层层包裹叠加行为；lambda 是两侧解耦的交接物。
+
+两个自测问题：① 为什么 `request` 要在 lambda 外先构造好？（构造不需要重试保护，且三次重试必须共用
+同一份内容和同一个幂等键）② 删掉两行 `decorateSupplier` 直接 `providerCall.get()` 会怎样？
+（照样能发，但失败一次就抛给 worker，没有快重试，断路器也永远不知道这次调用发生过。）
+
+### 7.3 Feign per-client 配置：ErrorDecoder 挂在哪、和 yml 什么分工
+
+`NotificationProviderFeignConfiguration` 不出现在 yml 里，挂载点是 client 接口上的注解属性：
+`@FeignClient(name = "notification-provider", configuration = NotificationProviderFeignConfiguration.class)`。
+机制：Spring Cloud OpenFeign 给**每个命名 client 一个独立的子 ApplicationContext**，组装代理时按
+"先查该 client 的子容器，再退回全局默认"的顺序找 Encoder/Decoder/ErrorDecoder/Retryer；
+这个配置类的 Bean 只注册进 `notification-provider` 的子容器，所以 external-risk 完全不受影响。
+
+两个易踩的点：
+
+- **配置类故意不标 `@Configuration`**。标了会被主容器 component scan 扫成全局 Bean，
+  ErrorDecoder 会作用到所有 Feign client，"4xx 翻译成通知专用异常"就泄漏进 risk 链路。
+- **同一个 client 有两条配置通道，按名字合并**：yml 的
+  `spring.cloud.openfeign.client.config.notification-provider` 管数字类配置（connect/read timeout），
+  `configuration = X.class` 管要写代码的组件（ErrorDecoder）。运行时 ErrorDecoder 的触发点在 Feign
+  代理内部：响应 2xx 走 Decoder 反序列化正常返回；响应 ≥400 改调 `ErrorDecoder.decode`，
+  返回的异常从代理抛出，再进入 §7.2 的 Retry/CircuitBreaker 链。
+
+顺带回答"`ignore-exceptions` 里的异常类为什么配在 yml 而不是代码"：这是 resilience4j-spring-boot
+的主流做法——一条重试策略的全部旋钮（次数/退避/异常分类）与其他 R4j 实例同址，运维可读可调。
+代价是类名字符串没有编译期检查，兜底有两层：启动时按名加载类（异常类改名漏改 yml 会启动失败）；
+若整行误删，4xx 只是多被快重试 3 次，最终仍会 DEAD（helper 对 PermanentException 原样上抛，
+worker 的 `markPermanentFailed` 不依赖重试层）。追求编译期检查的替代写法是 `RetryConfigCustomizer`
+Bean——"数字放 yml 是 per-environment tuning、异常分类是代码语义"两种归类都有拥趸，本项目选同址内聚。
+
 ---
 
 ## 8. 收件地址：没有 User 聚合时为什么先放在 sender 内

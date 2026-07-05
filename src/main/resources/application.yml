@@ -422,6 +422,11 @@ resilience4j:
         # 如果 retry 继续重试，只会快速失败 3 次并制造噪声，不能提高成功率。
         # NotificationDeliveryPermanentException 来自 Feign ErrorDecoder 对 4xx 的分类：
         # 这类请求契约/认证/配置错误不靠重试恢复，应交给 worker 直接 DEAD。
+        # 为什么写在 yml 而不是 RetryConfigCustomizer 代码里：resilience4j-spring-boot 的主流做法是
+        # 让一条重试策略的全部旋钮（次数/退避/异常分类）与本文件其他 R4j 实例同址。
+        # 类名字符串没有编译期检查，但启动时会按名加载类，异常类改名漏改这里会启动失败；
+        # 若整行被误删则退化为"4xx 也白白快重试 3 次"——最终仍会 DEAD（helper 对该异常原样上抛，
+        # NotificationDeliveryWorker.markPermanentFailed 不依赖重试层），只是多了重试噪声。
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
           - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException

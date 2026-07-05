@@ -51,6 +51,32 @@ public class ResilientCallHelper {
         this.retryRegistry = retryRegistry;
     }
 
+    /**
+     * 用 Retry + CircuitBreaker 包住一次 provider 调用并执行。
+     *
+     * <p>阅读本方法先分清"组装"和"执行"两个时刻。providerCall 这个 lambda 在 sender 里被创建时
+     * 不发送任何东西：它只是一个装着代码的 Supplier 对象，并捕获了 sender 已构造好的 request 引用。
+     * 下面的 decorateSupplier 同样不执行——每包一层只是返回一个新 Supplier，其 get() 先做自己的事
+     * 再调用内层 get()。直到 decorated.get() 那一行，执行才真正开始。展开后的等效逻辑：</p>
+     *
+     * <pre>
+     * decorated.get()
+     * 1. Retry 进入第 attempt 次循环（最多 max-attempts=3）：
+     *    1.1 CircuitBreaker.acquirePermission()：breaker OPEN 时抛 CallNotPermittedException，
+     *        内层 lambda 一次都不执行（本轮 0 次 HTTP）
+     *    1.2 providerCall.get()：此刻才拆开 lambda——Feign 代理把 request 序列化成 JSON、
+     *        发 HTTP、反序列化回执、取 providerMessageId
+     *    1.3 成功：breaker 记录 onSuccess（耗时进入 slow-call 统计），返回结果，循环结束
+     *    1.4 失败：breaker 记录 onError（失败率统计），异常抛给 Retry
+     * 2. Retry 捕获异常：命中 ignore-exceptions（CallNotPermitted/Permanent）直接上抛不重试；
+     *    否则按指数退避等待 200ms、400ms 后回到步骤 1。重试执行的是同一个 lambda，
+     *    因此三次尝试用同一份 request 和同一个 idempotencyKey。
+     * </pre>
+     *
+     * <p>所以一次 call() 触发的真实 HTTP 请求数是 0 次（断路打开或 4xx permanent）、1 次（成功）
+     * 或最多 3 次（transient 失败重试）。circuitBreaker 是按名字从 registry 取出的<b>共享有状态实例</b>，
+     * 本次调用报告的成功/失败会累积进下一条 delivery 看到的滑动窗口——这是它能"熔断"的前提。</p>
+     */
     public String call(String circuitBreakerName, Supplier<String> providerCall) {
         // circuitBreakerName 由 sender 传入：notificationPush / notificationEmail。
         // 名字要和 application.yml 的 resilience4j.circuitbreaker.instances.* 对齐，否则会用默认配置。

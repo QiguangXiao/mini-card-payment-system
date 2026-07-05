@@ -52,6 +52,10 @@ public class SimulatedEmailNotificationSender implements NotificationDeliverySen
                 );
         // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker。
         // 硬超时由 spring.cloud.openfeign.client.config.notification-provider 控制，不放进 R4j TimeLimiter。
+        // 注意：下面的 lambda 在这里只是被创建（捕获 request），不执行；真正的 HTTP 调用发生在
+        // helper 内部 decorated.get()，可能 0 次（断路打开/4xx）到 3 次（重试）。request 先在
+        // lambda 外构造好，正是为了让所有重试共用同一份内容和同一个 idempotencyKey。
+        // 执行时序的逐步展开见 ResilientCallHelper.call 的 javadoc。
         return resilientCallHelper.call(
                 "notificationEmail",
                 () -> notificationProviderClient.send(request).providerMessageId()
