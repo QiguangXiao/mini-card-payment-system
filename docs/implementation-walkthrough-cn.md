@@ -241,25 +241,44 @@ credit_account_id + period_start + period_end
 
 ### `notifications`
 
-保存待发送或已发送的客户通知请求。
+保存"要通知谁、关于哪个业务对象、用哪种模板"的**不可变通知意图**。注意它没有 status 列：
+发送成不成功是每个渠道各自的生命周期，放在下面的 `notification_deliveries` 上。如果把状态揉在意图上，
+"push 已发、email 还在重试"这种局部结果就无法表达。
 
 核心字段：
 
 - `id`：notification id，由 `Notification.requestFromEvent(...)` 内部 `UUID.randomUUID()` 生成。
-- `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等。
+- `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等（`consumer_inbox` 之外的第二道保护）。
 - `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`、`REPAYMENT`。
 - `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
 - `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_CLOSED`、`REPAYMENT_RECEIVED`。
-- `status`：`PENDING`、`SENT`、`FAILED`。
+
+### `notification_deliveries`
+
+每渠道一条的**投递工作单元**，与 `notifications` 意图在同一事务内扇出（当前按 APP_PUSH/EMAIL 全渠道扇出）。
+结构与 `outbox_events` 同构：可认领、可重试、可恢复。
+
+核心字段：
+
+- `status`：`PENDING`、`PROCESSING`、`SENT`、`DEAD`。
+- `next_attempt_at`：PENDING 时是下次可投递时间；PROCESSING 时是 lease deadline。
+- `lease_token`：本轮 worker ownership；finalize 前重新 FOR UPDATE 校验，防止迟到回执覆盖新 owner 的结果。
+- `attempts`：durable 重试次数；到 `max-attempts` 或 provider 4xx（permanent failure）进 `DEAD`。
+- `provider_message_id`：provider 回执 id，拿到才 `SENT`。发送幂等键派生自 delivery `id`，跨 retry 不变，
+  透传给 provider 做下游去重。
+
+投递管线（poller/claimer/worker、per-channel sender、Feign、模拟 provider）的完整设计见
+`notification-delivery-design-cn.md`。
 
 提醒：
 
 - `recipient_key` 不是生产系统里的真实用户 id。
 - 以后加入 Cardholder/User 后，应该在 Notification 侧根据 subject 查 customerId 和 notification preference。
 - 不要在 authorization/posting/statement 主事务里直接发 push/email/sms。
-- 当前项目已经引入 Liquibase，`0002-sync-known-local-schema-drift.sql` 会把旧的
-  `authorization_id` / `card_id` 通知表迁移到 `subject_type` / `subject_id` /
-  `recipient_key`；这类字段语义升级不能只靠 `CREATE TABLE IF NOT EXISTS`。
+- 当前 Liquibase changelog 只有 `0001-initial-schema.sql`（直接包含上述两张表的最终结构）和
+  `0002-seed-local-sample-data.sql`，不存在单独的通知表字段迁移脚本；
+  但"字段语义升级（如旧 `authorization_id` / `card_id` 改成 `subject_type` / `subject_id` /
+  `recipient_key`）不能只靠 `CREATE TABLE IF NOT EXISTS`"的教训仍然成立。
 
 ## 3. 核心流程一：创建授权
 
@@ -707,8 +726,11 @@ curl -X POST http://localhost:8080/api/presentments \
    - Outbox worker 发布 Kafka 后，Notification consumer 收到 `card_transaction.posted`。
    - `CardTransactionNotificationListener` 把 eventType 转成 `NotificationType.CARD_TRANSACTION_POSTED`。
    - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
-   - claim 成功后创建一条 `notifications/PENDING` 请求。
+   - claim 成功后创建一条不可变 `notifications` 意图，并在同一事务内按渠道扇出
+     APP_PUSH/EMAIL 两条 `notification_deliveries/PENDING`。
    - duplicate delivery claim 失败后直接返回，避免重复通知用户。
+   - 真正的发送由后台投递管线异步完成（poller 认领 PENDING delivery，worker 经 per-channel
+     sender + Feign 调 provider，成功 `SENT`、失败退避重试、4xx 或耗尽次数 `DEAD`）。
 
 12. Ledger 异步消费 `card_transaction.posted`
 
@@ -991,7 +1013,8 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
    - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
    - Listener 把 `statement.closed` 映射成 `NotificationType.STATEMENT_CLOSED`（与事件同名，和其它三类通知 1:1 同构）。
    - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
-   - claim 成功后创建一条 `notifications/PENDING` 请求。
+   - claim 成功后创建一条不可变 `notifications` 意图，并在同一事务内按渠道扇出
+     APP_PUSH/EMAIL 两条 `notification_deliveries/PENDING`，后台投递管线异步完成真正发送。
    - duplicate delivery claim 失败后直接返回，避免重复提醒用户。
 
    警示：
@@ -1289,7 +1312,8 @@ credit account row lock -> statement row lock
 - 银行扣款成功/失败和 repayment 入账要分清：失败不能创建 `repayments/RECEIVED`。
 - 锁顺序保持 `credit account -> statement`，是为了和账单生成保持一致，避免死锁。
 - `Statement` 负责保护 `paidAmount/status/version`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
-- `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification row` 让通知失败不影响还款主事务。
+- `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification 意图 + per-channel deliveries`
+  让通知失败不影响还款主事务；真正发送由投递管线异步完成。
 
 ## 7. 核心流程五：Outbox 发布消息
 
