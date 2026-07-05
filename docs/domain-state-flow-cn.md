@@ -116,7 +116,7 @@ repaymentReceivedEventId2 = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee6
 | `Repayment` / `repayments.status` | `PENDING`, `RECEIVED` | 每次还款 `PENDING -> RECEIVED` | repayment API、auto debit |
 | `DelayJob` / `delay_jobs.status` | `PENDING`, `PROCESSING`, `DONE`, `DEAD` | `AUTO_REPAYMENT` 从 `PENDING -> DONE` | due-date auto repayment |
 | `OutboxEvent` / `outbox_events.status` | `PENDING`, `PROCESSING`, `PUBLISHED`, `DEAD` | 每个业务事件先 `PENDING`，后台发布后 `PUBLISHED` | 各业务 service、Outbox worker |
-| `Notification` / `notifications.status` | `PENDING`, `SENT`, `FAILED` | Kafka consumer 创建 `PENDING` 通知 | Notification listener |
+| `NotificationDelivery` / `notification_deliveries.status` | `PENDING`, `PROCESSING`, `SENT`, `DEAD` | Kafka consumer 创建不可变 `notifications` 意图（无状态列）并按渠道扇出 `PENDING` 投递，后台投递管线 `PENDING -> PROCESSING -> SENT` | Notification listener、delivery poller/worker |
 
 注意：`CreditAccount.status` 在本文示例中一直是 `ACTIVE`，真正变化的是金额字段。
 金融系统里，金额字段变化也是核心状态变化。
@@ -674,6 +674,72 @@ BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
 -> StatementGenerationService.generate(...)（逐账户独立小事务出账）
 ```
 
+先把几个容易混淆的名词拆开：
+
+| 名词 | 在当前实现里是什么 | 落在哪张表 |
+| --- | --- | --- |
+| `cycle` / 账期 | 一个值对象概念：`periodStart + periodEnd + dueDate`。例如 `2026-07-01 ~ 2026-07-31`，到期日 `2026-08-27`。 | 先落到 `statement_jobs.period_start/period_end/due_date`，真正出账后再落到 `statements.period_start/period_end/due_date` |
+| close cycle | 已经结束、理论上可以出账的账期。比如今天是 `2026-08-01`，`2026-07-31` 这个 close date 对应的 7 月账期已经可以规划出账。 | 不是单独表，只是 `StatementCycleService` 按日期推导 |
+| missing cycle / 缺失周期 | 这个 `period_start + period_end` 在 `statement_jobs` 里还没有任何 shard。 | 查 `statement_jobs` |
+| shard / 分片 | 一个 `statement_jobs` row，负责处理本 cycle 中一部分账户。 | `statement_jobs` |
+| statement | 某个账户某个 cycle 的账单头。 | `statements` |
+| statement line | 这张账单上的一行消费快照。 | `statement_lines` |
+
+“缺失周期”不是说每个账户都缺 statement，也不是查 `statements` 表。
+它只问这个 cycle 是否已经被规划成后台任务：
+
+```sql
+SELECT EXISTS(
+    SELECT 1
+    FROM statement_jobs
+    WHERE period_start = '2026-07-01'
+      AND period_end = '2026-07-31'
+    LIMIT 1
+);
+```
+
+当前判断是“有任意一条 shard 就算已规划”。这是因为 `StatementCycleService` 创建分片时，
+会在一个事务里一次性 `INSERT IGNORE` 整套 shard：
+
+```text
+statement_jobs
+period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 0, shard_count = 3
+period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 1, shard_count = 3
+period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 2, shard_count = 3
+```
+
+所以正常路径不会只留下半套 shard；最终防重复还靠唯一键：
+
+```text
+uk_statement_jobs_cycle_shard(period_start, period_end, shard_no)
+```
+
+如果未来要防手工改库或迁移中断，可以升级成“检查 shard 数量是否等于 shard_count”，
+但当前项目为了学习清晰，先用 exists 做轻量补建判断。
+
+分片数量不是按全部账户数算，而是按“本账期有待出账 posted transaction 的账户数”算：
+
+```sql
+SELECT COUNT(DISTINCT credit_account_id)
+FROM card_transactions
+WHERE status = 'POSTED'
+  AND billing_status = 'UNBILLED'
+  AND posted_at >= '2026-07-01T00:00:00Z'
+  AND posted_at < '2026-08-01T00:00:00Z';
+```
+
+例子：
+
+```text
+系统总账户数 = 100000
+7 月有 POSTED + UNBILLED 交易的账户数 = 2500
+targetAccountsPerJob = 1000
+shardCount = ceil(2500 / 1000) = 3
+```
+
+这样不会为了 10 万个无消费账户创建大量无意义任务。
+如果本期没有任何待出账账户，当前实现仍创建 1 个空 shard，让这个 cycle 有可观测的 DONE 生命周期。
+
 当前默认产品规则：
 
 ```text
@@ -716,7 +782,7 @@ T3 = 2026-08-01T00:00:00Z
 ```text
 Batch path（claimable job）:
 BillingCycleScheduler.<daily cron>
--> StatementCycleService.createDueJobs（按账户数建分片 statement_jobs）
+-> StatementCycleService.createDueJobs（回看 close cycles；缺失的 cycle 才按待出账账户数建 statement_jobs）
 -> StatementJobDispatcher claim 分片 -> StatementJobHandler 取本片账户
 -> StatementGenerationService.generate(...)（逐账户独立小事务）
 
@@ -787,6 +853,7 @@ StatementController.generate(...)
    FROM card_transactions
    WHERE credit_account_id = '11111111-1111-1111-1111-111111111111'
      AND status = 'POSTED'
+     AND billing_status = 'UNBILLED'
      AND statement_id IS NULL
      AND posted_at >= '2026-07-01T00:00:00Z'
      AND posted_at < '2026-08-01T00:00:00Z'
@@ -846,10 +913,21 @@ StatementController.generate(...)
    posted_at = 2026-07-01T10:05:00Z
    ```
 
+   这就是 statement 上的一行明细：
+
+   ```text
+   statements 1 ── N statement_lines
+   ```
+
+   `statements` 保存账单头：账期、到期日、总额、最低还款额、已还金额、状态。
+   `statement_lines` 保存明细快照：哪笔交易、哪条 ledger entry、金额、币种、posted 时间、展示用交易号等。
+
    为什么要 snapshot：
 
    - 账单不是每次查询动态 sum。
    - 生成后用户看到的账单金额和明细要稳定可审计。
+   - 后续 refund、adjustment、dispute 或源交易字段修正，不应该让历史账单页面“漂移”。
+   - PDF、客服查询、对账证据都应该能回答“当时出账时收录了哪几笔交易”。
 
 6. `StatementBillingRepository.markCardTransactionsBilled(...)`。
 
@@ -1315,7 +1393,7 @@ repayments
 | 触发点 | Domain event | Outbox event_type | 下游影响 |
 | --- | --- | --- | --- |
 | `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification、Risk projection |
-| `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 其他授权生命周期消费者 |
+| `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 当前无消费者（notification/risk listener 刻意跳过 posted：它是发卡方内部 hold 生命周期，用户可见入账通知走 `card_transaction.posted`） |
 | `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification、Ledger |
 | `Statement.close(...)` | `StatementClosedDomainEvent` | `statement.closed` | Notification |
 | `Repayment.markReceived(...)` | `RepaymentReceivedDomainEvent` | `repayment.received` | Notification、Ledger |
@@ -1356,18 +1434,21 @@ RepaymentService commit
 -> RepaymentNotificationListener
 -> RequestNotificationService
 -> consumer_inbox claim
--> notifications/PENDING
+-> notifications 意图 + APP_PUSH/EMAIL 两条 notification_deliveries/PENDING（同一事务）
+-> 后台投递管线：poller 认领 -> worker 经 per-channel sender + Feign 调 provider
+   -> SENT / transient 失败退避重试 / 4xx 或重试耗尽 DEAD
 ```
 
-Notification 自己用两层幂等：
+Notification 自己用两层幂等（创建期），发送期另有下游去重：
 
 - `consumer_inbox(consumer_name, event_id)`
 - `notifications.source_event_id` unique constraint
+- 发送幂等键派生自 delivery id，跨 retry 不变，透传给 provider 做下游去重
 
 如果 Notification 失败：
 
-- 不 rollback repayment。
-- Kafka listener retry / DLT 处理。
+- 创建期失败：不 rollback repayment，Kafka listener retry / DLT 处理。
+- 发送期失败：只影响那一条渠道投递（退避重试直至 SENT 或 DEAD），意图和其他渠道不受影响。
 
 ### 10.4 Ledger 是消费结果，不影响主流程
 

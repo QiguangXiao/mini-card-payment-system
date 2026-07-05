@@ -22,9 +22,16 @@ import org.springframework.transaction.annotation.Transactional;
  * sharded job creation, close date, 締め処理(しめしょり),
  * 請求ジョブ作成(せいきゅうジョブさくせい)。</p>
  *
- * <p>它不生成任何单账户 statement，只负责把“本期要出账”落成 durable claimable jobs，
- * 之后由 StatementJobDispatcher 通过 DB claim 并行执行。没有 parent batch 行：
- * “本期是否全部出账完成”用 statement_jobs 上按 cycle 的查询回答即可，
+ * <p>这里的 {@code cycle} 不是一张表，而是一个账期值对象：
+ * {@code periodStart + periodEnd + dueDate}。例如 {@code 2026-07-01 ~ 2026-07-31}
+ * 是消费归属窗口，{@code dueDate=2026-08-27} 是这张账单的付款期限。
+ * 这个值先写入 {@code statement_jobs}，后续逐账户成功出账时再写入 {@code statements}。</p>
+ *
+ * <p>本 service 不生成任何单账户 statement，也不插入 {@code statement_lines}。
+ * 它只负责把“某个账期需要出账”规划成 durable claimable jobs；
+ * 之后由 {@link StatementJobDispatcher} claim 分片，再由 {@link StatementGenerationService}
+ * 为每个账户创建真正的 {@code statements + statement_lines}。没有 parent batch 行：
+ * “本期是否全部出账完成”用 {@code statement_jobs} 上按 cycle 的查询回答即可，
  * 避免再维护一张 batch 生命周期表。</p>
  *
  * <p>流程总览（mini trace，level-triggered，不是"只看昨天"的 edge-triggered cron）：</p>
@@ -32,9 +39,11 @@ import org.springframework.transaction.annotation.Transactional;
  * scheduler 每日 tick 调 createDueJobs()
  * 1. today = LocalDate.now(billing timezone, Asia/Tokyo)
  * 2. 回看最近 N 个已过去的 close dates（补 cron 漏跑/应用停机的周期），对每个 close date:
- *    2.1 该 cycle 已有 statement_jobs: skip（快速判断，非最终幂等）
- *    2.2 推导账期 [periodStart, periodEnd] 和营业日顺延后的 dueDate
- *    2.3 count billable accounts 决定 shardCount（0 账户也建 1 个空分片）
+ *    2.1 该 cycle 在 statement_jobs 里已有任意 shard: skip（说明这个账期已被 planner 规划过；
+ *        不代表所有账户都已经生成 statement）
+ *    2.2 缺失时才推导账期 [periodStart, periodEnd] 和营业日顺延后的 dueDate
+ *    2.3 count billable accounts 决定 shardCount：
+ *        只统计本账期有 POSTED + UNBILLED 交易的账户，不是全量账户数
  *    2.4 INSERT IGNORE 整批 PENDING statement_jobs（cycle/shard 唯一键兜底幂等）
  * 3. COMMIT（之后 StatementJobDispatcher claim 分片并行执行）
  * </pre>
@@ -56,7 +65,8 @@ public class StatementCycleService {
      * <p>事务归属：scheduler 实际调用这个入口，所以这里是 job creation 的事务入口。
      * 这里不再只看“昨天是不是关账日”，而是做 level-triggered catch-up scan：
      * 最近几个已过去 close cycle 缺哪个 {@code statement_jobs} 就补哪个，避免应用错过某次
-     * cron tick 后该周期永远不出账。</p>
+     * cron tick 后该周期永远不出账。这里的“缺”指 {@code statement_jobs} 中不存在这个
+     * {@code periodStart + periodEnd} 的任何 shard，不是指每个账户都缺 {@code statements}。</p>
      */
     @Transactional
     public int createDueJobs() {
@@ -64,6 +74,7 @@ public class StatementCycleService {
         // 账单关账/还款日是业务日期；时区不明确会导致跨日边界错建或漏建。
         LocalDate today = LocalDate.now(clock.withZone(batchZone()));
         // 阶段 2：做 desired-state reconciliation。缺失周期补建，已存在周期跳过。
+        // 例子：服务 8/1 停机错过 7 月账单创建，8/3 恢复后仍会回看 7/31 close cycle 并补建。
         return reconcileDueCycles(today);
     }
 
@@ -71,6 +82,10 @@ public class StatementCycleService {
      * 为某个 runDate 对应的 billing cycle 创建 sharded jobs，作为测试和 runbook 精确补跑入口。
      *
      * <p>只有“runDate 的昨天”是 close date 时才创建。
+     * runDate 是“调度器醒来的业务日”，periodEnd 是“刚完整结束的关账日”。
+     * 例如 runDate=2026-08-01，periodEnd=2026-07-31。</p>
+     *
+     * <p>
      * 创建是幂等的（INSERT IGNORE + cycle/shard 唯一键），重复触发不会产生重复分片。
      * 如果不幂等，scheduler 多实例、手工补跑或当天重跑会把同一周期的分片创建多份。</p>
      *
@@ -87,7 +102,21 @@ public class StatementCycleService {
             return 0;
         }
 
-        // 阶段 2：先用 cycle 唯一键判断是否已规划过，减少重复计算。
+        // 阶段 2：先用 cycle 身份(periodStart + periodEnd)判断是否已规划过，减少重复计算。
+        // existsForCycle 只要看到任意 shard 就返回 true，语义是“这个 cycle 已经被 planner 接管过”。
+        // 这不是在判断所有账户是否都已经生成 statement；账户级完成度要看 statement_jobs 的 DONE/DEAD
+        // 或 statements 的自然键，而不是由 scheduler 再扫一遍全量账户。
+        //
+        // 为什么“有一个 shard 就算有”在当前实现成立：
+        // 1) createJobsForCycle 在同一个事务里生成本 cycle 的整套 shard；
+        // 2) insertAll 内部逐条 INSERT IGNORE，但事务未提交前外部看不到半套结果；
+        // 3) uk_statement_jobs_cycle_shard(period_start, period_end, shard_no) 保证重复 planner 不会制造第二套 shard。
+        //
+        // 什么时候需要升级成全局检查：
+        // - 如果未来允许运维手工删除/重建某个 shard；
+        // - 如果改成分批提交 shard，而不是一个事务里插入整套；
+        // - 如果需要在 scheduler 层主动修复“只有 shard 0，没有 shard 1/2”的 DB 损坏。
+        // 那时可以改成检查 COUNT(*) 是否等于 MAX(shard_count)，或加 cycle-level read model。
         // 幂等最终仍靠 INSERT IGNORE + 唯一键兜底，多实例同时进来也不会重复创建。
         LocalDate periodStart = periodStartFor(periodEnd);
         if (jobRepository.existsForCycle(periodStart, periodEnd)) {
@@ -104,6 +133,10 @@ public class StatementCycleService {
      * <p>事务归属：只由 {@link #createDueJobs()} 调用，加入 scheduler 心跳的同一个事务。
      * 多实例同时扫描也安全：{@link StatementJobRepository#existsForCycle(LocalDate, LocalDate)}
      * 只是减少无谓计算，最终幂等性仍由 {@code INSERT IGNORE} 和 cycle/shard 唯一键兜底。</p>
+     *
+     * <p>这里不要查 {@code statements} 判断缺失。某个 cycle 是否“已规划”，看的是
+     * {@code statement_jobs}；某个账户是否“已出账”，才看 {@code statements} 的自然键。
+     * 两层分开后，scheduler 只负责创建任务，账户级幂等由 {@link StatementGenerationService} 保护。</p>
      */
     private int reconcileDueCycles(LocalDate today) {
         int created = 0;
@@ -115,6 +148,13 @@ public class StatementCycleService {
                 properties.batch().reconciliationLookbackCycles()
         )) {
             // 阶段 2：每个 close date 独立判断是否已有分片。
+            // “已有”指这个 cycle 已经出现过至少一个 statement_jobs row，代表 planner 已经创建过本期任务；
+            // 它不代表所有账户都已出账完成，也不代表本期没有 DEAD shard。
+            // 这里刻意不做全局完成度检查，因为 scheduler 的职责只是“缺任务就补建”：
+            // - 是否执行完成：由 StatementJobDispatcher 推进 DONE/DEAD，并可按 cycle 查询 statement_jobs 状态；
+            // - 是否单账户已出账：由 StatementGenerationService 的 statements 自然键保护；
+            // - 是否 shard 集合完整：当前由 createJobsForCycle 单事务插入整套 shard + 唯一键保证。
+            // 未来若要防手工改库/半套 shard，可把 existsForCycle 升级成完整性检查，而不是在这里扫所有账户。
             LocalDate periodStart = periodStartFor(closeDate);
             if (jobRepository.existsForCycle(periodStart, closeDate)) {
                 log.debug(
@@ -125,6 +165,7 @@ public class StatementCycleService {
                 continue;
             }
             // 阶段 3：缺失周期立即补建；同一事务内由唯一键保证重复触发安全。
+            // 只有缺失时才计算 dueDate 和 shardCount，避免已存在周期重复做营业日/账户统计计算。
             BillingCycle cycle = billingCycle(closeDate);
             created += createJobsForCycle(cycle);
         }
@@ -142,12 +183,16 @@ public class StatementCycleService {
         // periodEndExclusive 用次日零点，避免在 SQL 里处理 23:59:59.999999 这种精度边界。
         Instant periodStartInclusive = cycle.periodStart().atStartOfDay(batchZone()).toInstant();
         Instant periodEndExclusive = cycle.periodEnd().plusDays(1).atStartOfDay(batchZone()).toInstant();
+        // 只统计“这个账期内有待出账交易的账户数”：
+        // status=POSTED + billing_status=UNBILLED + posted_at 落在本 cycle。
+        // 不是全量 credit_accounts 数；10 万账户里只有 2500 个本期有消费，就按 2500 估算分片。
         long accountCount = billingRepository.countBillableAccounts(periodStartInclusive, periodEndExclusive);
         // 阶段 2：根据待出账账户量决定分片数；没有账户也创建 1 个空分片保留生命周期。
         int shardCount = shardCount(accountCount);
         Instant now = Instant.now(clock);
 
         // 阶段 3：生成本期所有 PENDING statement_jobs。
+        // 一个 statement_jobs row 不是一张账单，而是一个分片任务；真正的 statement 在 worker 逐账户生成。
         // 所有分片在一个事务内 INSERT IGNORE：要么整批写入，要么因唯一键幂等跳过，不会留下半套分片。
         List<StatementJob> jobs = IntStream.range(0, shardCount)
                 .mapToObj(shardNo -> StatementJob.pending(
@@ -174,6 +219,10 @@ public class StatementCycleService {
     /**
      * 从 latestDate 所在月份往前找最近几个已经到达的 close dates。
      *
+     * <p>例子：close-day-of-month=31，today=2026-08-03，则 latestDate=2026-08-02。
+     * 最近已过去 close date 包括 2026-07-31、2026-06-30。这样服务如果错过 8/1 的 cron，
+     * 8/3 恢复后仍能补建 7 月账单 job。</p>
+     *
      * <p>事务归属：纯日期计算方法；当前由 {@link #reconcileDueCycles(LocalDate)}
      * 在 scheduler reconciliation 事务中调用。</p>
      */
@@ -193,12 +242,16 @@ public class StatementCycleService {
     /**
      * 根据本期待出账账户数决定分片数量，控制每个 job 的账户规模。
      *
+     * <p>accountCount 是 {@code COUNT(DISTINCT credit_account_id)}，来源于本账期
+     * {@code POSTED + UNBILLED} 的交易候选，不是系统全量账户数。这样空账户不会参与分片。</p>
+     *
      * <p>事务归属：纯计算方法；当前由 {@link #createJobsForCycle(BillingCycle)}
      * 在 job creation 事务中调用，但不依赖事务能力。</p>
      */
     private int shardCount(long accountCount) {
         if (accountCount == 0) {
             // 仍创建 1 个空分片，让本期有完整生命周期；worker 处理 0 个账户后直接标 DONE。
+            // 如果不创建空分片，后续只看 statement_jobs 会分不清“本期确实无人出账”和“scheduler 漏跑”。
             return 1;
         }
         return (int) Math.ceil((double) accountCount / properties.batch().targetAccountsPerJob());
@@ -206,6 +259,10 @@ public class StatementCycleService {
 
     /**
      * 根据关账日推导账期开始日、结束日和还款到期日。
+     *
+     * <p>cycle 是“这次要出账的业务窗口”，不是数据库 row：
+     * periodStart/periodEnd 决定哪些 posted transactions 能进入账单，
+     * dueDate 决定 AUTO_REPAYMENT DelayJob 和用户还款期限。</p>
      *
      * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}
      * 或 {@link #reconcileDueCycles(LocalDate)} 在 job creation 事务中调用。</p>
@@ -220,6 +277,9 @@ public class StatementCycleService {
 
     /**
      * 根据关账日推导账期开始日，供 existsForCycle 在计算 due date 前先判断是否已经规划过。
+     *
+     * <p>先算 periodStart，是因为 cycle 是否缺失只需要 {@code periodStart + periodEnd}；
+     * dueDate 只有在真正缺失、需要创建 jobs 时才计算。</p>
      *
      * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}、
      * {@link #reconcileDueCycles(LocalDate)} 和 {@link #billingCycle(LocalDate)}

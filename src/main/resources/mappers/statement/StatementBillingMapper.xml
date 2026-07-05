@@ -35,12 +35,42 @@
     </select>
 
     <!--
-      StatementJob 用 CRC32(account_id) % shardCount 做稳定分片。
-      这里不加 FOR UPDATE：真正并发控制在单账户生成时锁 credit account + candidate rows。
-      查询样例：shardCount=2，shardNo=0 时，只返回哈希后落在 0 号分片的 account。
-      注意 CRC32(credit_account_id) 是函数计算，MySQL 不能直接用它做范围索引；
-      所以前面的 status/billing_status/posted_at 条件先靠 idx_card_transactions_billing_batch 缩小集合，
-      再对候选 account 做稳定分片，避免同一 account 被两个 job 同时处理。
+      StatementJob 的账户分片查询。
+
+      核心表达式：
+        MOD(CRC32(credit_account_id), shardCount) = shardNo
+
+      CRC32 是 MySQL 内置的 deterministic checksum 函数：
+      - 输入同一个字符串 credit_account_id，每次都会得到同一个 32-bit 整数；
+      - 它不是加密 hash，只是足够便宜、稳定、分布大致均匀的分片 hash；
+      - 再对 shardCount 取模，就把账户稳定映射到 0..shardCount-1 的某个 shard。
+
+      具体例子（数字是假设值，帮助理解）：
+        CRC32('account-A') = 101
+        CRC32('account-B') = 102
+        shardCount = 3
+        account-A -> MOD(101, 3) = 2，所以只会被 shardNo=2 的 job 处理
+        account-B -> MOD(102, 3) = 0，所以只会被 shardNo=0 的 job 处理
+
+      为什么按 account 分片，而不是按 card_transaction 分片：
+      - StatementGenerationService.generate(accountId, period) 会一次性锁住这个账户本账期所有候选交易；
+      - 同一账户的多笔消费必须进入同一张 statement；
+      - 如果按交易分片，同一个 account 的两笔交易可能落到两个 job，两个 job 会同时尝试生成同一账户同一期账单。
+
+      DISTINCT credit_account_id 的含义：
+      - 这里先找“本 shard 要处理哪些账户”，不是直接找所有交易；
+      - handler 后续逐账户调用 StatementGenerationService；
+      - 真正取该账户全部消费、FOR UPDATE 锁交易、生成 statement_lines 的查询在 findBillableLineSourcesForUpdate。
+
+      这里不加 FOR UPDATE：
+      - 本查询只是 dispatcher/handler 的 fan-out 列表；
+      - 真正并发控制在单账户生成时锁 credit account + candidate card_transactions rows；
+      - 即使两个 job 因重试等原因重复看到同一账户，statement cycle unique key 和 BILLED 标记仍会兜底。
+
+      索引注意：
+      - CRC32(credit_account_id) 是函数计算，MySQL 不能直接用普通 BTree 索引做范围定位；
+      - 所以前面的 status/billing_status/posted_at 条件先靠 idx_card_transactions_billing_batch 缩小候选集合；
+      - 然后再对候选 account 做 CRC32 + MOD 分片。
     -->
     <select id="findAccountIdsForJob" resultType="java.lang.String">
         SELECT DISTINCT credit_account_id
