@@ -13,14 +13,18 @@ import org.springframework.stereotype.Component;
  *
  * <p>当前没有 User 域，所以 email 地址由 recipientKey 合成；真实系统会在本类内替换为
  * customer/contact 查询或调用用户服务。worker 不需要知道这些渠道细节。</p>
+ *
+ * <p>类名不带 Simulated：本类是接真实 provider 后仍然保留的真实发送代码（模板渲染、Feign 调用、
+ * Resilience4j），届时只改地址解析一行和 base-url。模拟行为都在 HTTP 边界另一侧的
+ * SimulatedNotificationProviderController，那个类才是上线时整体消失的部分。</p>
  */
 @Component
-public class SimulatedEmailNotificationSender implements NotificationDeliverySender {
+public class EmailNotificationDeliverySender implements NotificationDeliverySender {
 
     private final NotificationProviderClient notificationProviderClient;
     private final ResilientCallHelper resilientCallHelper;
 
-    public SimulatedEmailNotificationSender(
+    public EmailNotificationDeliverySender(
             NotificationProviderClient notificationProviderClient,
             ResilientCallHelper resilientCallHelper
     ) {

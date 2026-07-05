@@ -92,7 +92,11 @@ public class ResilientCallHelper {
                 CircuitBreaker.decorateSupplier(circuitBreaker, providerCall)
         );
         try {
-            // providerCall 返回 providerMessageId。worker 后续用这个回执 id markSent。
+            // 阶段 3：这里才是真正的执行点。上面的 decorateSupplier 只是"包函数"，不会发 HTTP；
+            // decorated.get() 会先进入 Retry，再进入 CircuitBreaker，最后才调用 providerCall.get()。
+            // providerCall.get() 内部就是 sender 传进来的 Feign 调用：
+            // notificationProviderClient.send(request).providerMessageId()
+            // 因此这一行返回时，表示 provider 已经返回 message id；worker 后续才能用它 markSent。
             return decorated.get();
         } catch (NotificationDeliveryPermanentException exception) {
             // 4xx 已由 ErrorDecoder 翻译成 permanent failure。不要包装成 IllegalStateException，

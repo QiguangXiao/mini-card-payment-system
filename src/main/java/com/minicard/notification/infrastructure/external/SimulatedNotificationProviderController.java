@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.minicard.notification.application.NotificationDeliveryProperties;
-import com.minicard.notification.infrastructure.delivery.NotificationProviderClient;
+import com.minicard.notification.domain.delivery.NotificationChannel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,6 +26,10 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>本地回环会同时占用 notification worker 线程和 Tomcat request 线程；默认 worker=4、Tomcat 默认线程较大，
  * 学习环境不会死锁。生产里 provider 是独立服务，这个自我竞争只存在于本地 demo。</p>
  *
+ * <p>本 controller 故意定义自己的 request/response record，而不引用 Feign client 的 Java 类型。
+ * 这更接近真实跨服务：调用方 DTO 和 provider DTO 可以名字不同、包不同、语言不同，但 JSON 字段名/类型/语义
+ * 必须按 contract 对齐。双方应通过 OpenAPI/schema/文档约定字段，并按版本兼容演进。</p>
+ *
  * <p>它保留三件教学机制：
  * 1) 按 provider + idempotencyKey 去重，演示 at-least-once delivery + 下游幂等 = effectively-once；
  * 2) 注入失败率，驱动 intra-attempt Retry/CircuitBreaker 和 durable attempts/backoff/DEAD；
@@ -43,8 +47,8 @@ public class SimulatedNotificationProviderController {
     private final NotificationDeliveryProperties properties;
 
     @PostMapping("/simulated-provider/notifications/send")
-    public NotificationProviderClient.NotificationProviderResponse send(
-            @RequestBody NotificationProviderClient.NotificationProviderRequest request
+    public SimulatedNotificationProviderResponse send(
+            @RequestBody SimulatedNotificationProviderRequest request
     ) {
         String dedupKey = request.providerName() + ":" + request.idempotencyKey();
         // 阶段 1：先查 provider-side idempotency。重复 retry/网络重放直接返回原 message id，
@@ -53,7 +57,7 @@ public class SimulatedNotificationProviderController {
         if (existingMessageId != null) {
             log.info("notification_provider_deduplicated provider={} idempotencyKey={} messageId={}",
                     request.providerName(), request.idempotencyKey(), existingMessageId);
-            return new NotificationProviderClient.NotificationProviderResponse(existingMessageId);
+            return new SimulatedNotificationProviderResponse(existingMessageId);
         }
 
         // 阶段 2：模拟外部系统的慢和失败。现在慢的是 HTTP 响应本身，
@@ -73,7 +77,32 @@ public class SimulatedNotificationProviderController {
                 request.providerName(), request.channel(), request.recipientAddress(), request.title(),
                 request.body().length(), request.idempotencyKey(), providerMessageId
         );
-        return new NotificationProviderClient.NotificationProviderResponse(providerMessageId);
+        return new SimulatedNotificationProviderResponse(providerMessageId);
+    }
+
+    /**
+     * provider 侧看到的请求 DTO。
+     *
+     * <p>它和 Feign client 的 request record 不是同一个 Java class，但字段名保持一致：
+     * Jackson 才能把调用方发来的 JSON 绑定到这里。真实外部服务也是这样靠 JSON/schema contract 对齐，
+     * 而不是共享调用方 class。</p>
+     */
+    record SimulatedNotificationProviderRequest(
+            String providerName,
+            NotificationChannel channel,
+            String recipientAddress,
+            String title,
+            String body,
+            String idempotencyKey
+    ) {
+    }
+
+    /**
+     * provider 侧返回 DTO。
+     *
+     * <p>字段名必须与 Feign client 期望的 response 字段兼容；否则 HTTP 200 也会在反序列化阶段失败。</p>
+     */
+    record SimulatedNotificationProviderResponse(String providerMessageId) {
     }
 
     private void simulateLatency() {

@@ -13,14 +13,18 @@ import org.springframework.stereotype.Component;
  *
  * <p>当前没有设备 token 表，所以 push token 由 recipientKey 合成；真实系统会在本类内替换为
  * device token 查询。它与 EMAIL 使用不同 circuit breaker，provider 故障互不拖累。</p>
+ *
+ * <p>类名不带 Simulated：本类是接真实 provider 后仍然保留的真实发送代码（模板渲染、Feign 调用、
+ * Resilience4j），届时只改 token 解析一行和 base-url。模拟行为都在 HTTP 边界另一侧的
+ * SimulatedNotificationProviderController，那个类才是上线时整体消失的部分。</p>
  */
 @Component
-public class SimulatedPushNotificationSender implements NotificationDeliverySender {
+public class AppPushNotificationDeliverySender implements NotificationDeliverySender {
 
     private final NotificationProviderClient notificationProviderClient;
     private final ResilientCallHelper resilientCallHelper;
 
-    public SimulatedPushNotificationSender(
+    public AppPushNotificationDeliverySender(
             NotificationProviderClient notificationProviderClient,
             ResilientCallHelper resilientCallHelper
     ) {
