@@ -156,7 +156,7 @@ mini-card JVM
 | --- | --- | --- | --- | --- |
 | `outboxTaskScheduler` | `outbox-scheduler-` | 1 | `OutboxPoller.poll` / `OutboxRecoverer.recover` | 1s / 5s |
 | `delayJobTaskScheduler` | `delay-job-scheduler-` | 2 | `DelayJobPoller.poll` / `DelayJobRecoverer.recover` | 1s / 5s |
-| `billingCycleTaskScheduler` | `billing-cycle-scheduler-` | 1 | `BillingCycleScheduler`（每天判断是否关账日，触发 `StatementCycleService` 建分片 job） | daily cron(JST) |
+| `billingCycleTaskScheduler` | `billing-cycle-scheduler-` | 1 | `BillingCycleScheduler`（每天触发 reconciliation 心跳，`StatementCycleService` 补建缺失 close cycle 的分片 job） | daily cron(JST) |
 | `statementJobTaskScheduler` | `statement-job-scheduler-` | 2 | `StatementJobDispatcher` 的 claim / recover | 1s / 10s |
 | `notificationDeliveryTaskScheduler` | `notif-delivery-scheduler-` | 2 | 通知投递 poll / recover | 见投递文档 |
 

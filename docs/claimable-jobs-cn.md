@@ -90,13 +90,13 @@
 
 | 类 | 职责 |
 |---|---|
-| `BillingCycleScheduler` | `@Scheduled(cron, zone=Asia/Tokyo)` 每天触发一次，只判断"今天要不要建本期 job" |
-| `StatementCycleService` | **planner**：判断关账日，算 cycle（period/due date），按 `ceil(账户数 / targetAccountsPerJob)` 算 shardCount，`INSERT IGNORE` 建 N 个分片 |
+| `BillingCycleScheduler` | `@Scheduled(cron, zone=Asia/Tokyo)` 每天触发一次 reconciliation 心跳，本身不展开账期规则 |
+| `StatementCycleService` | **planner**：扫描最近已过去的 close cycles，缺失周期才算 cycle（period/due date），按 `ceil(账户数 / targetAccountsPerJob)` 算 shardCount，`INSERT IGNORE` 建 N 个分片 |
 | `StatementJobDispatcher` | **1 个类**完成 poll→短事务 claim→提交 `statementJobWorkerExecutor`→finalize→recover |
 | `StatementJobHandler` | 处理一个 shard：`findAccountIdsForJob`（`CRC32(account_id) % shardCount`）取账户，**逐账户各开小事务**调 `StatementGenerationService`，统计 generated/skipped/failed |
 
 - **一个 job = 一个分片，覆盖很多账户（fan-out）**。`StatementJob` 带 cycle 身份 `period_start/period_end/due_date` + `shard_no/shard_count` + 结果计数器。
-- **daily cron 触发创建，执行靠 claimable job 并发跑**。
+- **daily cron 触发 reconciliation，执行靠 claimable job 并发跑**。这不是 edge-triggered "错过一次 tick 就丢账期"，而是 level-triggered catch-up：最近几个 close cycle 缺分片就补建。
 - **创建幂等**：`UNIQUE (period_start, period_end, shard_no)`。
 - **多列 lease（更丰富）**：`claimed_by / claimed_at / claim_until / claim_token`；
   `claim_until` 作 lease deadline，`claim_token` 作 finalize owner token。比 delay/outbox 多了"谁在处理、何时开始"的运维可见性。

@@ -44,7 +44,7 @@
 | 账单/请款 | statement / billing | 請求 | せいきゅう | 持卡人应付金额和明细。 |
 | 账单生成 | statement generation | 請求明細作成 | せいきゅうめいさいさくせい | 月批处理生成 statement 和 item。 |
 | 账单确认/关账 | statement close | 請求確定 | せいきゅうかくてい | 月度账单金额固定下来。 |
-| 账单明细 | statement item | 請求明細 | せいきゅうめいさい | PayPay Card 页面也使用这个词。 |
+| 账单明细 | statement line / statement item | 請求明細 | せいきゅうめいさい | 当前代码和表名使用 `StatementLine` / `statement_lines`；业务讨论里也常说 statement item。 |
 | 账单对象交易 | billable transaction | 請求対象取引 | せいきゅうたいしょうとりひき | posted 但尚未进入账单的交易。 |
 | 关联到账单明细 | statement assignment | 請求明細への紐づけ | せいきゅうめいさいへのひもづけ | 替代机械直译的“分配”口吻。 |
 | 关账日 | close day | 締め日 | しめび | 本项目默认每月固定日批处理。 |

@@ -154,7 +154,7 @@ repaymentReceivedEventId2 = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee6
 - `card_transactions.network_transaction_id`
 - `statements.credit_account_id + period_start + period_end`
 - `repayments.idempotency_key`
-- `statement_items.card_transaction_id`
+- `statement_lines.card_transaction_id`
 
 这些唯一约束是 `idempotency` 和防重复归账的最后防线。
 
@@ -667,8 +667,8 @@ posted_at = 2026-07-01T10:05:00Z
 真实主路径是月度账单批处理（现已扁平化为 claimable job，详见 `claimable-jobs-cn.md`）：
 
 ```text
-BillingCycleScheduler（每天 JST cron，判断是否关账日）
--> StatementCycleService.createDueJobs（算 cycle + 按账户数建分片 statement_jobs）
+BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
+-> StatementCycleService.createDueJobs（扫描最近已过去 close cycles，缺失周期才算 cycle + 按账户数建分片 statement_jobs）
 -> StatementJobDispatcher（claim 分片）
 -> StatementJobHandler（取本片账户：CRC32(account)%shardCount）
 -> StatementGenerationService.generate(...)（逐账户独立小事务出账）
@@ -834,12 +834,12 @@ StatementController.generate(...)
 
    同时生成 `StatementClosedDomainEvent`。
 
-5. `StatementItem.snapshot(...)` 创建账单 item。
+5. `StatementLine.snapshot(...)` 创建账单 line。
 
    示例：
 
    ```text
-   statement_items.id = dddddddd-dddd-dddd-dddd-dddddddddd01
+   statement_lines.id = dddddddd-dddd-dddd-dddd-dddddddddd01
    statement_id = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
    card_transaction_id = cccccccc-cccc-cccc-cccc-ccccccccccc1
    amount = 1500.00
@@ -851,12 +851,13 @@ StatementController.generate(...)
    - 账单不是每次查询动态 sum。
    - 生成后用户看到的账单金额和明细要稳定可审计。
 
-6. `CardTransaction.assignToStatement(...)`。
+6. `StatementBillingRepository.markCardTransactionsBilled(...)`。
 
    变化：
 
    ```text
    card_transactions.id = cccccccc-cccc-cccc-cccc-ccccccccccc1
+   billing_status: UNBILLED -> BILLED
    statement_id: NULL -> bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
    statement_assigned_at = 2026-08-01T00:00:00Z
    status = POSTED 不变
@@ -1180,7 +1181,7 @@ availableCredit = 99000.00
 
 - `Authorization` 仍是 `POSTED`，不会因为还款变回 `APPROVED`。
 - `CardTransaction` 仍是 `POSTED`，历史消费流水不会被还款删除。
-- `StatementItem` 不变，账单明细快照不被还款改写。
+- `StatementLine` 不变，账单明细快照不被还款改写。
 - Notification 异步消费 `repayment.received` 创建 `REPAYMENT_RECEIVED` 通知。
 
 ## 9. 请求五：dueDate 自动扣款还清剩余 1000 JPY

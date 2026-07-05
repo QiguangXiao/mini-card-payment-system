@@ -52,7 +52,7 @@ Inbox、unique fallback。它们不是装饰，而是在防具体事故。
 | Posting 和 Statement batch 统一锁顺序：account -> transactions | 一个流程先锁交易再等账户、另一个先锁账户再等交易时，容易形成死锁 |
 | `network_transaction_id` 作为 presentment 幂等键 | 卡组织或测试脚本重放同一 presentment 时，同一笔消费可能被入账两次 |
 | Statement cycle natural key：`creditAccountId + periodStart + periodEnd` | batch retry 可能给同一账户同一期生成多张账单 |
-| `CardTransaction.assignToStatement(...)` | 同一笔 posted transaction 下轮 batch 还会被当成未出账交易，再次进入账单 |
+| `StatementBillingRepository.markCardTransactionsBilled(...)` | 同一笔 posted transaction 下轮 batch 还会被当成未出账交易，再次进入账单 |
 | Outbox row 和业务状态同事务提交 | 业务状态成功但消息意图丢失，下游 Notification/Risk/Ledger 永远不知道这件事 |
 | Kafka publish 放在 worker，且等待 broker ack 后再 finalize | 如果主事务里等待 Kafka，会拉长 money-changing lock；如果不等 ack 就标成功，消息可能丢失 |
 | Outbox / DelayJob 的 `PROCESSING lease` 和 recoverer | pod 在领取后宕机时，row 会永久卡在 PROCESSING，消息或未来业务动作不再执行 |
@@ -148,13 +148,13 @@ credit_account_id + period_start + period_end
 
 同一账户同一账单周期只能生成一张 statement。
 
-### `statement_items`
+### `statement_lines`
 
 保存账单生成时对 posted `CardTransaction` 的快照。
 
 核心字段：
 
-- `id`：statement item id，由 `StatementItem.snapshot(...)` 内部生成 UUID。
+- `id`：statement line id，由 `StatementLine.snapshot(...)` 内部生成 UUID。
 - `statement_id`：属于哪张账单。
 - `card_transaction_id`：来源交易，有唯一约束，防止一笔交易进入两张账单。
 - `network_transaction_id` / `authorization_id` / `card_id`：从源交易复制的审计字段。
@@ -817,7 +817,7 @@ Backfill/API path + 单账户出账：
 - `GenerateStatementCommand`
 - `StatementGenerationService.generate(command)`
 - `Statement.close(...)`
-- `CardTransaction.assignToStatement(statementId, now)`
+- `StatementBillingRepository.markCardTransactionsBilled(statementId, lineSources, now)`
 - `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
 - `StatementOutboxAdapter.append(event)`
 
@@ -852,7 +852,7 @@ Backfill/API path + 单账户出账：
 
 - 从 body 读取 `creditAccountId`、`periodStart`、`periodEnd`、`dueDate`。
 - 创建 `GenerateStatementCommand`。
-- 调用 `statementService.generate(command)`。
+- 调用 `StatementGenerationService.generate(command)`。
 
 `GenerateStatementCommand` 会校验：
 
@@ -911,9 +911,9 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 
    生成 `statement.id = UUID.randomUUID()`。
 
-   同时为每笔交易生成 `StatementItem.snapshot(...)`：
+   同时为每笔交易生成 `StatementLine.snapshot(...)`：
 
-   - `statement_items.id = UUID.randomUUID()`
+   - `statement_lines.id = UUID.randomUUID()`
    - 复制 `cardTransactionId`
    - 复制 `networkTransactionId`
    - 复制 `authorizationId`
@@ -946,19 +946,20 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
    同一事务内插入：
 
    - `statements`
-   - `statement_items`
+   - `statement_lines`
 
    如果唯一键冲突，service 会回读已有 statement，作为 defensive idempotency fallback。
 
-7. `transaction.assignToStatement(statement.id(), now)`
+7. `StatementBillingRepository.markCardTransactionsBilled(statement.id(), lineSources, now)`
 
-   对每个被收录的 `CardTransaction` 写入：
+   用一条批量 SQL 对本次被收录的 `CardTransaction` 写入：
 
+   - `billing_status = BILLED`
    - `statement_id`
    - `statement_assigned_at`
 
    这不是把交易变成 statement 的子对象，而是记录这笔 posted transaction 已经被哪期账单收录。
-   下次生成账单时 `statement_id IS NULL` 条件会跳过它。
+   下次生成账单时 `billing_status = UNBILLED` 和 `statement_id IS NULL` 条件会跳过它。
 
 8. `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
 
@@ -975,7 +976,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 
    - 自动扣款是未来某一天要执行的业务动作，不是“现在发布一条消息”。
    - DelayJob 的 `PROCESSING lease`、retry 和 `DEAD` 状态适合表达到期执行与失败恢复。
-   - 这条 job 和 statement/items/transaction assignment 在同一个 MySQL transaction boundary 内提交，
+   - 这条 job 和 statement/lines/transaction billing mark 在同一个 MySQL transaction boundary 内提交，
      防止“账单生成了，但没有自动扣款计划”。
 
 9. `StatementClosedDomainEvent`
@@ -1004,7 +1005,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 成功生成后：
 
 - `statements` 新增一行，`status = CLOSED`。
-- `statement_items` 新增多行，保存账单行项目快照。
+- `statement_lines` 新增多行，保存账单行项目快照。
 - 被收录的 `card_transactions.statement_id` 指向该 statement。
 - 被收录的 `card_transactions.statement_assigned_at` 记录归账时间。
 - `delay_jobs` 新增 `AUTO_REPAYMENT/PENDING`，计划在 `dueDate` 自动扣款。
@@ -1027,7 +1028,7 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 真实主路径是 billing batch，不是用户实时请求；HTTP generate 只是 backfill/学习入口。
 - 账单周期用自然唯一键实现 idempotency：同一账户同一周期只能有一张账单。
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
-- `statement_items` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
+- `statement_lines` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
 - `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；`statement.closed` 使用 Outbox，因为它是 integration event。
 - `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_CLOSED` 通知；未来 PDF 生成、还款提醒也可以独立消费。
 - 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
@@ -1272,7 +1273,7 @@ credit account row lock -> statement row lock
 不会变化：
 
 - `card_transactions` 不会被改写。
-- `statement_items` 不会被改写。
+- `statement_lines` 不会被改写。
 - `reserved_amount` 不会变化。
 
 原因：

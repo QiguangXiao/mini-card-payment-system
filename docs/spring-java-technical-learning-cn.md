@@ -437,7 +437,7 @@ Bean name 是技术边界，不只是字符串。
 - `AuthorizationService.authorize`
 - `PostingService.post`
 - `RepaymentService.receive`
-- `StatementService.generate`
+- `StatementGenerationService.generate`
 - `OutboxRecoverer.recoverStuckEvents`
 
 `@Transactional` 通过 Spring AOP proxy 生效。
@@ -718,7 +718,8 @@ url: ${DB_URL:jdbc:mysql://localhost:3306/mini_card}
 - `OutboxPoller`
 - `DelayJobRecoverer`
 - `OutboxRecoverer`
-- `StatementBatchPoller`
+- `BillingCycleScheduler`
+- `StatementJobDispatcher`
 
 显式指定 scheduler：
 
@@ -1581,7 +1582,7 @@ record goes to DLT
 
 ### 14.12 `YearMonth` 比 `minusDays(30)` 更适合账单月
 
-位置：`StatementBatchService`
+位置：`StatementCycleService`
 
 账单周期不是固定 30 天。
 
@@ -1606,7 +1607,7 @@ periodEnd.minusDays(30)
 
 ### 14.13 private record 适合绑定强相关局部值
 
-位置：`StatementBatchService.BillingCycle`
+位置：`StatementCycleService.BillingCycle`
 
 ```java
 private record BillingCycle(
@@ -2037,12 +2038,12 @@ Statement insert 分两步：
 
 ```text
 insert statements
-insert statement_items
+insert statement_lines
 ```
 
 只有主表 `statements` 的 cycle unique conflict 可以当成“同一账期已经生成过”的幂等结果。
 
-如果 `statement_items` 插入时 duplicate：
+如果 `statement_lines` 插入时 duplicate：
 
 ```text
 主表已插入
