@@ -1,4 +1,4 @@
-package com.minicard.risk.infrastructure.external;
+package com.minicard.risk.infrastructure.gateway;
 
 import java.math.BigDecimal;
 

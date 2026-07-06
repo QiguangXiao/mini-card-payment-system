@@ -4,7 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
-import com.minicard.notification.application.NotificationDeliveryProperties;
+import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import lombok.RequiredArgsConstructor;

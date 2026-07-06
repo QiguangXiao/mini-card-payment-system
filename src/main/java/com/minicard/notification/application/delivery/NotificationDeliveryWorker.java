@@ -1,4 +1,4 @@
-package com.minicard.notification.application;
+package com.minicard.notification.application.delivery;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -26,6 +26,10 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>结构照搬 OutboxWorker：等待 provider 回执的耗时不占用 DB 事务，只在更新投递状态时短暂开事务，
  * 且 finalize 前重新 FOR UPDATE 锁住并校验 lease token(status==PROCESSING 且 leaseToken 未变)，
  * 防止迟到 worker 覆盖 recoverer/新 worker 的结果。</p>
+ *
+ * <p>包约定：notification 内部有"请求创建"和"投递执行"两条子线。domain/delivery、
+ * infrastructure/delivery 已按此切分，application/delivery（本包）补齐第三层——
+ * 三层看到的是同一张"请求 vs 投递"地图；请求侧的 RequestNotificationService 留在 application 根包。</p>
  *
  * <p>流程总览（mini trace，三段式：claim 短事务 / 事务外 send / finalize 短事务）：</p>
  * <pre>

@@ -2,7 +2,7 @@ package com.minicard.infrastructure.async;
 
 import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.outbox.OutboxProperties;
-import com.minicard.notification.application.NotificationDeliveryProperties;
+import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.minicard.statement.application.StatementProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;

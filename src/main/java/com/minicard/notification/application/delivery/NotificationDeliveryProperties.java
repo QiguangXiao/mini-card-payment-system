@@ -1,4 +1,4 @@
-package com.minicard.notification.application;
+package com.minicard.notification.application.delivery;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

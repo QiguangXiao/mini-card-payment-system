@@ -49,7 +49,7 @@ interview时的推荐回答结构：
 | P0 | `idempotency` | 重试、并发重复请求、重复消息分别怎么防 | `idempotency_key`, `network_transaction_id`, `source_event_id`, `consumer_inbox` |
 | P0 | `transaction boundary` | 哪些状态必须同事务提交，哪些不能放进主事务 | Spring `@Transactional`, MySQL rows, Outbox rows |
 | P0 | `row lock` | 为什么用 `SELECT ... FOR UPDATE`，为什么不用 Java lock | mapper XML, `findByIdForUpdate(...)` |
-| P0 | Outbox / Inbox / Kafka | 为什么 Kafka 不能替代本地事务，为什么 consumer 还要幂等 | `outbox_events`, `consumer_inbox`, `KafkaMessagingConfiguration` |
+| P0 | Outbox / Inbox / Kafka | 为什么 Kafka 不能替代本地事务，为什么 consumer 还要幂等 | `outbox_events`, `consumer_inbox`, `KafkaConsumerConfiguration` |
 | P1 | 状态机 | 哪些状态转换合法，非法转换如何拒绝 | `Authorization`, `CardTransaction`, `Statement`, `Repayment` |
 | P1 | DDD 边界 | domain、application service、repository、infrastructure 各做什么 | `domain`, `application`, `infrastructure/mybatis` |
 | P1 | MyBatis / SQL / Migration | SQL 如何支持并发安全、索引、唯一约束、schema migration 和可审计性 | mapper XML, Liquibase changelog |

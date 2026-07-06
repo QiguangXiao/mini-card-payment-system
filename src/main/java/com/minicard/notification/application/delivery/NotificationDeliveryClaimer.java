@@ -1,4 +1,4 @@
-package com.minicard.notification.application;
+package com.minicard.notification.application.delivery;
 
 import java.time.Clock;
 import java.time.Instant;

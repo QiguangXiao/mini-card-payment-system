@@ -104,7 +104,7 @@ OutboxWorker  ->  稍后发布 Kafka
 
 ## 5. Kafka 配置参考（每个配置解决什么问题）
 
-配置在 `application.yml` + `KafkaMessagingConfiguration` + `KafkaOutboxMessagePublisher`。
+配置在 `application.yml` + `KafkaTopicsConfiguration`（topic 声明）+ `KafkaConsumerConfiguration`（消费容器）+ `KafkaOutboxMessagePublisher`。
 
 ### 5.1 Producer
 
@@ -144,7 +144,7 @@ mini-card.repayment-events.v1       repayment.received
 
 每个 bounded context 一个独立 group（`mini-card-notification-v1` / `-risk-feature-v1` / `-ledger-v1`）。同 group 内一条消息只被一个实例处理；不同 group 各收一份——这正是 event-driven 的价值：一条 authorization event，notification 和 risk-feature 各收到一份独立处理。
 
-`concurrency`（如 risk feature = 3）只提高同 group 内并行度，**有效并行度受 partition 数限制**（3 partitions → 最多 3 个有效线程，再大只是空闲）。
+`concurrency`（如 risk feature = 3）只提高同 group 内并行度，**有效并行度受 partition 数限制**（3 partitions → 最多 3 个有效线程，再大只是空闲）。数值配置在 `messaging.consumers.*.concurrency`（绑定类 `KafkaConsumersProperties`）——它和 worker pool size 一样是"处理并行度"，统一放 YAML 而不是硬编码在 factory 里。
 
 ---
 
@@ -169,7 +169,7 @@ mini-card.repayment-events.v1       repayment.received
   1. **Inbox claim（第一道）**：`ConsumerInboxRepository.claim(consumerName, eventId)`，底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)` 判定"第一次消费"，`DuplicateKeyException → false`。
   2. **业务唯一键（第二道）**：`ledger_entries` 对 `source_event_id + entry_type` 唯一、`notifications.source_event_id` 唯一。挡住"绕过 inbox 的手工 replay / 补偿脚本"。
   - **inbox claim 与业务写在同一个 `@Transactional`**（见 `RecordLedgerEntryService`）。**反向事实**：否则 claim 成功但业务写失败会"假装消费过"，造成**丢消费**。
-- **错误处理与 DLT**（`KafkaMessagingConfiguration`）：`DeadLetterPublishingRecoverer`（保留原 partition 便于排查/重放）+ `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；**`addNotRetryableExceptions(EventContractException.class)`**——永久契约错误直进 DLT 不空转，瞬时错误才退避重试。DLT topic：`mini-card.notification.dlt.v1` / `mini-card.authorization-risk-feature.dlt.v1` / `mini-card.ledger.dlt.v1`。
+- **错误处理与 DLT**（`KafkaConsumerConfiguration`）：`DeadLetterPublishingRecoverer`（保留原 partition 便于排查/重放）+ `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；**`addNotRetryableExceptions(EventContractException.class)`**——永久契约错误直进 DLT 不空转，瞬时错误才退避重试。DLT topic：`mini-card.notification.dlt.v1` / `mini-card.authorization-risk-feature.dlt.v1` / `mini-card.ledger.dlt.v1`。
   - **为什么每个 consumer 一个 DLT**：同一条消息可能对 Risk 成功、对 Notification 失败；分开后可只修复/replay 失败的 consumer，不影响其他 context。
 
 ---

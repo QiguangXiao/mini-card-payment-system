@@ -2,7 +2,7 @@ package com.minicard.notification.infrastructure.external;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.minicard.notification.application.NotificationDeliveryProperties;
+import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.minicard.notification.domain.delivery.NotificationChannel;
 import org.junit.jupiter.api.Test;
 

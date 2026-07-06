@@ -2,8 +2,8 @@ package com.minicard.notification.infrastructure.delivery;
 
 import java.util.List;
 
-import com.minicard.notification.application.NotificationDeliveryClaimer;
-import com.minicard.notification.application.NotificationDeliveryWorker;
+import com.minicard.notification.application.delivery.NotificationDeliveryClaimer;
+import com.minicard.notification.application.delivery.NotificationDeliveryWorker;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;

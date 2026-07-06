@@ -1,4 +1,4 @@
-package com.minicard.risk.infrastructure.external;
+package com.minicard.risk.infrastructure.gateway;
 
 import com.minicard.risk.application.ExternalRiskGateway;
 import com.minicard.risk.domain.RiskAssessmentRequest;
@@ -21,6 +21,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>RiskAssessmentService 依赖 ExternalRiskGateway port；这个 adapter 才知道
  * Feign DTO、HTTP endpoint、timeout/bulkhead/circuit breaker 和 fallback 指标。</p>
+ *
+ * <p>包约定：{@code infrastructure/gateway} 放我方的出站 client + adapter；
+ * {@code infrastructure/external} 只放模拟第三方的 server（对齐 notification 的
+ * delivery/external 划分）。adapter 实现的是 application 层 port，"给内部用"是它的本职。</p>
  */
 @Component
 @RequiredArgsConstructor
