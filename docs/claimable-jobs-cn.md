@@ -58,9 +58,9 @@
 
 | 类 | 职责 |
 |---|---|
-| `DelayJobPoller` | `@Scheduled` 周期 poll，提交 `delayJobWorkerExecutor` |
+| `DelayJobPoller` | `@Scheduled` 周期 poll，按 jobType 分池提交：`AUTO_REPAYMENT`（外部银行调用）→ `autoRepaymentDelayJobWorkerExecutor`，其余（纯 DB 小事务）→ `delayJobWorkerExecutor`——银行 brownout 只钉住专用池，不拖授权额度释放 |
 | `DelayJobClaimer` | 短事务 `FOR UPDATE SKIP LOCKED` 领 PENDING → PROCESSING lease |
-| `DelayJobWorker` | 按 `jobType` 经 `EnumMap<DelayJobType, handler>` 派发；成功 `markDone`/失败 `markFailed`；finalize 独立短事务 + lease-token 重校验 |
+| `DelayJobWorker` | 按 `jobType` 经 `EnumMap<DelayJobType, handler>` 派发；成功 `markDone`/失败 `markFailed`/确定性失败（`DelayJobPermanentException`，如银行 4xx）`markPermanentFailed` 直接 DEAD 不烧重试；finalize 独立短事务 + lease-token 重校验 |
 | `DelayJobRecoverer` | `@Scheduled` 扫 lease 超时，`markProcessingTimedOut` |
 
 - **一个 job = 一个聚合的一次未来动作**（point action at time T）。`DelayJob` 带 `jobType / aggregateType / aggregateId / scheduledAt`。
@@ -171,6 +171,7 @@ created_at / updated_at / last_error
 每 1s  StatementJobDispatcher.dispatch：短事务 FOR UPDATE SKIP LOCKED 领 PENDING
        → 改 PROCESSING（写 claimed_by/claimed_at/claim_until/claim_token）→ commit → 交 statementJobWorkerExecutor
 worker  StatementJobHandler.handle：CRC32(account)%shardCount 取本片账户，逐个 generate（各开小事务）
+        每 100 个账户无锁快查 claim_token；lease 已被 recover 接管则放弃剩余账户（止损，不出错）
 finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是自己 → 标 DONE / PENDING / DEAD
 每 10s  recoverStuckJobs：status=PROCESSING AND claim_until<=now 视为宕机，按一次失败放回
 ```
@@ -185,6 +186,11 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 `StatementJobHandler` 对单账户结果分类计数，不让一个坏账户拖垮整片：成功→`generated`；该账户本期无可出账交易（`rejected`）→`skipped`；可恢复错误（如 ledger 未就绪，`retryable`）/未预期异常→`failed`。只要 `failed>0` 整片回 `PENDING/DEAD` 重试，否则 `DONE`。计数落库作分片级 observability。
 
+**中途 lease 检查（收窄新旧 worker 重叠窗口）**：handler 每处理 100 个账户做一次无锁主键点查
+（`status='PROCESSING' AND claim_token=?`）；lease 已被 recoverer/新 worker 接管时立即放弃剩余账户。
+没有这一步也**不会出错**（账户级幂等 + finalize token 校验兜底），但旧 worker 会把整片白跑一遍、
+和新 worker 抢同一批账户的 row lock；有了它，重叠窗口从"整片跑完"缩到最多 100 个账户。
+
 ---
 
 ## 5. 平台执行资源：scheduler 池 ≠ worker 池
@@ -192,7 +198,7 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 | 包 / 类 | 实际含义 | 不应误解成 |
 | --- | --- | --- |
 | `infrastructure.scheduler.PollingSchedulerConfiguration` | 创建 `outboxTaskScheduler`(1) / `delayJobTaskScheduler`(2) / `billingCycleTaskScheduler`(1) / `statementJobTaskScheduler`(2) 等 Spring scheduler 线程池，**只跑 poll/claim/recover** | 各机制的业务 scheduler 逻辑 |
-| `infrastructure.async.WorkerExecutorConfiguration` | 创建 `outboxWorkerExecutor` / `delayJobWorkerExecutor` / `statementJobWorkerExecutor` 等 **有界** worker 池（core=max），**跑真正业务** | 所有异步流程的入口 |
+| `infrastructure.async.WorkerExecutorConfiguration` | 创建 `outboxWorkerExecutor` / `delayJobWorkerExecutor` / `autoRepaymentDelayJobWorkerExecutor` / `statementJobWorkerExecutor` 等 **有界** worker 池（core=max），**跑真正业务** | 所有异步流程的入口 |
 | `infrastructure.transaction.TransactionOperationsConfiguration` | 把 transaction manager 包成 `TransactionOperations`，给 worker 显式开短事务 | application service 的业务事务规则 |
 | `messaging/outbox`、`delayjob` | 可靠性状态机（表、lease、worker、recoverer） | 普通 Kafka helper / 普通 `@Scheduled` |
 

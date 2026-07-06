@@ -1071,23 +1071,25 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 
 - 不支持 overpayment。
 - 不把一笔还款自动分摊到多张 statement。
-- 不新增客户自定义扣款日或 `bank_accounts` 表；`SimulatedBankDebitGateway` 先假设客户已有默认扣款授权。
+- 不新增客户自定义扣款日或 `bank_accounts` 表；模拟银行（`SimulatedBankController`）先假设客户已有默认扣款授权。
 - 不引入真实银行网络、资金清算文件或生产级 double-entry ledger。
 
 自动扣款主路径：
 
 ```text
-AUTO_REPAYMENT DelayJob due
+AUTO_REPAYMENT DelayJob due（专用 auto-repay worker 池）
 -> AutoRepaymentDelayJobHandler
 -> AutoRepaymentService.debitStatement(statementId)
--> SimulatedBankDebitGateway
+-> BankDebitGatewayAdapter (@CircuitBreaker bankDebit)
+-> BankDebitClient (Feign) -> HTTP -> SimulatedBankController（模拟银行，幂等去重）
 -> RepaymentService.receive(...)
 ```
 
-银行结果当前有两种预设：
+银行结果分三类，走三条路：
 
 - `SUCCESS`：默认配置，进入 `RepaymentService.receive(...)` 完成入账。
-- `FAILED`：不调用 `RepaymentService`，让 DelayJob 记录失败并按 retry/DEAD 策略处理；未来可扩展失败通知、再次扣款或逾期流程。
+- `FAILED`（200 + 业务拒绝，如余额不足）：不调用 `RepaymentService`，DelayJob 按退避 retry/DEAD——客户补足余额后重试能成功，所以保留重试。
+- HTTP 4xx（契约/配置错误）：ErrorDecoder 翻译成 `BankDebitPermanentException`，handler 再翻译成 `DelayJobPermanentException`，job 一次就 DEAD，不烧重试预算。5xx/超时/熔断打开则按瞬态失败转 `FAILED` 结果处理。
 
 示例请求：
 
@@ -1110,7 +1112,7 @@ curl -X POST http://localhost:8080/api/repayments \
 - `DelayJobWorker.handleClaimedJob(job)`
 - `AutoRepaymentDelayJobHandler.handle(job)`
 - `AutoRepaymentService.debitStatement(statementId)`
-- `SimulatedBankDebitGateway.debit(request)`
+- `BankDebitGatewayAdapter.debit(request)`（Feign → `SimulatedBankController`）
 - `RepaymentService.receive(command)`
 
 关键点：
@@ -1127,11 +1129,14 @@ curl -X POST http://localhost:8080/api/repayments \
    - 如果已经 `PAID`，说明用户可能提前主动还款或上一次 retry 已经成功，直接返回。
    - 否则用 `statement.remainingAmount()` 作为自动扣款金额。
 
-3. `SimulatedBankDebitGateway`
+3. `BankDebitGatewayAdapter`
 
-   当前默认返回成功的 `BankDebitResult`（`success=true`）。
+   走 Feign/HTTP 调模拟银行 `SimulatedBankController`，默认返回 `SUCCESS`；
+   adapter 上只挂 `@CircuitBreaker(bankDebit)`，刻意不加 R4j retry（DelayJob 已是
+   durable retry 层）也不加 bulkhead（跑在有界的 auto-repay 专用 worker 池里）。
 
-   如果配置成失败（`bank.debit.simulated-success: false`），`AutoRepaymentService` 会抛 `AutoRepaymentFailedException`。
+   如果配置成失败（`repayment.auto-debit.simulated-success: false`），银行回 `FAILED`，
+   `AutoRepaymentService` 抛 `AutoRepaymentFailedException`。
    这时不会写 `repayments`，因为银行资金并没有到账。
 
 4. 自动构造 `ReceiveRepaymentCommand`

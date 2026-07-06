@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>默认成功让主流程可运行；把 simulated-success 设成 false 可以演示扣款失败路径
  * （DelayJob retry / DEAD），但暂不引入真实银行网络、清算文件或失败通知。</p>
  */
-// @ConfigurationProperties 把 repayment.auto-debit.* 绑定成 typed record，供 simulated gateway 注入。
+// @ConfigurationProperties 把 repayment.auto-debit.* 绑定成 typed record，供模拟银行 controller 注入。
 @ConfigurationProperties(prefix = "repayment.auto-debit")
 public record AutoDebitProperties(
         /** 本地模拟的银行扣款是否成功（口座振替結果）。 */

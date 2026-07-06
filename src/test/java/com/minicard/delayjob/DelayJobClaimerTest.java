@@ -51,6 +51,6 @@ class DelayJobClaimerTest {
     }
 
     private DelayJobProperties properties() {
-        return new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100);
+        return new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100, 4, 100);
     }
 }

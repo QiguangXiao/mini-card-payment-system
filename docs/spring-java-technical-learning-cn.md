@@ -919,13 +919,17 @@ external risk unavailable
 |---|---|---|
 | 策略静态（实例名编译期固定）、单方法、fallback 要返回域内值 | **注解式**（`@CircuitBreaker`/`@Bulkhead` + fallbackMethod） | `ExternalRiskGatewayAdapter`：CB + Bulkhead，fail-closed 降级成 decline |
 | 实例名运行时决定（如按渠道选熔断器）、需要显式控制装饰顺序 | **编程式**（Registry + `decorateSupplier`，helper 收口） | `ResilientCallHelper`：Retry(CB(call))，按 notificationPush/Email 选实例 |
+| 策略静态、单方法、已有 durable retry 层 | **注解式**，且只挂 CB | `BankDebitGatewayAdapter`：仅 CB；fallback 按异常类型分派（permanent 重抛 / 瞬态转 failed 结果） |
 
-两种组合的差异也是业务驱动的，不只是风格：risk 在授权同步热路径上——不能 retry
-（延迟预算）、必须 bulkhead（防 brownout 钉死 Hikari）；notification 在后台 worker——
-DB 层已有 durable retry 所以进程内 retry 便宜、worker pool 有界所以不需要 bulkhead。
+三种组合的差异是业务驱动的，不只是风格：
+
+- **risk**：授权同步热路径——不能 retry（延迟预算）、必须 bulkhead（防 brownout 钉死 Hikari）。
+- **notification**：后台 worker——DB 层已有 durable retry 所以进程内 retry 便宜、worker pool 有界所以不需要 bulkhead。
+- **bank debit**：后台资金操作——DelayJob 已是带退避的 durable retry 层，叠 R4j retry 会相乘且每次尝试都是资金请求；
+  跑在专用 auto-repay worker 池里所以不需要 bulkhead；只留 CB 防银行 brownout 钉线程。
 
 注解式的已知代价（也是编程式存在的理由）：依赖 AOP 代理（自调用绕过防护）、装饰顺序
-隐式、fallback 靠方法签名反射匹配。**不为两个调用点抽统一 resilience 框架**：策略组合
+隐式、fallback 靠方法签名反射匹配。**不为三个调用点抽统一 resilience 框架**：策略组合
 几乎无交集，硬抽只会得到一堆布尔参数（参见 `ResilientCallHelper` 注释里"不要长成门面"
 的警告）。
 

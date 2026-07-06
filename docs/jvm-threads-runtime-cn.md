@@ -169,14 +169,15 @@ mini-card JVM
 | Worker executor | 线程名前缀 | core/max | queue | 业务 |
 | --- | --- | --- | --- | --- |
 | `outboxWorkerExecutor` | `outbox-worker-` | 4/4 | 100 | Kafka publish + Outbox finalize |
-| `delayJobWorkerExecutor` | `delay-job-worker-` | 4/4 | 100 | Authorization expiry / Auto repayment 等 |
+| `delayJobWorkerExecutor` | `delay-job-worker-` | 4/4 | 100 | Authorization expiry 等纯 DB 小事务 job |
+| `autoRepaymentDelayJobWorkerExecutor` | `auto-repay-worker-` | 4/4 | 100 | AUTO_REPAYMENT：调外部银行网关（Feign），brownout 只钉本池 |
 | `statementJobWorkerExecutor` | `statement-job-worker-` | 有界 | 有界 | 一个分片的逐账户出账 |
 
 `core=max` 固定上限不无限扩；queue 有界是显式背压。线程按需创建、长期保留、空闲等 queue task；shutdown `waitForTasksToCompleteOnShutdown=true`。进程在 worker 执行中宕机 → row 仍 `PROCESSING` → recoverer 在 lease timeout 后放回 retry/DEAD（PROCESSING lease 的意义）。
 
 **Outbox worker** 典型状态：空闲 `WAITING` → 构造 record `RUNNABLE` → 等 broker ack `TIMED_WAITING`（`get(timeout)` 最多 `send-timeout-ms=5000`）→ finalize `findByIdForUpdate` 的 JDBC I/O。若 4 个 `outbox-worker-*` 都在等 ack，说明 publish 能力被 Kafka ack 限制，`PENDING` backlog 会增长——**别第一反应把 pool 调大**，先看 broker/network/partition/producer timeout/DB finalize。
 
-**DelayJob worker** 比 Outbox worker 更容易卡 DB：它进入业务 service，锁 authorization/account/statement/repayment（`AUTO_REPAYMENT` 未来接真实银行 API 还会等外部结果）。久忙时查 due jobs 量、row lock 等待、坏 job 反复重试、`PROCESSING`/`DEAD` 增长。
+**DelayJob worker** 比 Outbox worker 更容易卡 DB：它进入业务 service，锁 authorization/account/statement/repayment。`AUTO_REPAYMENT` 已拆到 `auto-repay-worker-*` 专用池——它同步等银行网关（Feign read-timeout 2s 兜底），银行 brownout 时看到本池全员 `TIMED_WAITING` 在 socket read 属预期，授权过期在 `delay-job-worker-*` 不受影响。久忙时查 due jobs 量、row lock 等待、坏 job 反复重试、`PROCESSING`/`DEAD` 增长。
 
 ### 4.7 Kafka listener 线程
 

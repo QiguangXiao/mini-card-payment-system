@@ -27,4 +27,13 @@ public interface StatementJobRepository {
     Optional<StatementJob> findByIdForUpdate(UUID id);
 
     void updateExecutionState(StatementJob job);
+
+    /**
+     * 无锁快查：本 worker 是否仍持有该 job 的 PROCESSING lease（status + claim_token 同时匹配）。
+     *
+     * <p>供 handler 在长账户循环的中途做廉价检查：lease 已被 recoverer/新 worker 接管时，
+     * 旧 worker 尽早放弃剩余账户，而不是整片跑完才在 finalize 发现 token 不符。
+     * 只读不加锁——它是提前止损的信号，最终一致性防线仍是 finalize 的 FOR UPDATE + token 校验。</p>
+     */
+    boolean holdsCurrentLease(UUID jobId, String claimToken);
 }

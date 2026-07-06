@@ -40,8 +40,17 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class StatementJobHandler {
 
+    /**
+     * 每处理多少个账户做一次 lease 中途检查（无锁快查 claim_token）。
+     * lease 被 recoverer/新 worker 接管后，旧 worker 的重叠执行窗口从"整片跑完"
+     * 缩到最多这么多账户；查询本身是主键点查，摊到每账户的成本可忽略。
+     * 不做成配置：这个值不需要按环境调，常量让 StatementProperties 保持稳定。
+     */
+    private static final int ACCOUNTS_PER_LEASE_CHECK = 100;
+
     private final StatementBillingRepository billingRepository;
     private final StatementGenerationService statementGenerationService;
+    private final StatementJobRepository jobRepository;
     private final StatementProperties properties;
 
     /**
@@ -51,7 +60,8 @@ public class StatementJobHandler {
      * <pre>
      * 1. 用 job.periodStart/periodEnd 转成 billing timezone 下的查询窗口
      * 2. 用 job.shardNo/shardCount 查询本 shard 负责的 account ids
-     * 3. 逐账户调用 StatementGenerationService.generate(...)
+     * 3. 逐账户调用 StatementGenerationService.generate(...)；
+     *    每 100 个账户无锁快查一次 claim_token，lease 已被接管就提前放弃剩余账户
      * 4. 汇总 generated/skipped/failed，交给 StatementJobDispatcher finalize
      * </pre>
      *
@@ -74,10 +84,26 @@ public class StatementJobHandler {
                 job.shardCount()
         );
 
+        int attempted = 0;
         int generated = 0;
         int skipped = 0;
         int failed = 0;
         for (UUID accountId : accountIds) {
+            // 中途 lease 检查：handler 可能跑几分钟，期间 lease 可能超时被 recoverer 收回重发。
+            // 旧 worker 继续跑不会出错（账户级幂等 + finalize token 校验兜底），但和新 worker
+            // 并发扫同一批账户是纯浪费，还会给账户 row lock 添堵。每 100 个账户花一次主键点查，
+            // 发现自己已不是 owner 就立即放弃剩余账户——finalize 反正会被 token 校验丢弃。
+            if (attempted > 0 && attempted % ACCOUNTS_PER_LEASE_CHECK == 0
+                    && !jobRepository.holdsCurrentLease(job.id(), job.claimToken())) {
+                log.warn(
+                        "statement_job_lease_lost_midway jobId={} attemptedAccounts={} remainingAccounts={}",
+                        job.id(),
+                        attempted,
+                        accountIds.size() - attempted
+                );
+                break;
+            }
+            attempted++;
             try {
                 // 阶段 2：每个账户单独生成 statement。
                 // StatementGenerationService 会自己开启 transaction boundary，并在内部锁 credit account + candidate rows。
@@ -126,8 +152,10 @@ public class StatementJobHandler {
         // 阶段 3：这里只返回统计，不直接改 statement_jobs。
         // DONE / PENDING retry / DEAD 的状态推进由 StatementJobDispatcher 在 finalize 短事务中完成，
         // 并会重新校验 claim token，防止过期 worker 覆盖新 owner。
+        // processed 用 attempted 而不是 accountIds.size()：中途放弃时统计只反映真正尝试过的账户
+        // （此时 finalize 也会因 token 不符被丢弃，但返回值本身应当诚实）。
         return new StatementJobExecutionResult(
-                accountIds.size(),
+                attempted,
                 generated,
                 skipped,
                 failed

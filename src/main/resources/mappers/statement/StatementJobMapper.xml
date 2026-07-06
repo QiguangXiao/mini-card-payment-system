@@ -151,4 +151,18 @@
         WHERE id = #{id}
     </update>
 
+    <select id="countCurrentLease" resultType="int">
+        <!--
+          无锁快查：handler 在账户循环中途确认自己还是 lease owner（status + claim_token 同时匹配）。
+          刻意不 FOR UPDATE——这是提前止损的信号读，不是状态推进；
+          最终防线仍是 finalize 的 findByIdForUpdate + token 校验。
+          handler 循环运行在事务外，每次调用是独立的 autocommit 快照，能看到 recoverer 的最新提交。
+        -->
+        SELECT COUNT(*)
+        FROM statement_jobs
+        WHERE id = #{id}
+          AND status = 'PROCESSING'
+          AND claim_token = #{claimToken}
+    </select>
+
 </mapper>

@@ -20,7 +20,7 @@
 | Billing cycle scheduler | `billingCycleTaskScheduler = 1` | 每天创建 statement jobs，不直接跑全部账户出账 |
 | Statement job scheduler | `statementJobTaskScheduler = 2` | dispatch/recover 调度线程；真正生成账单在 worker pool |
 | Outbox worker | `worker-pool-size=4`, `queue=100`, `batch-size=50` | Kafka publish 并发有限、有 queue 背压 |
-| DelayJob worker | `worker-pool-size=4`, `queue=100`, `max-per-run=100` | 授权过期、自动还款等 future business action 有独立 worker |
+| DelayJob worker | `worker-pool-size=4`, `queue=100`, `max-per-run=100`；`auto-repayment-worker-pool-size=4` 专用池 | 授权过期等纯 DB job 与调外部银行的自动扣款分池：银行 brownout 只钉专用池 |
 | Statement job worker | `worker-pool-size=4`, `queue=100`, `max-per-run=8`, `target-accounts-per-job=1000` | 出账按 durable jobs 分片，不把百万账户塞进一个事务；max-per-run 取 2x pool，避免排队 job 白烧 300s lease |
 | Kafka topics | 每个主要 topic `partitions=3`, local replica=1 | 本地演示 consumer concurrency；生产要提高 replicas 和 partitions |
 | Kafka listener concurrency | notification=2, risk=3, ledger=2（`messaging.consumers.*.concurrency`） | concurrency 不能超过 topic partitions 后继续有效扩展 |
@@ -114,6 +114,9 @@ delay-jobs:
     max-per-run: 100
     worker-pool-size: 4
     worker-queue-capacity: 100
+    # AUTO_REPAYMENT 专用池：外部银行调用与纯 DB job 分池隔离
+    auto-repayment-worker-pool-size: 4
+    auto-repayment-worker-queue-capacity: 100
 
 statement:
   batch:

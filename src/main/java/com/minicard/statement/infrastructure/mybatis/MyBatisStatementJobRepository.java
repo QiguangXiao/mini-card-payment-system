@@ -82,6 +82,18 @@ public class MyBatisStatementJobRepository implements StatementJobRepository {
         mapper.updateExecutionState(toRow(job));
     }
 
+    @Override
+    /**
+     * 无锁快查本 worker 是否仍持有 PROCESSING lease；handler 用它在账户循环中途提前止损。
+     */
+    public boolean holdsCurrentLease(UUID jobId, String claimToken) {
+        // token 为空说明调用方拿到的不是 claim 路径的合法快照，直接视为已失去 lease。
+        if (claimToken == null || claimToken.isBlank()) {
+            return false;
+        }
+        return mapper.countCurrentLease(jobId.toString(), claimToken) > 0;
+    }
+
     /**
      * 将 StatementJob domain object 转成数据库 row DTO。
      */

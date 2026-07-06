@@ -105,6 +105,10 @@ public class DelayJobWorker {
             // 业务成功后，worker 自己 finalize，避免 poller 提前标 DONE。
             // 如果 poller 领取后就标 DONE，handler 失败时 job 会消失，授权 hold 或自动扣款都可能漏执行。
             markDone(claimedJob);
+        } catch (DelayJobPermanentException exception) {
+            // 确定性失败（如银行 4xx 契约错误）：重试同一 job 不会变好，
+            // 直接进 DEAD，不按瞬态失败退避空转 maxAttempts 次。对齐 notification 的 permanent 路径。
+            markPermanentFailed(claimedJob, exception);
         } catch (RuntimeException exception) {
             // 第四步：业务异常转成 retry state，而不是让异常冒泡到线程池后丢失。
             // 这样 attempts、nextAttemptAt 和 lastError 都能持久化，后续 recover/retry 才有依据。
@@ -154,6 +158,30 @@ public class DelayJobWorker {
                     job.jobType(),
                     job.aggregateType(),
                     job.aggregateId()
+            );
+        });
+    }
+
+    /**
+     * 在独立短事务中记录永久失败，直接进 DEAD，不消耗 retry 预算。
+     *
+     * <p>事务归属：与 {@link #markFailed} 相同的 finalize 短事务 + lease 校验；
+     * 区别只在状态推进走 {@link DelayJob#markPermanentFailed}。</p>
+     */
+    private void markPermanentFailed(DelayJob claimedJob, DelayJobPermanentException exception) {
+        transactionOperations.executeWithoutResult(status -> {
+            DelayJob job = lockCurrentLease(claimedJob);
+            if (job == null) {
+                return;
+            }
+            job.markPermanentFailed(exception.getMessage(), Instant.now(clock));
+            delayJobRepository.updateExecutionState(job);
+            log.warn(
+                    "delay_job_permanent_failed jobId={} jobType={} attempts={}",
+                    job.id(),
+                    job.jobType(),
+                    job.attempts(),
+                    exception
             );
         });
     }

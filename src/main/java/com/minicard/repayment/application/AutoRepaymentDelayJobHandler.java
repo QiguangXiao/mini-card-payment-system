@@ -4,6 +4,7 @@ import java.util.UUID;
 
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobHandler;
+import com.minicard.delayjob.DelayJobPermanentException;
 import com.minicard.delayjob.DelayJobType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -48,7 +49,19 @@ public class AutoRepaymentDelayJobHandler implements DelayJobHandler {
             // 如果把任何 aggregateId 都当 statementId，错误 job 会在运行期变成难排查的数据错配。
             throw new IllegalArgumentException("AUTO_REPAYMENT job must target Statement aggregate");
         }
-        // UUID 解析在 handler 边界完成；格式错误说明 delay job contract 坏了，应进入失败路径。
-        autoRepaymentService.debitStatement(UUID.fromString(job.aggregateId()));
+        try {
+            // UUID 解析在 handler 边界完成；格式错误说明 delay job contract 坏了，应进入失败路径。
+            autoRepaymentService.debitStatement(UUID.fromString(job.aggregateId()));
+        } catch (BankDebitPermanentException exception) {
+            // 边界翻译：银行 4xx（契约/配置错误）是确定性失败，重试同一请求不会成功。
+            // BankDebitPermanentException 是 repayment 的 port 语义，DelayJobPermanentException
+            // 是框架语义；在 handler 这个"业务 -> 框架"边界翻译，port 契约保持框架无关。
+            // DelayJobWorker 收到后直接 markPermanentFailed 进 DEAD，不烧 maxAttempts 次退避。
+            throw new DelayJobPermanentException(
+                    "bank debit permanently rejected for statement " + job.aggregateId()
+                            + ": " + exception.getMessage(),
+                    exception
+            );
+        }
     }
 }
