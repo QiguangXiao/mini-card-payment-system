@@ -5,7 +5,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
-import com.minicard.notification.application.NotificationDeliveryProperties;
+import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.minicard.notification.domain.delivery.NotificationChannel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

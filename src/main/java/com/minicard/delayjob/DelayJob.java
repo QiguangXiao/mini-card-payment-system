@@ -20,6 +20,8 @@ import lombok.experimental.Accessors;
  * PROCESSING -> DONE        markDone()         DelayJobWorker finalize：handler 业务事务已成功（终态）
  * PROCESSING -> PENDING     markFailed()       worker 失败 finalize / recoverer lease 超时，backoff 后重试
  * PROCESSING -> DEAD        markFailed()       attempts >= maxAttempts（终态，等人工排查/重放）
+ * PROCESSING -> DEAD        markPermanentFailed() handler 抛 DelayJobPermanentException：
+ *                                              确定性失败不烧重试预算，一次就进终态
  * </pre>
  *
  * <p>划分逻辑：API/业务服务只在自己的事务里创建 PENDING 行——"计划一个未来动作"和业务变更
@@ -208,6 +210,23 @@ public final class DelayJob {
                 MAX_RETRY_DELAY_SECONDS
         );
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
+    }
+
+    /**
+     * 记录一次永久失败并直接进入 DEAD，不再消耗 retry/backoff 预算。
+     *
+     * <p>用于确定性失败（如银行 4xx 契约错误）：重试同一请求不会变好，
+     * 空转 maxAttempts 次只是延迟人工介入。与 {@link #markFailed} 的唯一区别是
+     * 不看 attempts 上限、不排下一次重试。</p>
+     */
+    public void markPermanentFailed(String error, Instant failedAt) {
+        attempts++;
+        updatedAt = Objects.requireNonNull(failedAt);
+        lastError = truncate(requireText(error, "error"));
+        // 离开 PROCESSING 释放 token；DEAD 是终态，不会再被 claim。
+        leaseToken = null;
+        status = DelayJobStatus.DEAD;
+        nextAttemptAt = failedAt;
     }
 
     /**

@@ -58,9 +58,9 @@
 
 | 类 | 职责 |
 |---|---|
-| `DelayJobPoller` | `@Scheduled` 周期 poll，提交 `delayJobWorkerExecutor` |
+| `DelayJobPoller` | `@Scheduled` 周期 poll，按 jobType 分池提交：`AUTO_REPAYMENT`（外部银行调用）→ `autoRepaymentDelayJobWorkerExecutor`，其余（纯 DB 小事务）→ `delayJobWorkerExecutor`——银行 brownout 只钉住专用池，不拖授权额度释放 |
 | `DelayJobClaimer` | 短事务 `FOR UPDATE SKIP LOCKED` 领 PENDING → PROCESSING lease |
-| `DelayJobWorker` | 按 `jobType` 经 `EnumMap<DelayJobType, handler>` 派发；成功 `markDone`/失败 `markFailed`；finalize 独立短事务 + lease-token 重校验 |
+| `DelayJobWorker` | 按 `jobType` 经 `EnumMap<DelayJobType, handler>` 派发；成功 `markDone`/失败 `markFailed`/确定性失败（`DelayJobPermanentException`，如银行 4xx）`markPermanentFailed` 直接 DEAD 不烧重试；finalize 独立短事务 + lease-token 重校验 |
 | `DelayJobRecoverer` | `@Scheduled` 扫 lease 超时，`markProcessingTimedOut` |
 
 - **一个 job = 一个聚合的一次未来动作**（point action at time T）。`DelayJob` 带 `jobType / aggregateType / aggregateId / scheduledAt`。
@@ -171,6 +171,7 @@ created_at / updated_at / last_error
 每 1s  StatementJobDispatcher.dispatch：短事务 FOR UPDATE SKIP LOCKED 领 PENDING
        → 改 PROCESSING（写 claimed_by/claimed_at/claim_until/claim_token）→ commit → 交 statementJobWorkerExecutor
 worker  StatementJobHandler.handle：CRC32(account)%shardCount 取本片账户，逐个 generate（各开小事务）
+        每 100 个账户无锁快查 claim_token；lease 已被 recover 接管则放弃剩余账户（止损，不出错）
 finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是自己 → 标 DONE / PENDING / DEAD
 每 10s  recoverStuckJobs：status=PROCESSING AND claim_until<=now 视为宕机，按一次失败放回
 ```
@@ -185,6 +186,11 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 `StatementJobHandler` 对单账户结果分类计数，不让一个坏账户拖垮整片：成功→`generated`；该账户本期无可出账交易（`rejected`）→`skipped`；可恢复错误（如 ledger 未就绪，`retryable`）/未预期异常→`failed`。只要 `failed>0` 整片回 `PENDING/DEAD` 重试，否则 `DONE`。计数落库作分片级 observability。
 
+**中途 lease 检查（收窄新旧 worker 重叠窗口）**：handler 每处理 100 个账户做一次无锁主键点查
+（`status='PROCESSING' AND claim_token=?`）；lease 已被 recoverer/新 worker 接管时立即放弃剩余账户。
+没有这一步也**不会出错**（账户级幂等 + finalize token 校验兜底），但旧 worker 会把整片白跑一遍、
+和新 worker 抢同一批账户的 row lock；有了它，重叠窗口从"整片跑完"缩到最多 100 个账户。
+
 ---
 
 ## 5. 平台执行资源：scheduler 池 ≠ worker 池
@@ -192,7 +198,7 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 | 包 / 类 | 实际含义 | 不应误解成 |
 | --- | --- | --- |
 | `infrastructure.scheduler.PollingSchedulerConfiguration` | 创建 `outboxTaskScheduler`(1) / `delayJobTaskScheduler`(2) / `billingCycleTaskScheduler`(1) / `statementJobTaskScheduler`(2) 等 Spring scheduler 线程池，**只跑 poll/claim/recover** | 各机制的业务 scheduler 逻辑 |
-| `infrastructure.async.WorkerExecutorConfiguration` | 创建 `outboxWorkerExecutor` / `delayJobWorkerExecutor` / `statementJobWorkerExecutor` 等 **有界** worker 池（core=max），**跑真正业务** | 所有异步流程的入口 |
+| `infrastructure.async.WorkerExecutorConfiguration` | 创建 `outboxWorkerExecutor` / `delayJobWorkerExecutor` / `autoRepaymentDelayJobWorkerExecutor` / `statementJobWorkerExecutor` 等 **有界** worker 池（core=max），**跑真正业务** | 所有异步流程的入口 |
 | `infrastructure.transaction.TransactionOperationsConfiguration` | 把 transaction manager 包成 `TransactionOperations`，给 worker 显式开短事务 | application service 的业务事务规则 |
 | `messaging/outbox`、`delayjob` | 可靠性状态机（表、lease、worker、recoverer） | 普通 Kafka helper / 普通 `@Scheduled` |
 
@@ -237,7 +243,9 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 1. **DEAD 全家族缺可观测与重放（最该补）**。三者达 maxAttempts 转 DEAD 后只是躺在表里，**无指标/告警/"DEAD→重新入队"运维入口**。授权过期没释放额度、自动扣款没扣、某分片没出账——目前只能人去查表。注意：消费侧已有 Kafka DLT（且配了 dead-letter-monitor group），但**生产/执行侧没有对等物**。
 2. **完成态行无保留策略**。`delay_jobs` 的 DONE、`statement_jobs` 的 DONE、`outbox_events` 的 PUBLISHED 都**永不清理**，表无界增长。`delay_jobs` 还有个微妙点：`uk(job_type,agg_type,agg_id)` 让一个聚合的 DONE 行**永久占用唯一键**（这本身是想要的 idempotency），所以清理时要保留 key 或迁冷表，不能裸删。
-3. **StatementJob 单账户失败连坐整片**。`failedAccountCount>0` 就把**整个 shard** 标失败回 PENDING 重领。账户级幂等让重跑安全但**浪费**（重扫整片，已出账走 skipped）；更糟的是一个**永久失败**的账户会把整片反复 cycle 到 DEAD，且 DEAD 在 shard 粒度**看不出哪个账户坏了**。更好做法：失败账户单独落表/单独重试，不连坐好账户。
+3. **StatementJob 单账户失败连坐整片（账户级重试隔离缺口）**。`failedAccountCount>0` 就把**整个 shard** 标失败回 PENDING 重领。账户级幂等让重跑安全且代价小（UNBILLED 过滤让重试自然收敛到失败账户），但重试**预算**记在 job 上：一个**永久失败**的账户每轮都烧掉一次 attempt，把整片 cycle 到 DEAD——同片里"晚一点就能成功"的账户（如等 ledger projection 补齐）被连坐，失去重试机会；且 DEAD 在 shard 粒度**看不出哪个账户坏了**（账户级明细只在日志里）。
+   - **主要触发源是 ledger 投影滞后**（statement 生成前的缺失检查抛 retryable）。正常滞后是秒级，`max-attempts: 10` 足够覆盖；真正"永远补不齐"只会来自 ledger 消息进了 DLT——低概率且可观测，**ledger DLT 告警是这个缺口的第一道观测线**。
+   - **方案已知但刻意不建**：失败账户单独落表（accountId/原因/attempt/next_retry_at）+ 独立退避重试循环，job 在所有账户终态后才 DONE/DEAD。不建的原因是成本收益：新表+迁移+新调度循环，对冲的却是"DLT 积压叠加账期收尾"的低概率场景——先靠 DLT 告警兜底，等真实发生率证明需要再上基建。
 4. **StatementJob 无退避**。失败分片立即回 PENDING，持久失败会**高频 spin** 直到 maxAttempts，而 delay/outbox 都有指数退避。统一上 backoff 更稳（约十行：加一列 `next_attempt_at`，claim 查询改 `status='PENDING' AND next_attempt_at<=now`）。
 
 > 顺带：polling 的秒级延迟、DB 当队列的吞吐上限，是**有意取舍**而非 gap（见 §9 Q1）。

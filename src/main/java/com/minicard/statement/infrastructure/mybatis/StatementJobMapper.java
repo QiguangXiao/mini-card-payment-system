@@ -36,4 +36,9 @@ public interface StatementJobMapper {
     StatementJobRow findByIdForUpdate(@Param("id") String id);
 
     int updateExecutionState(StatementJobRow row);
+
+    int countCurrentLease(
+            @Param("id") String id,
+            @Param("claimToken") String claimToken
+    );
 }

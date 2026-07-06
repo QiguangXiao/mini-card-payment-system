@@ -166,6 +166,24 @@ class StatementTest {
                 .hasMessageContaining("exceeds statement remaining amount");
     }
 
+    @Test
+    void snapshotAssignsOwnIdentityAndKeepsSourceFactIds() {
+        UUID statementId = UUID.randomUUID();
+        StatementLineSource source = transaction("ntx-snap", "800.00");
+
+        StatementLine line = StatementLine.snapshot(statementId, source, NOW);
+
+        // 快照行有自己的身份，不复用来源事实的 id；否则交易生命周期和账单快照生命周期会混在一起。
+        assertThat(line.id())
+                .isNotEqualTo(source.cardTransactionId())
+                .isNotEqualTo(source.ledgerEntryId());
+        assertThat(line.statementId()).isEqualTo(statementId);
+        assertThat(line.cardTransactionId()).isEqualTo(source.cardTransactionId());
+        // snapshot 工厂契约：新出账的 line 必须能追到 ledger entry；只有 restore 容忍历史数据的 null。
+        assertThat(line.ledgerEntryId()).contains(source.ledgerEntryId());
+        assertThat(line.createdAt()).isEqualTo(NOW);
+    }
+
     private StatementLineSource transaction(String networkTransactionId, String amount) {
         return transactionAt(networkTransactionId, amount, Instant.parse("2026-06-15T10:00:00Z"));
     }

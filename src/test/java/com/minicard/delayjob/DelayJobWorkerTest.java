@@ -62,6 +62,28 @@ class DelayJobWorkerTest {
     }
 
     @Test
+    // 测试目的：验证 DelayJobPermanentException 直接进 DEAD，不按瞬态失败退避空转 maxAttempts 次。
+    // variant：首次执行就是确定性失败（如银行 4xx 契约错误），attempts=1 即 DEAD。
+    void permanentFailureGoesStraightToDeadWithoutBurningRetries() {
+        DelayJobRepository repository = mock(DelayJobRepository.class);
+        DelayJobHandler handler = mock(DelayJobHandler.class);
+        DelayJob job = claimedJob();
+        when(handler.jobType()).thenReturn(DelayJobType.AUTHORIZATION_EXPIRY);
+        when(repository.findByIdForUpdate(job.id())).thenReturn(Optional.of(job));
+        org.mockito.Mockito.doThrow(new DelayJobPermanentException("bank rejected debit request status=400"))
+                .when(handler).handle(job);
+        DelayJobWorker worker = worker(repository, handler);
+
+        worker.handleClaimedJob(job);
+
+        // maxAttempts=3，但永久失败一次就 DEAD：确定性错误不烧重试预算。
+        assertThat(job.status()).isEqualTo(DelayJobStatus.DEAD);
+        assertThat(job.attempts()).isEqualTo(1);
+        assertThat(job.lastError()).contains("status=400");
+        verify(repository).updateExecutionState(job);
+    }
+
+    @Test
     // 测试目的：验证迟到 worker 不会覆盖新 lease owner 的处理结果。
     // variant：DB current row 已被重新 claim 成另一个 token，旧 worker 即使 handler 成功也不 update。
     void staleWorkerDoesNotOverwriteChangedLease() {
@@ -108,7 +130,7 @@ class DelayJobWorkerTest {
     }
 
     private DelayJobProperties properties() {
-        return new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100);
+        return new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100, 4, 100);
     }
 
     private TransactionOperations transactionOperations() {

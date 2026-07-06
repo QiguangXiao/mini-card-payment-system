@@ -3,6 +3,7 @@ package com.minicard.risk.infrastructure.external;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.minicard.risk.application.RiskProperties;
+import com.minicard.risk.infrastructure.gateway.ExternalRiskClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,6 +11,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 本地模拟第三方 risk API，让 Feign 调用链在本项目内可学习、可运行。
+ *
+ * <p>包约定：{@code infrastructure/external} 只放"假装是第三方"的模拟 server
+ * （对齐 notification 的 SimulatedNotificationProviderController）；
+ * 我方的出站 Feign client 和 adapter 在 {@code infrastructure/gateway}。</p>
  */
 // 这里虽然在同一个 Spring Boot 应用里，但仍走 HTTP/JSON/Feign 边界。
 // 如果直接 mock Java 方法，就学不到 timeout、序列化、circuit breaker 这些第三方集成问题。

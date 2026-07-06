@@ -77,6 +77,12 @@ spring:
             # 1s~2s 之间的"慢但成功"会被 CircuitBreaker 统计；超过 2s 的等待由 Feign 硬切断。
             connect-timeout: 300
             read-timeout: 2000
+          bank-debit:
+            # 银行扣款在 DelayJob worker、DB transaction 外调用（AutoRepaymentService 刻意不开事务）。
+            # timeout 钉住的是专用 auto-repayment worker 线程；超时按失败处理，
+            # DelayJob retry 复用同一 idempotencyKey，银行侧去重保证不会重复出金。
+            connect-timeout: 300
+            read-timeout: 2000
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -148,12 +154,19 @@ messaging:
   consumers:
     # group-id 表示同一个 bounded context 的一组实例共同消费。
     # 同一 topic 可以被 notification/risk/ledger 多个 group 独立消费，互不抢 offset。
+    # concurrency 是各 context listener container 的并发线程数（对应代码：KafkaConsumerConfiguration，
+    # 绑定类 KafkaConsumersProperties）。它和 worker pool size 一样是"处理并行度"，所以统一放 YAML。
+    # 有效上限是 topic partition 数（当前 3）：配得更大只会产生分不到 partition 的空闲线程。
     notification:
       group-id: mini-card-notification-v1
+      concurrency: 2
     risk-feature:
       group-id: mini-card-risk-feature-v1
+      # 对齐 source topic 的 3 个 partitions：授权事件量最大，风控画像投影吃满并行度。
+      concurrency: 3
     ledger:
       group-id: mini-card-ledger-v1
+      concurrency: 2
     dead-letter-monitor:
       group-id: mini-card-dead-letter-monitor-v1
 
@@ -209,8 +222,15 @@ delay-jobs:
     # 因为 handler 里可能有业务事务 + 外部调用（如 auto repayment 先走 bank debit）。
     processing-timeout-seconds: 60
     # 对应代码：WorkerExecutorConfiguration 的 delay-job 线程池；拒绝时 DelayJobWorker.markRejectedForRetry。
+    # 本池只跑"纯 DB 小事务"类 job（授权过期释放额度），不含外部调用。
     worker-pool-size: 4
     worker-queue-capacity: 100
+    # AUTO_REPAYMENT 专用池（对应代码：WorkerExecutorConfiguration.autoRepaymentDelayJobWorkerExecutor，
+    # DelayJobPoller 按 jobType 路由）。自动扣款调外部银行网关，最长等到 Feign read-timeout(2s)：
+    # 银行 brownout 时钉住的只是本池线程，授权过期在上面的池里照常执行——
+    # 舱壁隔离不只在 HTTP 层（circuit breaker），也在线程池层。
+    auto-repayment-worker-pool-size: 4
+    auto-repayment-worker-queue-capacity: 100
 
 notification:
   delivery:
@@ -285,7 +305,11 @@ statement:
     recovery-fixed-delay-ms: 10000
     # 对应代码：StatementJobDispatcher 单轮领取的 LIMIT。分片 job 每个都要处理最多 target-accounts-per-job
     # 个账户，比单条消息重得多，所以此值远小于 outbox/delay-jobs 的领取上限。
-    max-per-run: 20
+    # 此值不应远大于 worker-pool-size：claim 的瞬间 300s lease 就开始倒计时，
+    # 领 20 个但只有 4 个线程时，排在队尾的 job 可能还没开跑 lease 就过期，
+    # 被 recoverer 收回重发，原线程白跑一遍（幂等兜底不会出错，但纯属浪费）。
+    # 取 2x worker-pool-size：线程刚空出来就有下一个 job 可跑，又不会让排队时间吃掉 lease。
+    max-per-run: 8
     # 对应字段：statement_jobs.attempt_count；达到上限置 DEAD。
     max-attempts: 10
     # 对应字段：statement_jobs.claim_until = claim 时刻 + 本值。
@@ -340,9 +364,13 @@ statement:
 
 repayment:
   auto-debit:
-    # 对应代码：AutoDebitProperties -> SimulatedBankDebitGateway（BankDebitGateway 的本地实现）。
-    # 默认模拟银行扣款成功；改成 false 可演示 DelayJob retry/DEAD 的失败路径：
-    # AutoRepaymentService.debitStatement 收到失败后抛 AutoRepaymentFailedException，不会入账。
+    # 调用链：AutoRepaymentService -> BankDebitGateway port -> BankDebitGatewayAdapter(@CircuitBreaker)
+    #   -> BankDebitClient(Feign) -> HTTP -> SimulatedBankController（模拟银行，含幂等去重）。
+    # bank-base-url 指向模拟银行；接真实银行/行内扣款网关时只改这里，调用方式不变。
+    bank-base-url: http://localhost:8080
+    # 默认模拟银行扣款成功；改成 false 可演示"业务性拒绝"路径（200+FAILED，如余额不足）：
+    # AutoRepaymentService.debitStatement 收到失败后抛 AutoRepaymentFailedException，
+    # DelayJob 按退避重试——客户补足余额后重试就能成功，所以这类失败不进快速 DEAD。
     simulated-success: true
     failure-reason: simulated insufficient bank balance
 
@@ -410,6 +438,22 @@ resilience4j:
         # provider 4xx 是请求/配置永久错误，不代表 email provider brownout；不计入断路器失败率。
         ignore-exceptions:
           - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
+      # 银行扣款只配熔断，不配 R4j retry：DelayJob 已是带退避的 durable retry 层，
+      # 双层重试相乘会放大银行压力；bulkhead 也不需要——调用方跑在有界 worker pool 里。
+      # 对应代码：BankDebitGatewayAdapter 的 @CircuitBreaker(name="bankDebit")。
+      bankDebit:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        # slow-call 阈值小于 Feign read-timeout(2s)：1s~2s 的"慢但成功"计入熔断统计。
+        slow-call-duration-threshold: 1s
+        slow-call-rate-threshold: 100
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 银行 4xx 是契约/配置永久错误，不代表银行网关 brownout；不计入断路器失败率。
+        ignore-exceptions:
+          - com.minicard.repayment.application.BankDebitPermanentException
   retry:
     instances:
       # intra-attempt 快速重试：对 provider 抖动做几次内存级退避重试；跨重启的 durable 重试由投递状态机负责。

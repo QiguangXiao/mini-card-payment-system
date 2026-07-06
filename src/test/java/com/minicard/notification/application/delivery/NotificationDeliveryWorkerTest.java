@@ -1,4 +1,4 @@
-package com.minicard.notification.application;
+package com.minicard.notification.application.delivery;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;

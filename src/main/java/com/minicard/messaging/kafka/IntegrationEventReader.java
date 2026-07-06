@@ -46,7 +46,7 @@ public class IntegrationEventReader {
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {
             // value 是 Kafka message body。这里永远解析 body envelope，再由 listener 用 eventType dispatch。
-            // 如果 JSON 坏了，会抛 EventContractException，交给 KafkaMessagingConfiguration 配置的
+            // 如果 JSON 坏了，会抛 EventContractException，交给 KafkaConsumerConfiguration 配置的
             // DefaultErrorHandler：contract failure 不重试，直接发到对应 consumer 的 DLT。
             IntegrationEvent event = objectMapper.readValue(record.value(), IntegrationEvent.class);
             // 集中 validate transport contract，consumer 就能专注业务字段。

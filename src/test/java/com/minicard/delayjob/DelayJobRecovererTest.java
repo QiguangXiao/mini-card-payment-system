@@ -27,7 +27,7 @@ class DelayJobRecovererTest {
         when(repository.findStuckProcessingBatchForUpdate(NOW, 100)).thenReturn(List.of(job));
         DelayJobRecoverer recoverer = new DelayJobRecoverer(
                 repository,
-                new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100),
+                new DelayJobProperties(true, 1000, 5000, 100, 3, 60, 4, 100, 4, 100),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 

@@ -1276,7 +1276,9 @@ DelayJobPoller.pollDueJobs()
 -> DelayJobWorker.handleClaimedJob(job)
 -> AutoRepaymentDelayJobHandler.handle(job)
 -> AutoRepaymentService.debitStatement(statementId)
--> SimulatedBankDebitGateway.debit(request)
+-> BankDebitGatewayAdapter.debit(request)   # @CircuitBreaker(bankDebit)
+-> BankDebitClient (Feign, HTTP)
+-> SimulatedBankController (模拟银行, 按幂等键去重)
 -> RepaymentService.receive(command)
 ```
 

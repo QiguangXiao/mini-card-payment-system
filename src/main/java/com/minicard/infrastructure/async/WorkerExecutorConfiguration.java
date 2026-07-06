@@ -2,7 +2,7 @@ package com.minicard.infrastructure.async;
 
 import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.outbox.OutboxProperties;
-import com.minicard.notification.application.NotificationDeliveryProperties;
+import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.minicard.statement.application.StatementProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -48,7 +48,7 @@ public class WorkerExecutorConfiguration {
     }
 
     /**
-     * DelayJob business worker pool。
+     * DelayJob business worker pool（内部 DB 小事务类 job，如授权过期）。
      */
     // DelayJob 与 Outbox 使用不同 executor，避免一种机制的 backlog 占满另一种机制的线程。
     @Bean(name = "delayJobWorkerExecutor")
@@ -61,6 +61,26 @@ public class WorkerExecutorConfiguration {
         executor.setCorePoolSize(properties.workerPoolSize());
         executor.setMaxPoolSize(properties.workerPoolSize());
         executor.setQueueCapacity(properties.workerQueueCapacity());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
+
+    /**
+     * AUTO_REPAYMENT 专用 worker pool（外部银行调用类 job）。
+     */
+    // 同一机制（DelayJob）内再按副作用类型分池："不同机制不同 executor"的原则下沉到 job 类型：
+    // 自动扣款会同步等银行网关（最长到 Feign read-timeout），银行 brownout 时钉住的只是本池，
+    // 授权过期释放额度在 delayJobWorkerExecutor 里不受影响；27 号扣款日的批量爆发也只在本池排队。
+    @Bean(name = "autoRepaymentDelayJobWorkerExecutor")
+    public ThreadPoolTaskExecutor autoRepaymentDelayJobWorkerExecutor(
+            DelayJobProperties properties
+    ) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("auto-repay-worker-");
+        executor.setCorePoolSize(properties.autoRepaymentWorkerPoolSize());
+        executor.setMaxPoolSize(properties.autoRepaymentWorkerPoolSize());
+        executor.setQueueCapacity(properties.autoRepaymentWorkerQueueCapacity());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(10);
         return executor;

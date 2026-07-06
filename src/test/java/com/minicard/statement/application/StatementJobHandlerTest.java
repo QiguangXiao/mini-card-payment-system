@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import com.minicard.statement.domain.StatementJob;
 import com.minicard.statement.domain.StatementJobExecutionResult;
@@ -13,9 +14,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class StatementJobHandlerTest {
@@ -33,15 +38,18 @@ class StatementJobHandlerTest {
 
     private StatementBillingRepository billingRepository;
     private StatementGenerationService statementGenerationService;
+    private StatementJobRepository jobRepository;
     private StatementJobHandler handler;
 
     @BeforeEach
     void setUp() {
         billingRepository = mock(StatementBillingRepository.class);
         statementGenerationService = mock(StatementGenerationService.class);
+        jobRepository = mock(StatementJobRepository.class);
         handler = new StatementJobHandler(
                 billingRepository,
                 statementGenerationService,
+                jobRepository,
                 statementProperties()
         );
     }
@@ -69,6 +77,28 @@ class StatementJobHandlerTest {
         assertThat(result.generatedStatementCount()).isEqualTo(1);
         assertThat(result.skippedAccountCount()).isEqualTo(1);
         assertThat(result.failedAccountCount()).isEqualTo(1);
+    }
+
+    @Test
+    // 测试目的：验证中途 lease 检查——lease 被接管后，handler 放弃剩余账户而不是整片跑完。
+    // variant：150 个账户，第 100 个账户后的检查返回"已失去 lease"，只有前 100 个被尝试。
+    void abortsRemainingAccountsWhenLeaseIsLostMidway() {
+        StatementJob job = StatementJob.pending(PERIOD_START, PERIOD_END, DUE_DATE, 0, 4, NOW);
+        // handler 收到的是 claim 之后的快照：markProcessing 生成本轮 claim_token。
+        job.markProcessing("worker-1", NOW, 300);
+        List<UUID> accountIds = IntStream.range(0, 150)
+                .mapToObj(i -> UUID.randomUUID())
+                .toList();
+        when(billingRepository.findAccountIdsForJob(any(), any(), eq(0), eq(4)))
+                .thenReturn(accountIds);
+        // recoverer 已把 lease 交给新 worker：无锁快查告知旧 worker 它不再是 owner。
+        when(jobRepository.holdsCurrentLease(job.id(), job.claimToken())).thenReturn(false);
+
+        StatementJobExecutionResult result = handler.handle(job);
+
+        // 每 100 个账户检查一次：前 100 个已尝试，剩余 50 个被放弃。
+        verify(statementGenerationService, times(100)).generate(any());
+        assertThat(result.processedAccountCount()).isEqualTo(100);
     }
 
     private StatementProperties statementProperties() {

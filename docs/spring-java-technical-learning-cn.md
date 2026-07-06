@@ -42,7 +42,7 @@
 | scheduler | `PollingSchedulerConfiguration`、pollers | 打开 `@Scheduled` 并指定调度线程池 | 任务可能不运行，或共享默认 scheduler 互相拖住 |
 | worker executor | `WorkerExecutorConfiguration` | 后台业务和 poller 分线程池 | scheduler 线程直接跑长任务，任务堆积时不可控 |
 | MyBatis mapper | `AuthorizationMapper` + XML | SQL 显式、参数绑定、row mapping | SQL 和业务混杂，或出现 SQL injection/映射错误 |
-| Kafka listener factory | `KafkaMessagingConfiguration` | 每个 consumer group 有独立 retry/DLT/concurrency | 一个上下文失败影响其他上下文，重试策略混乱 |
+| Kafka listener factory | `KafkaConsumerConfiguration` | 每个 consumer group 有独立 retry/DLT/concurrency | 一个上下文失败影响其他上下文，重试策略混乱 |
 | Jackson JSON | `IntegrationEventReader` | 统一解析 envelope、校验 headers/payload | 每个 listener 重复解析且失败行为不一致 |
 | Caffeine + Redis | `StatementReadService` | L1 降本机热点，L2 跨实例共享 | Redis 故障或热点 miss 容易放大成 API/DB 压力 |
 | Feign + Resilience4j | `ExternalRiskGatewayAdapter` | 外部 HTTP 调用声明式代理和断路器 | 慢外部服务拖住授权请求和线程 |
@@ -73,7 +73,7 @@
 位置：
 
 - `MiniCardPaymentSystemApplication`
-- `risk.infrastructure.external.ExternalRiskClient`
+- `risk.infrastructure.gateway.ExternalRiskClient`
 
 `@FeignClient` 本身只是接口上的声明，真正扫描并生成代理的是 `@EnableFeignClients`。
 
@@ -909,6 +909,29 @@ external risk unavailable
 - 故障恢复前持续打外部服务。
 
 注意：`@CircuitBreaker` 也依赖 Spring AOP proxy，所以 `spring-boot-starter-aop` 是运行基础。
+
+### 10.3 注解式 vs 编程式：R4j 的双轨约定
+
+本项目刻意保留两种 Resilience4j 包装方式（类比 MyBatis vs JdbcTemplate 的对照示例），
+但选择不是随意的，遵循一条显式规则：
+
+| 场景特征 | 用哪种 | 项目实例 |
+|---|---|---|
+| 策略静态（实例名编译期固定）、单方法、fallback 要返回域内值 | **注解式**（`@CircuitBreaker`/`@Bulkhead` + fallbackMethod） | `ExternalRiskGatewayAdapter`：CB + Bulkhead，fail-closed 降级成 decline |
+| 实例名运行时决定（如按渠道选熔断器）、需要显式控制装饰顺序 | **编程式**（Registry + `decorateSupplier`，helper 收口） | `ResilientCallHelper`：Retry(CB(call))，按 notificationPush/Email 选实例 |
+| 策略静态、单方法、已有 durable retry 层 | **注解式**，且只挂 CB | `BankDebitGatewayAdapter`：仅 CB；fallback 按异常类型分派（permanent 重抛 / 瞬态转 failed 结果） |
+
+三种组合的差异是业务驱动的，不只是风格：
+
+- **risk**：授权同步热路径——不能 retry（延迟预算）、必须 bulkhead（防 brownout 钉死 Hikari）。
+- **notification**：后台 worker——DB 层已有 durable retry 所以进程内 retry 便宜、worker pool 有界所以不需要 bulkhead。
+- **bank debit**：后台资金操作——DelayJob 已是带退避的 durable retry 层，叠 R4j retry 会相乘且每次尝试都是资金请求；
+  跑在专用 auto-repay worker 池里所以不需要 bulkhead；只留 CB 防银行 brownout 钉线程。
+
+注解式的已知代价（也是编程式存在的理由）：依赖 AOP 代理（自调用绕过防护）、装饰顺序
+隐式、fallback 靠方法签名反射匹配。**不为三个调用点抽统一 resilience 框架**：策略组合
+几乎无交集，硬抽只会得到一堆布尔参数（参见 `ResilientCallHelper` 注释里"不要长成门面"
+的警告）。
 
 ## 11. Java 语言与标准库习惯
 
@@ -2243,7 +2266,7 @@ covered Java files: 136 / 226 = 60.2%
 3. 读 `AuthorizationService`，重点看 constructor injection、`@Transactional`、`Clock`、`Currency`。
 4. 读 `AuthorizationMapper` 和 XML，理解 MyBatis proxy、`@Param`、constructor mapping、`#{}`。
 5. 读 `WorkerExecutorConfiguration`、`PollingSchedulerConfiguration`、`DelayJobPoller`，理解 scheduler 和 worker pool 分离。
-6. 读 `KafkaMessagingConfiguration`、`KafkaOutboxMessagePublisher`、`IntegrationEventReader`，理解 Kafka container、DLT、ack、JSON contract。
+6. 读 `KafkaTopicsConfiguration`、`KafkaConsumerConfiguration`、`KafkaOutboxMessagePublisher`、`IntegrationEventReader`，理解 Kafka container、DLT、ack、JSON contract。
 7. 读 `StatementReadService`、`StatementReadCacheProperties` 和 `docs/caching-and-rate-limiting-cn.md`，理解第三方 cache、TTL jitter、single-flight 和 transaction hook；再读 `RedisRiskVelocityCounter` 理解 Redis velocity 计数。
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
 9. 读 `RequestNotificationService`、`RecordLedgerEntryService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。

@@ -75,11 +75,17 @@ public final class StatementLine {
     ) {
         // line id 是账单快照行自己的身份；cardTransactionId/ledgerEntryId 是来源事实的身份。
         // 如果复用来源 id，就会把“交易生命周期”和“账单快照生命周期”混在一起。
+        // 两个工厂的宽严差异：snapshot（新出账）必须带 ledger 链路，restore（DB 还原）
+        // 容忍历史数据的 null。StatementLineSource 构造器已经校验过非空，这里再显式声明一次，
+        // 是把"新 line 必须有 ledger entry"固定在工厂契约上——将来即使 source 放宽，本工厂也不放宽。
         return restore(
                 UUID.randomUUID(),
                 statementId,
                 source.cardTransactionId(),
-                source.ledgerEntryId(),
+                Objects.requireNonNull(
+                        source.ledgerEntryId(),
+                        "new statement line requires a ledger entry id"
+                ),
                 source.networkTransactionId(),
                 source.authorizationId(),
                 source.cardId(),
