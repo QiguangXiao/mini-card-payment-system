@@ -26,18 +26,29 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * 生产系统的真实答案是<strong>认证后的调用方身份</strong>（client id / user id，从 token 来，
  * 不碰 body）；本项目没有认证层，IP 是诚实的替代并保留这条注释作为面试论述。
  * 逐卡的速率控制已由 risk 模块的 velocity 滑动窗口在业务层承担。</p>
+ *
+ * <h3>X-Forwarded-For 的信任边界（security review 修正点）</h3>
+ * <p>默认<strong>不信任</strong> XFF、只用 remoteAddr：该 header 客户端可伪造，最左段恰恰是
+ * 攻击者可控的一段——直连场景每个请求伪造一个不同首段，等于每个请求一个新桶，限流归零。
+ * 部署在自家 LB 后面时打开 {@code api.rate-limit.trust-forwarded-for}；这不是可选优化而是
+ * 按部署形态二选一：LB 后面不开的话所有流量共享 LB 的 IP，限流器退化成全局限流。
+ * 更正统的生产做法是配 {@code server.tomcat.remoteip.*}（RemoteIpValve，按 trusted proxies
+ * 解析后 getRemoteAddr() 直接返回真实客户端 IP），应用代码永远只读 remoteAddr。</p>
  */
 @Slf4j
 public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
 
     private final RedisTokenBucketRateLimiter rateLimiter;
+    private final RateLimitProperties properties;
     private final MeterRegistry meterRegistry;
 
     public AuthorizationRateLimitInterceptor(
             RedisTokenBucketRateLimiter rateLimiter,
+            RateLimitProperties properties,
             MeterRegistry meterRegistry
     ) {
         this.rateLimiter = rateLimiter;
+        this.properties = properties;
         this.meterRegistry = meterRegistry;
     }
 
@@ -72,13 +83,16 @@ public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
     }
 
     /**
-     * 解析调用方 key：优先 X-Forwarded-For 的第一跳，否则用直连地址。
+     * 解析调用方 key：默认 remoteAddr；仅在显式信任反向代理时才读 X-Forwarded-For 首跳。
      *
-     * <p>X-Forwarded-For 可能是"client, proxy1, proxy2"链，第一个才是原始客户端。
-     * 信任边界提醒：该 header 由外部可伪造，只有当入口确定经过自家 LB（会覆盖/追加该 header）
-     * 时才可信；直接暴露公网时应只用 remoteAddr。</p>
+     * <p>X-Forwarded-For 是"client, proxy1, proxy2"链，第一段才是原始客户端——
+     * 但也正因为第一段离服务端最远，它完全由请求方书写。注释不是防御，默认行为才是：
+     * trust-forwarded-for 默认 false，未显式配置时伪造的 header 直接被忽略。</p>
      */
     private String resolveClientKey(HttpServletRequest request) {
+        if (!properties.trustForwardedFor()) {
+            return request.getRemoteAddr();
+        }
         String forwardedFor = request.getHeader("X-Forwarded-For");
         if (forwardedFor != null && !forwardedFor.isBlank()) {
             return forwardedFor.split(",")[0].trim();

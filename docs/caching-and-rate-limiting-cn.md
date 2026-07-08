@@ -299,13 +299,18 @@ return count
 | **Token Bucket** | 匀速发令牌，桶有容量 | **允许突发**(burst 到容量) | 不直接给"窗口内次数" |
 | **Leaky Bucket** | 请求入桶匀速流出 | 输出绝对平滑 | 不允许突发、可能排队 |
 
-> 本项目选 **sliding window log**：风控要的是"过去 N 秒**精确发生几次**"这个**信号**喂给决策，不是边缘 reject 的硬阀门；token bucket 给的是"准不准过"，语义不匹配。内存不会爆：`ZREMRANGEBYSCORE` 裁窗口外 + `EXPIRE` 清空闲 key，单卡 ZSET 被窗口内尝试数限制。
+> 本项目**两种都用了，按语义分层**（这是 interview 的核心对比点）：
+>
+> - **风控 velocity 选 sliding window log**（`RedisRiskVelocityCounter`，ZSET）：风控要的是"过去 N 秒**精确发生几次**"这个**信号**喂给决策，不是边缘 reject 的硬阀门。内存不会爆：`ZREMRANGEBYSCORE` 裁窗口外 + `EXPIRE` 清空闲 key，单卡 ZSET 被窗口内尝试数限制。
+> - **API 入口保护选 token bucket**（`RedisTokenBucketRateLimiter`，HASH `{tokens, ts}` + lazy refill Lua）：API 保护要的恰恰是"准不准过"这个硬阀门，capacity 表达允许的突发、refill 速率表达允许的持续吞吐，状态 O(1)、key 基数大（每个调用方一个桶）也不怕。挂在 `AuthorizationRateLimitInterceptor` 上按调用方 IP 限 `POST /api/authorizations`，超限 `429 + Retry-After`。
+>
+> 同一个"限流"，风控层给 decline（业务语义），API 层给 429（协议语义）——维度、算法、出口三个都不同。
 
 ### 4.2 在哪一层限流
 
 - **边缘/网关**（API Gateway throttling、WAF rate-based rule、Nginx/Envoy）：粗粒度、按 IP/API key，请求进应用前挡掉。
-- **应用内分布式**（按每卡/每用户，跨实例共享计数）→ Redis（本项目）。
-- **应用内单机**（Resilience4j `RateLimiter`）：per-instance，多副本下不准。
+- **应用内分布式**（跨实例共享计数）→ Redis（本项目两处都是：velocity 按卡、API token bucket 按调用方 IP，桶在 Redis 里所以多实例共享同一个调用方的额度）。
+- **应用内单机**（Resilience4j `RateLimiter`）：per-instance，多副本下对小额 per-key 配额不准；适合的场景是**出站**客户端限流（provider 配额可按实例数摊分）。
 
 ### 4.3 fail-open：Redis 挂了怎么办
 
