@@ -402,6 +402,20 @@ risk:
     failure-rate-percent: 0
     high-risk-score-threshold: 80
 
+# API 入口限流（系统保护层）。与上面 risk.local 的 velocity 业务风控限流分属两层：
+# 这里按调用方(客户端 IP)维度保护 POST /api/authorizations 热路径，超限返回 429 + Retry-After；
+# velocity 按卡维度识别异常用卡行为，超限走风控 decline。维度、出口、语义都不同。
+# 对应代码：RateLimitConfiguration -> AuthorizationRateLimitInterceptor -> RedisTokenBucketRateLimiter。
+api:
+  rate-limit:
+    # kill switch：false 时整个限流装配（含 interceptor）都不注册，切换需要重启。
+    enabled: true
+    # 令牌桶容量 = 允许的瞬时突发量。冷启动/闲置后重建的桶从满桶开始，第一波允许打满 20 个。
+    capacity: 20
+    # 每秒补充令牌数 = 允许的持续速率。持续洪峰会被压到 10 req/s，多余请求收到 429。
+    # 注意这是 per-instance 视角之外的**全局**值：桶在 Redis 里，多实例共享同一个调用方的桶。
+    refill-per-second: 10
+
 resilience4j:
   circuitbreaker:
     instances:

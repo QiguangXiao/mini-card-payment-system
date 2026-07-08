@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 
 import com.minicard.authorization.application.IdempotencyConflictException;
+import com.minicard.infrastructure.web.ratelimit.RateLimitExceededException;
 import com.minicard.repayment.application.RepaymentConflictException;
 import com.minicard.repayment.application.RepaymentRejectedException;
 import com.minicard.statement.application.StatementGenerationException;
@@ -11,6 +12,7 @@ import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -82,6 +84,21 @@ public class GlobalExceptionHandler {
             RepaymentRejectedException exception
     ) {
         return error(HttpStatus.CONFLICT, "REPAYMENT_REJECTED", exception.getMessage());
+    }
+
+    /**
+     * 入口限流超限返回 429 + Retry-After。
+     */
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(
+            RateLimitExceededException exception
+    ) {
+        // 429 与 409 的语义区分：409 是"这个请求和已有状态冲突"（重试也不会成功），
+        // 429 是"来得太快"（等待后重试会成功）。Retry-After 用整数秒，告诉客户端最短等待时间，
+        // 行为良好的客户端/SDK 会据此退避，而不是立刻重试放大洪峰。
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfterSeconds()))
+                .body(new ErrorResponse("RATE_LIMIT_EXCEEDED", exception.getMessage(), Instant.now()));
     }
 
     @ExceptionHandler({

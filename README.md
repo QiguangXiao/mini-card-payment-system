@@ -162,6 +162,16 @@ Get an authorization:
 GET /api/authorizations/{id}
 ```
 
+`POST /api/authorizations` is additionally protected by an API-level rate
+limiter: a Redis Lua token bucket keyed by client IP (first `X-Forwarded-For`
+hop, falling back to the remote address), registered as a Spring MVC
+`HandlerInterceptor` on the authorization hot path only. Exceeding the
+configured burst capacity or sustained rate returns `429 Too Many Requests`
+with a `Retry-After` header. This system-protection limiter is a different
+layer from the per-card risk velocity sliding window, which declines with a
+risk reason instead of 429. The limiter fails open when Redis is unavailable
+and is configured under `api.rate-limit` in `application.yml`.
+
 Authorization requests require an `Idempotency-Key`. Repeating the same request
 with the same key returns the original result. Reusing the key with different
 request data returns `409 Conflict`. A MySQL unique constraint protects this
