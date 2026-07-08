@@ -11,7 +11,7 @@ package com.minicard.notification.domain.delivery;
  * 当前项目没有 User 域和模板引擎，所以不再提前拆 resolver/renderer/dispatch/receipt 这些端口。</p>
  *
  * <p>真实 provider 的 connect/read timeout 应在 HTTP client 或 SDK 内配置；本接口外层只保留
- * Retry + CircuitBreaker。不要为了超时重新引入 TimeLimiter，否则又需要额外线程池和 async 包装，
+ * Retry + RateLimiter + CircuitBreaker。不要为了超时重新引入 TimeLimiter，否则又需要额外线程池和 async 包装，
  * 会把这条同步 worker 链路重新复杂化。</p>
  */
 public interface NotificationDeliverySender {

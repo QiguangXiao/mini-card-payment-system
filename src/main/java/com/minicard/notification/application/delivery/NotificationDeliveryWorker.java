@@ -36,7 +36,7 @@ import org.springframework.transaction.support.TransactionOperations;
  * 前置: claimer 短事务把 PENDING 改成 PROCESSING + 新 leaseToken（本类拿到的是快照）
  * 1. 按 channel 从注册表选择 NotificationDeliverySender（启动期已 fail fast 校验完整性）
  * 2. [事务外] sender.send(delivery)：sender 内部组装地址/文案，并调用 provider
- *    （Retry + CircuitBreaker；真实 HTTP timeout 放在 HTTP client/SDK）
+ *    （Retry + RateLimiter + CircuitBreaker；真实 HTTP timeout 放在 HTTP client/SDK）
  * 3. 成功: finalize 短事务
  *    3.1 SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
  *        lease 已变则 skip（迟到回执不能覆盖新 owner 的结果）

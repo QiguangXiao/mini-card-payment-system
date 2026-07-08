@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 /**
  * EMAIL 渠道的 delivery sender。
  *
- * <p>关键词：邮件投递, provider sender, retry circuit breaker, email delivery,
+ * <p>关键词：邮件投递, provider sender, retry rate limiter circuit breaker, email delivery,
  * SendGrid SES, メール配信(メールはいしん)。</p>
  *
  * <p>当前没有 User 域，所以 email 地址由 recipientKey 合成；真实系统会在本类内替换为
@@ -54,10 +54,11 @@ public class EmailNotificationDeliverySender implements NotificationDeliverySend
                         body,
                         delivery.idempotencyKey()
                 );
-        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker。
+        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + RateLimiter + CircuitBreaker。
+        // RateLimiter 是出站 provider quota 保护；它不判断业务状态，也不替代 delivery 的 durable retry。
         // 硬超时由 spring.cloud.openfeign.client.config.notification-provider 控制，不放进 R4j TimeLimiter。
         // 注意：下面的 lambda 在这里只是被创建（捕获 request），不执行；真正的 HTTP 调用发生在
-        // helper 内部 decorated.get()，可能 0 次（断路打开/4xx）到 3 次（重试）。request 先在
+        // helper 内部 decorated.get()，可能 0 次（限流/断路打开/4xx）到 3 次（重试）。request 先在
         // lambda 外构造好，正是为了让所有重试共用同一份内容和同一个 idempotencyKey。
         // 执行时序的逐步展开见 ResilientCallHelper.call 的 javadoc。
         return resilientCallHelper.call(

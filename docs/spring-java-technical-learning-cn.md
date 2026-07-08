@@ -918,13 +918,14 @@ external risk unavailable
 | 场景特征 | 用哪种 | 项目实例 |
 |---|---|---|
 | 策略静态（实例名编译期固定）、单方法、fallback 要返回域内值 | **注解式**（`@CircuitBreaker`/`@Bulkhead` + fallbackMethod） | `ExternalRiskGatewayAdapter`：CB + Bulkhead，fail-closed 降级成 decline |
-| 实例名运行时决定（如按渠道选熔断器）、需要显式控制装饰顺序 | **编程式**（Registry + `decorateSupplier`，helper 收口） | `ResilientCallHelper`：Retry(CB(call))，按 notificationPush/Email 选实例 |
+| 实例名运行时决定（如按渠道选限流器/熔断器）、需要显式控制装饰顺序 | **编程式**（Registry + `decorateSupplier`，helper 收口） | `ResilientCallHelper`：Retry(CB(RateLimiter(call)))，按 notificationPush/Email 选实例 |
 | 策略静态、单方法、已有 durable retry 层 | **注解式**，且只挂 CB | `BankDebitGatewayAdapter`：仅 CB；fallback 按异常类型分派（permanent 重抛 / 瞬态转 failed 结果） |
 
 三种组合的差异是业务驱动的，不只是风格：
 
 - **risk**：授权同步热路径——不能 retry（延迟预算）、必须 bulkhead（防 brownout 钉死 Hikari）。
-- **notification**：后台 worker——DB 层已有 durable retry 所以进程内 retry 便宜、worker pool 有界所以不需要 bulkhead。
+- **notification**：后台 worker——DB 层已有 durable retry 所以进程内 retry 便宜；出站 RateLimiter 保护 provider quota；
+  worker pool 有界所以不需要 bulkhead。
 - **bank debit**：后台资金操作——DelayJob 已是带退避的 durable retry 层，叠 R4j retry 会相乘且每次尝试都是资金请求；
   跑在专用 auto-repay worker 池里所以不需要 bulkhead；只留 CB 防银行 brownout 钉线程。
 

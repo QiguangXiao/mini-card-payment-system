@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 /**
  * APP_PUSH 渠道的 delivery sender。
  *
- * <p>关键词：App 推送, provider sender, retry circuit breaker, push delivery,
+ * <p>关键词：App 推送, provider sender, retry rate limiter circuit breaker, push delivery,
  * APNs FCM, プッシュ通知(プッシュつうち)。</p>
  *
  * <p>当前没有设备 token 表，所以 push token 由 recipientKey 合成；真实系统会在本类内替换为
@@ -54,9 +54,10 @@ public class AppPushNotificationDeliverySender implements NotificationDeliverySe
                         body,
                         delivery.idempotencyKey()
                 );
-        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + CircuitBreaker；push/email 的 breaker name 分开。
+        // 阶段 3：通过 Feign 走真实 HTTP/JSON 边界，并套 Retry + RateLimiter + CircuitBreaker；
+        // push/email 的 limiter 和 breaker 都按渠道分开，避免一个 provider 的配额/故障拖累另一个。
         // lambda 在这里只被创建、不执行；真正的 HTTP 调用发生在 helper 内部 decorated.get()，
-        // 可能 0 次（断路打开/4xx）到 3 次（重试），重试共用同一份 request 和 idempotencyKey。
+        // 可能 0 次（限流/断路打开/4xx）到 3 次（重试），重试共用同一份 request 和 idempotencyKey。
         // 执行时序的逐步展开见 ResilientCallHelper.call 的 javadoc。
         return resilientCallHelper.call(
                 "notificationPush",

@@ -32,7 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>它保留三件教学机制：
  * 1) 按 provider + idempotencyKey 去重，演示 at-least-once delivery + 下游幂等 = effectively-once；
- * 2) 注入失败率，驱动 intra-attempt Retry/CircuitBreaker 和 durable attempts/backoff/DEAD；
+ * 2) 注入失败率，驱动 intra-attempt Retry/RateLimiter/CircuitBreaker 和 durable attempts/backoff/DEAD；
  * 3) 注入延迟，让 Feign read timeout、slow-call CircuitBreaker 和 processing lease 的边界可观察。</p>
  */
 @RestController

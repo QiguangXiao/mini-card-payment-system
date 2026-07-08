@@ -50,7 +50,7 @@ public class NotificationProviderFeignConfiguration {
                         "notification provider rejected request status=" + status + " method=" + methodKey);
             }
             // 其他情况交给 Feign 默认 decoder：5xx 会变成 FeignException，连接/超时类异常也由 Feign/HTTP client 抛出。
-            // 这些异常仍可被 ResilientCallHelper 的 Retry + CircuitBreaker 当作 transient failure 处理。
+            // 这些异常仍可被 ResilientCallHelper 的 Retry + RateLimiter + CircuitBreaker 当作 transient failure 处理。
             return defaultDecoder.decode(methodKey, response);
         }
     }

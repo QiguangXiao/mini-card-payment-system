@@ -89,6 +89,13 @@ spring:
       port: ${REDIS_PORT:6379}
       timeout: 1s
 
+logging:
+  pattern:
+    # requestId 来自 HttpRequestLoggingFilter 写入的 MDC(ThreadLocal-backed diagnostic context)。
+    # 同步 HTTP 请求内的 controller/service/repository 日志会带值；scheduler/Kafka/worker 这类
+    # 非 HTTP 线程为空，这是边界而不是 bug。跨 durable async 要靠 event/job metadata，不靠 MDC。
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] requestId=%X{requestId} %logger{36} - %msg%n"
+
 management:
   endpoints:
     web:
@@ -443,8 +450,12 @@ resilience4j:
         slow-call-rate-threshold: 100
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 3
+        # 本地 RateLimiter 拒绝是我方 client-side throttling，不代表 push provider brownout。
+        # 因为装饰顺序是 CircuitBreaker(RateLimiter(providerCall))，这里必须 ignore，
+        # 否则限流拒绝会污染 provider 健康统计。
         # provider 4xx 是请求/配置永久错误，不代表 push provider brownout；不计入断路器失败率。
         ignore-exceptions:
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
       notificationEmail:
         sliding-window-type: COUNT_BASED
@@ -455,8 +466,11 @@ resilience4j:
         slow-call-rate-threshold: 100
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 3
+        # 本地 RateLimiter 拒绝是我方 client-side throttling，不代表 email provider brownout。
+        # 因为装饰顺序是 CircuitBreaker(RateLimiter(providerCall))，这里必须 ignore。
         # provider 4xx 是请求/配置永久错误，不代表 email provider brownout；不计入断路器失败率。
         ignore-exceptions:
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
       # 银行扣款只配熔断，不配 R4j retry：DelayJob 已是带退避的 durable retry 层，
       # 双层重试相乘会放大银行压力；bulkhead 也不需要——调用方跑在有界 worker pool 里。
@@ -484,6 +498,8 @@ resilience4j:
         exponential-backoff-multiplier: 2
         # 断路器已经 OPEN 时，CallNotPermittedException 表示"本轮不要再打 provider"；
         # 如果 retry 继续重试，只会快速失败 3 次并制造噪声，不能提高成功率。
+        # RateLimiter 满时，RequestNotPermitted 是我方主动 client-side throttling，不是 provider 抖动；
+        # 继续在同一轮 R4j retry 里立刻重试只会继续抢不到许可，应交给 durable retry/backoff。
         # NotificationDeliveryPermanentException 来自 Feign ErrorDecoder 对 4xx 的分类：
         # 这类请求契约/认证/配置错误不靠重试恢复，应交给 worker 直接 DEAD。
         # 为什么写在 yml 而不是 RetryConfigCustomizer 代码里：resilience4j-spring-boot 的主流做法是
@@ -492,8 +508,25 @@ resilience4j:
         # 若整行被误删则退化为"4xx 也白白快重试 3 次"——最终仍会 DEAD（helper 对该异常原样上抛，
         # NotificationDeliveryWorker.markPermanentFailed 不依赖重试层），只是多了重试噪声。
         ignore-exceptions:
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
           - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
+  ratelimiter:
+    instances:
+      # notification provider 的 client-side throttling：限制"本 pod"打外部 provider 的速率。
+      # 这和 POST /api/authorizations 的 Redis Lua 入站限流不同：入站限流要跨实例共享状态；
+      # 出站 provider quota 通常可以按实例数摊分，放本地内存能少一次 Redis 往返，也避免 Redis 故障
+      # 影响后台通知发送。真实生产应按 provider 给的全局 quota / pod 数 / 安全余量配置。
+      notificationPush:
+        limit-for-period: 20
+        limit-refresh-period: 1s
+        # 0 = 抢不到许可立刻 fail-fast，不占住 notificationDeliveryWorkerExecutor 等令牌；
+        # worker 会把本轮记为 transient failure 并按 notification_deliveries.next_attempt_at 退避。
+        timeout-duration: 0
+      notificationEmail:
+        limit-for-period: 20
+        limit-refresh-period: 1s
+        timeout-duration: 0
   bulkhead:
     instances:
       externalRisk:
