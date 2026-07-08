@@ -49,7 +49,9 @@ class RateLimitedAuthorizationApiTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new AuthorizationController(authorizationService))
                 .addInterceptors(new AuthorizationRateLimitInterceptor(
-                        rateLimiter, new SimpleMeterRegistry()))
+                        rateLimiter,
+                        new RateLimitProperties(true, 20, 10, false),
+                        new SimpleMeterRegistry()))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }

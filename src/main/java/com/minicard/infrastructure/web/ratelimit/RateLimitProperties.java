@@ -21,7 +21,13 @@ public record RateLimitProperties(
         /** 令牌桶容量 = 允许的瞬时突发请求数。 */
         int capacity,
         /** 每秒补充令牌数 = 允许的长期持续速率。 */
-        double refillPerSecond
+        double refillPerSecond,
+        /**
+         * 是否信任 X-Forwarded-For 作为限流维度。默认 false（安全默认值）：
+         * 该 header 客户端可伪造，直连场景下攻击者每个请求换一个首段就等于每个请求一个新桶，
+         * per-IP 限流被完全绕过。只有部署在自家 LB/反向代理后面、且该代理会重写此 header 时才打开。
+         */
+        boolean trustForwardedFor
 ) {
 
     // record compact constructor 在绑定时 fail fast：容量或速率配成 0/负数时应用直接启动失败，

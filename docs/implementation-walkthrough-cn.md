@@ -298,6 +298,19 @@ curl -X POST http://localhost:8080/api/authorizations \
   }'
 ```
 
+### 3.0 进入 Controller 之前：web 基础设施链
+
+请求到达 `AuthorizationController` 前先经过两层 web 基础设施：
+
+1. `HttpRequestLoggingFilter`（Servlet Filter）：生成 request id、记录
+   `request_started`/`request_completed`。它在最外层，所以**包括被限流拒绝的请求**也有日志。
+2. `AuthorizationRateLimitInterceptor`（Spring MVC HandlerInterceptor，只挂
+   `/api/authorizations`）：按调用方 IP 查 Redis 令牌桶，超限抛
+   `RateLimitExceededException`，由 `GlobalExceptionHandler` 统一映射成
+   `429 Too Many Requests + Retry-After`，请求不会进入 controller。
+
+放行后才进入下面的 Controller 阶段。
+
 ### 3.1 Controller 阶段
 
 入口：

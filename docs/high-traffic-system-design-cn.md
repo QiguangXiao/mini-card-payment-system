@@ -1000,9 +1000,23 @@ SELECT ... FROM credit_accounts WHERE id = ? FOR UPDATE
 | IP/network | 防边缘恶意流量 |
 | endpoint | 区分 write API 和 GET API |
 
-当前项目还没有实现 API 层 rate limit。interview 可以这样说：
+当前项目已实现其中两个维度，并刻意让它们分属两层：
 
-> 当前学习项目的 correctness 不依赖限流，但生产里我会在 gateway 或应用层加多维限流。限流是保护系统，不是替代 `idempotency`、`row lock` 或业务状态机。
+- **IP/network 维度（系统保护）**：`AuthorizationRateLimitInterceptor` + `RedisTokenBucketRateLimiter`，
+  Redis Lua 令牌桶按调用方 IP 限 `POST /api/authorizations`，超限返回 `429 + Retry-After`。
+  入口链路：请求先进 `HttpRequestLoggingFilter`（所有请求都留下 request log，包括被 429 拒绝的），
+  再到 `AuthorizationRateLimitInterceptor`（preHandle 在 body 反序列化之前短路），
+  放行后才进入 `AuthorizationController`。默认不信任 `X-Forwarded-For`
+  （`api.rate-limit.trust-forwarded-for`，可伪造 header 不能当限流 key），Redis 不可用时 fail-open。
+- **cardId 维度（业务风控）**：risk 模块的 velocity 滑动窗口，超限走风控 decline 而不是 429。
+
+client id 维度需要认证层（限流 key 应来自 token 而不是 body），merchant/account 维度是下一步。
+interview 可以这样说：
+
+> 系统的 correctness 不依赖限流（幂等、行锁、状态机才是 correctness），限流是保护层。
+> 我按语义分层：429 的系统保护限流在 interceptor（IP 维度、token bucket、fail-open），
+> 业务风控限流在 risk 模块（卡维度、sliding window、decline 语义）。生产里还会在 gateway/WAF
+> 再加一层粗粒度入口限流，应用内保留业务维度。
 
 ### 8.2 Redis 还是本地限流
 
