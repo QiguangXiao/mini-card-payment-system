@@ -2,6 +2,7 @@ package com.minicard.infrastructure.web;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -30,6 +31,10 @@ public class HttpRequestLoggingFilter extends OncePerRequestFilter {
     static final String REQUEST_ID_HEADER = "X-Request-Id";
     /** Logback pattern 使用的 MDC key；同一 HTTP request 内的业务日志会自动带上它。 */
     static final String MDC_REQUEST_ID_KEY = "requestId";
+    /** 入站 request id 最长保留 64 字符，避免恶意 header 把每一行日志打爆。 */
+    private static final int MAX_REQUEST_ID_LENGTH = 64;
+    /** 只接受日志安全字符；空格/换行/控制字符会造成 log injection 或排查串行混乱。 */
+    private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._:-]{1,64}");
 
     /**
      * 包裹后续 filter/controller 调用，记录开始和结束日志。
@@ -79,8 +84,15 @@ public class HttpRequestLoggingFilter extends OncePerRequestFilter {
 
     private String resolveRequestId(HttpServletRequest request) {
         String requestId = request.getHeader(REQUEST_ID_HEADER);
-        if (requestId != null && !requestId.isBlank()) {
-            return requestId.trim();
+        if (requestId == null || requestId.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        String trimmed = requestId.trim();
+        // X-Request-Id 会进入 response header、MDC 和每一行同步请求日志。不能无条件信任客户端输入：
+        // 超长值会放大日志成本；换行/空格/特殊字符会造成 log injection 或让日志聚合按错误字段解析。
+        // 不做“截断后复用”，而是直接生成新 UUID，避免两个不同恶意长 id 被截成同一个 correlation id。
+        if (trimmed.length() <= MAX_REQUEST_ID_LENGTH && SAFE_REQUEST_ID.matcher(trimmed).matches()) {
+            return trimmed;
         }
         return UUID.randomUUID().toString();
     }

@@ -36,17 +36,48 @@ class HttpRequestLoggingFilterTest {
     @Test
     void reusesIncomingRequestIdAndExposesItThroughMdcDuringRequest() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
-        request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, "client-request-001");
+        request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, "client-request_001.trace:abc");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, (servletRequest, servletResponse) ->
                 assertThat(MDC.get(HttpRequestLoggingFilter.MDC_REQUEST_ID_KEY))
-                        .isEqualTo("client-request-001"));
+                        .isEqualTo("client-request_001.trace:abc"));
 
         assertThat(response.getHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER))
-                .isEqualTo("client-request-001");
+                .isEqualTo("client-request_001.trace:abc");
         // Tomcat 线程池会复用 request thread；请求结束后必须清掉 MDC，避免下一次请求串号。
         assertThat(MDC.get(HttpRequestLoggingFilter.MDC_REQUEST_ID_KEY)).isNull();
+    }
+
+    @Test
+    void replacesUnsafeIncomingRequestId() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, "bad request\nid");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, (servletRequest, servletResponse) ->
+                assertThat(MDC.get(HttpRequestLoggingFilter.MDC_REQUEST_ID_KEY))
+                        .isNotEqualTo("bad request\nid")
+                        .matches("[0-9a-f-]{36}"));
+
+        assertThat(response.getHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER))
+                .isNotEqualTo("bad request\nid")
+                .matches("[0-9a-f-]{36}");
+        assertThat(MDC.get(HttpRequestLoggingFilter.MDC_REQUEST_ID_KEY)).isNull();
+    }
+
+    @Test
+    void replacesOverlongIncomingRequestId() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        String overlong = "a".repeat(65);
+        request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, overlong);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER))
+                .isNotEqualTo(overlong)
+                .matches("[0-9a-f-]{36}");
     }
 
     @Test

@@ -26,6 +26,9 @@ import org.springframework.stereotype.Component;
  * - CircuitBreaker: 要。银行网关宕机时快速失败，让 DelayJob 尽早退避，
  *   而不是每个 job 吊死在 read timeout 上占满 worker 线程。
  * - Retry: 不要。DelayJob 已是带退避的 durable retry 层；且每次尝试都是资金操作请求。
+ * - RateLimiter: 现在不要。自动还款由 DelayJob 到期批量驱动，默认频率远低于 notification provider
+ *   这类高频出站调用；为了"组件齐全"硬加会多一层拒绝/退避语义。若真实银行有明确 TPS 契约，
+ *   再按银行配额和 pod 数配置出站限流，并同样避免把本地节流误记成银行 brownout。
  * - Bulkhead: 不要。调用方跑在有界的 DelayJob worker pool 里，池本身就是并发上限
  *   （对比 risk：跑在授权请求线程里才需要 bulkhead 保护 Hikari）。
  * </pre>
