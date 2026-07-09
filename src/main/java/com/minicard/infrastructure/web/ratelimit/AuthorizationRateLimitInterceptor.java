@@ -90,13 +90,34 @@ public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
      * trust-forwarded-for 默认 false，未显式配置时伪造的 header 直接被忽略。</p>
      */
     private String resolveClientKey(HttpServletRequest request) {
+        // 第 1 步（默认分支 / 安全默认值）：不信任 X-Forwarded-For。
+        // trust-forwarded-for 默认 false，此时永远只取 getRemoteAddr()——即 TCP 连接的对端地址，
+        // "谁真的和我建了这条 socket"的物理事实，客户端伪造不了。
+        // 直连部署下攻击者无论怎么塞 X-Forwarded-For 都改变不了这里的分桶维度，
+        // 也就堵死了"每个请求换一个伪造 IP = 每个请求一个新满桶"的限流绕过。
         if (!properties.trustForwardedFor()) {
             return request.getRemoteAddr();
         }
+
+        // —— 以下几步只在显式配置 trust-forwarded-for=true 时才走到，
+        //    语义前提是"我确实部署在自家 LB/反向代理后面，且它会写这个 header"。
+
+        // 第 2 步：读取 X-Forwarded-For。它是一个纯文本 header，形如 "client, proxy1, proxy2"，
+        // 由链路上每一跳代理依次往后追加，最左段号称是最初的客户端。
         String forwardedFor = request.getHeader("X-Forwarded-For");
+
+        // 第 3 步：header 存在且非空时，取最左段作为客户端 key。
+        // split(",")[0] 拿链首那一段，trim() 去掉逗号后惯例的空格。
+        // 边界提醒：最左段"可信"依赖 LB 会覆盖/规整该 header；若 LB 只是单纯追加，
+        // 最左段仍可能被客户端预先写入而污染——更严密的做法是从右往左跳过已知可信跳数，
+        // 或改用 RemoteIpValve（server.tomcat.remoteip.*），详见类头注释。
         if (forwardedFor != null && !forwardedFor.isBlank()) {
             return forwardedFor.split(",")[0].trim();
         }
+
+        // 第 4 步（信任代理但 header 缺失的兜底）：请求没带 X-Forwarded-For
+        // （例如没经过预期代理、直达了应用）时退回 getRemoteAddr()，
+        // 保证返回一个合法的分桶 key，而不是 null。
         return request.getRemoteAddr();
     }
 }
