@@ -1,0 +1,10 @@
+
+bank的fallback怎么生效和选择的，现在有两个fallback，是Feign会自动选择吗
+第二个fallback中throwable instanceof CallNotPermittedException，为什么单独判断这个？其他的不用再判断吗，等等再详细注释下
+
+
+真实的口座振替多是"提交扣款文件 + 异步回执"的批处理形态，这是什么样的？详细描述一下。需要做吗？
+
+KafkaConsumerConfiguration 这个类再注解下，里面各个东西一定要配置吗？配置方法对吗？
+
+CAS_WRITE_SCRIPT 这个Lua每一步都注解一下， Long.class是什么
