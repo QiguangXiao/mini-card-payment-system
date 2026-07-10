@@ -42,7 +42,7 @@ import lombok.experimental.Accessors;
  * 后会被截断，内存值与回读值不再 equals，导致已成功的投递被误判"lease changed"而最终 DEAD；
  * 同一微秒的两次 claim 也会产生相同时间戳令牌。独立 UUID token 同时避开这两个坑。</p>
  */
-// 只读 getter + 私有构造：状态只能经 markProcessing/markSent/markFailed 流转，杜绝外部直接改 status。
+// 只读 getter + 私有构造：状态只能经上方转换表列出的 mark*/reschedule* 方法流转，杜绝外部直接改 status。
 @Getter
 @Accessors(fluent = true)
 public final class NotificationDelivery {

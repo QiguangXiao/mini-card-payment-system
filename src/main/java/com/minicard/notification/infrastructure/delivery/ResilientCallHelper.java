@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
  * <p>它们都不负责 notification 的 DB 状态。跨进程、跨重启的 retry/backoff/DEAD 由
  * {@code NotificationDeliveryWorker} 和 {@code notification_deliveries} 状态机负责；本类只处理
  * “一次 worker attempt 内怎样调用 provider”。如果把两种 retry 混成一层，就难以回答重启后谁继续重试。</p>
-
+ *
  * <p>本类只收住三层装饰的重复代码，不知道 delivery id、收件地址，也不更新 DB。
  * 这是刻意保持的基础设施边界，避免 helper 重新长成承载业务流程的 sender facade。</p>
  *
@@ -88,10 +88,37 @@ public class ResilientCallHelper {
      * )
      * </pre>
      *
-     * <p>执行顺序是 Retry → CircuitBreaker → RateLimiter → Feign。breaker 已 OPEN 时，内层不执行；
-     * limiter 无许可时，Feign 不执行；真正的 transient provider failure 才由外层 Retry 发起下一次 attempt。
-     * 因此一次 {@code call()} 可能产生 0、1 或最多 3 次真实 HTTP，请勿把“调用 helper 一次”误解成
-     * “一定只发一次网络请求”。所有 attempt 复用同一 request 和 idempotencyKey。</p>
+     * <p>执行时刻的走位与组装相反：从最外层包装进入，一层层往里问“能不能继续”。
+     * 逐步展开（编号与方法体的阶段注释对齐；此处发生在阶段 3 的 decorated.get() 内部）：</p>
+     *
+     * <pre>
+     * decorated.get()
+     * 1. Retry 进入第 attempt 次循环（最多 retry.instances.notificationDelivery 的 max-attempts=3）
+     *    1.1 CircuitBreaker.acquirePermission()：breaker OPEN 时抛 CallNotPermittedException，
+     *        更内层全部不执行——本轮 0 次 HTTP，也不消耗 rate-limit permit
+     *    1.2 RateLimiter.acquirePermission()：本 pod 打该渠道太快时抛 RequestNotPermitted
+     *        （timeout-duration=0，抢不到就立刻失败，不占住 worker 线程等令牌）——providerCall 不执行
+     *    1.3 providerCall.get()：此刻才拆开 lambda——Feign 代理把 request 序列化成 JSON、
+     *        发 HTTP、反序列化回执、取 providerMessageId
+     *    1.4 成功：breaker 记 onSuccess（耗时进入 slow-call 统计），返回结果，循环结束
+     *    1.5 失败：breaker 记 onError（进入失败率统计），异常抛给外层 Retry
+     * 2. Retry 拿到异常后分流：命中 ignore-exceptions（RequestNotPermitted / CallNotPermitted /
+     *    Permanent）直接上抛不再重试；其余按指数退避等 200ms、400ms 后回到步骤 1。
+     *    每次 attempt 执行的是同一个 lambda，因此三次尝试共用同一份 request 和同一个 idempotencyKey。
+     * </pre>
+     *
+     * <p>所以一次 {@code call()} 的真实 HTTP 次数是 0 次（限流 / 断路 OPEN / 4xx permanent）、
+     * 1 次（成功）或最多 3 次（transient 重试）。出口只有四种，区分标准是“provider HTTP
+     * 是否真的发生过”，它决定 durable attempts 预算被谁消耗：</p>
+     *
+     * <pre>
+     * 成功                                    -> 返回 providerMessageId，worker markSent
+     * RequestNotPermitted（HTTP 未发生）       -> 翻译成 NotificationDeliveryThrottledException，
+     *                                           worker rescheduleWithoutAttempt：只延后，attempts 不变
+     * NotificationDeliveryPermanentException  -> 原样上抛，worker markPermanentFailed：直接 DEAD
+     * 其余（断路 OPEN / 超时 / 5xx / 重试耗尽） -> 包成 IllegalStateException，
+     *                                           worker markFailed：attempts+1，退避回 PENDING 或 DEAD
+     * </pre>
      */
     public String call(String circuitBreakerName, Supplier<String> providerCall) {
         // 阶段 1：从 registry 取得“有状态”的保护组件。registry 不是每次 new 一个对象；

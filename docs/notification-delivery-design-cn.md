@@ -253,6 +253,20 @@ consumer 必须去重”在投递侧的对应。
 Retry( CircuitBreaker( RateLimiter( provider.send ) ) )
 ```
 
+**组装从内向外（先包 RateLimiter，最后包 Retry），执行从外向内**：`decorated.get()` 先进 Retry 的循环，
+每一轮 attempt 依次问 CircuitBreaker（断路 OPEN 吗）→ RateLimiter（本 pod 有 permit 吗）→ 都放行才轮到
+Feign 真正发 HTTP。谁先拒绝，更内层就一步都不执行。一次 `helper.call()` 只有四种出口，区分标准是
+**provider HTTP 是否真的发生过**——它决定 durable attempts 预算被谁消耗：
+
+| 出口 | helper 抛给 worker 的类型 | worker 动作 | attempts |
+| --- | --- | --- | --- |
+| 成功 | 正常返回 providerMessageId | `markSent` → SENT | 不变 |
+| 本地限流拒绝（HTTP 未发生） | `NotificationDeliveryThrottledException` | `rescheduleWithoutAttempt` → PENDING（+fixed-delay） | **不变** |
+| provider 4xx（ErrorDecoder 判为永久失败） | `NotificationDeliveryPermanentException` | `markPermanentFailed` → DEAD | +1（仅记录，结局已定） |
+| 断路 OPEN / 超时 / 5xx / R4j 重试耗尽 | `IllegalStateException`（包装） | `markFailed` → 退避回 PENDING 或 DEAD | +1 |
+
+逐步展开的执行编号 trace 见 `ResilientCallHelper.call` 的 javadoc；下面按组件解释每一层为什么放在那个位置。
+
 - **RateLimiter（每渠道一个：`notificationPush` / `notificationEmail`）**：这是出站
   **client-side throttling**，限制本 pod 打 provider 的速率。它不适合做入站全局限流：
   入站 API 限流要跨实例共享状态和 TTL，本项目用 Redis Lua token bucket；notification 出站配额
