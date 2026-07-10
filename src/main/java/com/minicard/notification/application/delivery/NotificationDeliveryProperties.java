@@ -25,7 +25,7 @@ public record NotificationDeliveryProperties(
         int batchSize,
         /** PROCESSING lease 超时秒数；worker 宕机后靠 recoverer 重新放回。 */
         long processingTimeoutSeconds,
-        /** 最大投递尝试次数，超过后进入 DEAD。 */
+        /** 最大真实投递失败次数；HTTP 前 throttling/worker rejection 不计入，达到上限后进入 DEAD。 */
         int maxAttempts,
         /** 投递 worker 线程数。 */
         int workerPoolSize,

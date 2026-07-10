@@ -258,7 +258,8 @@ notification:
     # 对应字段：notification_deliveries.next_attempt_at 在 PROCESSING 时表示 lease deadline。
     # 对应代码：NotificationDeliveryClaimer.markProcessing 写入 deadline + lease_token。
     processing-timeout-seconds: 30
-    # 对应字段：notification_deliveries.attempts；达到上限后 markFailed 置 DEAD（投递侧 DLT）。
+    # 对应字段：notification_deliveries.attempts；真实 provider failure/lease timeout 才增加。
+    # 本地 RateLimiter 或 worker pool 在 HTTP 前拒绝只延后 next_attempt_at，不消耗 attempts。
     max-attempts: 8
     # 对应代码：WorkerExecutorConfiguration.notificationDeliveryWorkerExecutor。
     worker-pool-size: 4
@@ -523,9 +524,8 @@ resilience4j:
         limit-for-period: 20
         limit-refresh-period: 1s
         # 0 = 抢不到许可立刻 fail-fast，不占住 notificationDeliveryWorkerExecutor 等令牌；
-        # worker 会把本轮记为 transient failure 并按 notification_deliveries.next_attempt_at 退避。
-        # 当前实现会因此消耗一次 durable attempts；若要严格区分“未调用 provider”和“调用失败”，
-        # 应增加不增加 attempts 的 reschedule 状态转换，而不是在 RateLimiter 里等待。
+        # helper 把 RequestNotPermitted 翻译成 NotificationDeliveryThrottledException，worker 释放 lease，
+        # 按 fixed-delay-ms 延后 next_attempt_at，但不增加 attempts，因为 provider HTTP 尚未发生。
         timeout-duration: 0
       notificationEmail:
         limit-for-period: 20

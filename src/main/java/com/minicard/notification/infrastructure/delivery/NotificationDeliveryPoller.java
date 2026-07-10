@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>结构与 OutboxPoller 一致：claim 在短事务里完成并提交后，才把已领取投递交给 worker pool；
  * worker 在 finalize 前会重新校验 PROCESSING lease。queue 满触发 TaskRejectedException 时，
- * 立刻把投递放回 retry，避免它卡在 PROCESSING 直到 lease 过期才被 recoverer 捡回。</p>
+ * 立刻释放 lease 并延后下一次领取；因为 provider 尚未调用，所以不增加 attempts。</p>
  */
 @Component
 // 用配置开关保护：开发/迁移时可只创建 PENDING 投递、不实际外发，便于隔离排查副作用。
@@ -61,7 +61,8 @@ public class NotificationDeliveryPoller {
                 // 阶段 3：worker 在事务外解析收件人、渲染模板、调用 provider，并在短事务里 finalize。
                 deliveryWorkerExecutor.execute(() -> worker.handleClaimedDelivery(delivery));
             } catch (TaskRejectedException exception) {
-                // 阶段 4：worker pool 拒绝时立即推进 retry/DEAD，不等 lease timeout 后 recoverer 再兜底。
+                // 阶段 4：worker pool 拒绝时立即释放 lease 并延后，不增加 attempts，
+                // 也不等 lease timeout 后 recoverer 再兜底。
                 worker.markRejectedForRetry(delivery, exception);
                 log.warn("notification_delivery_worker_rejected deliveryId={}", delivery.id(), exception);
             }

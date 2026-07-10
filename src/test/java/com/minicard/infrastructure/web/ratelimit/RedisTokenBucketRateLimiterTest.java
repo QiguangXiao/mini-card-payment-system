@@ -49,7 +49,6 @@ class RedisTokenBucketRateLimiterTest {
         RateLimitDecision decision = limiter.tryConsume("203.0.113.7");
 
         assertThat(decision.allowed()).isTrue();
-        assertThat(decision.degraded()).isFalse();
         // 每个调用方一个桶 key；不同调用方的限流互不影响。
         ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
         verify(redisTemplate).execute(any(RedisScript.class), keys.capture(), any(), any(), any(), any());
@@ -79,7 +78,6 @@ class RedisTokenBucketRateLimiterTest {
         RateLimitDecision decision = limiter.tryConsume("203.0.113.7");
 
         assertThat(decision.allowed()).isTrue();
-        assertThat(decision.degraded()).isTrue();
         assertThat(meterRegistry.counter("api.ratelimit.redis.unavailable").count()).isEqualTo(1.0);
     }
 

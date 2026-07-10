@@ -1438,7 +1438,7 @@ RepaymentService commit
 -> consumer_inbox claim
 -> notifications 意图 + APP_PUSH/EMAIL 两条 notification_deliveries/PENDING（同一事务）
 -> 后台投递管线：poller 认领 -> worker 经 per-channel sender + Feign 调 provider
-   -> SENT / transient 失败退避重试 / 4xx 或重试耗尽 DEAD
+   -> SENT / throttled 无 attempts 延后 / transient 失败退避重试 / 4xx 或重试耗尽 DEAD
 ```
 
 Notification 自己用两层幂等（创建期），发送期另有下游去重：

@@ -1,19 +1,37 @@
 package com.minicard.notification.application.delivery;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Consumer;
 
+import com.minicard.notification.domain.Notification;
+import com.minicard.notification.domain.NotificationSubjectType;
+import com.minicard.notification.domain.NotificationType;
 import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import com.minicard.notification.domain.delivery.NotificationDeliverySender;
+import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionOperations;
 
 class NotificationDeliveryWorkerTest {
+
+    private static final Instant NOW = Instant.parse("2026-07-10T00:00:00Z");
 
     @Test
     // 测试目的：验证缺 channel sender 属于启动期 wiring/config 错误。
@@ -25,15 +43,86 @@ class NotificationDeliveryWorkerTest {
                 .hasMessageContaining("EMAIL");
     }
 
+    @Test
+    void throttlingReschedulesWithoutConsumingAttempts() {
+        NotificationDeliveryRepository repository = mock(NotificationDeliveryRepository.class);
+        TransactionOperations transactions = executingTransactions();
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        NotificationDelivery claimed = claimedPushDelivery();
+        when(repository.findByIdForUpdate(claimed.id())).thenReturn(Optional.of(claimed));
+
+        NotificationDeliverySender throttledPush = new NotificationDeliverySender() {
+            @Override
+            public NotificationChannel channel() {
+                return NotificationChannel.APP_PUSH;
+            }
+
+            @Override
+            public String send(NotificationDelivery delivery) {
+                throw new NotificationDeliveryThrottledException(
+                        "notification provider call throttled for notificationPush",
+                        new RuntimeException("no permit")
+                );
+            }
+        };
+        NotificationDeliveryWorker worker = new NotificationDeliveryWorker(
+                repository,
+                properties(),
+                List.of(throttledPush, sender(NotificationChannel.EMAIL)),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                transactions,
+                meterRegistry
+        );
+
+        worker.handleClaimedDelivery(claimed);
+
+        assertThat(claimed.status()).isEqualTo(NotificationDeliveryStatus.PENDING);
+        assertThat(claimed.attempts()).isZero();
+        assertThat(claimed.nextAttemptAt()).isEqualTo(NOW.plusMillis(1000));
+        assertThat(claimed.leaseToken()).isNull();
+        assertThat(meterRegistry.counter("notification.delivery.throttled").count()).isEqualTo(1.0);
+        verify(repository).updateDeliveryState(claimed);
+    }
+
     private NotificationDeliveryWorker newWorker(List<NotificationDeliverySender> senders) {
         return new NotificationDeliveryWorker(
                 mock(NotificationDeliveryRepository.class),
-                new NotificationDeliveryProperties(
-                        "http://localhost:8080", true, 1000, 5000, 50, 30, 8, 4, 100, 0, 0),
+                properties(),
                 senders,
                 Clock.systemUTC(),
-                mock(TransactionOperations.class)
+                mock(TransactionOperations.class),
+                new SimpleMeterRegistry()
         );
+    }
+
+    private NotificationDeliveryProperties properties() {
+        return new NotificationDeliveryProperties(
+                "http://localhost:8080", true, 1000, 5000, 50, 30, 8, 4, 100, 0, 0);
+    }
+
+    private NotificationDelivery claimedPushDelivery() {
+        Notification notification = Notification.requestFromEvent(
+                UUID.randomUUID(),
+                NotificationSubjectType.CARD_TRANSACTION,
+                "txn-1",
+                "card-1",
+                NotificationType.CARD_TRANSACTION_POSTED,
+                NOW
+        );
+        NotificationDelivery delivery = NotificationDelivery.pendingFor(
+                notification, NotificationChannel.APP_PUSH, NOW);
+        delivery.markProcessing(NOW, 30, "lease-token-1");
+        return delivery;
+    }
+
+    private TransactionOperations executingTransactions() {
+        TransactionOperations transactions = mock(TransactionOperations.class);
+        doAnswer(invocation -> {
+            Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            callback.accept(mock(TransactionStatus.class));
+            return null;
+        }).when(transactions).executeWithoutResult(any());
+        return transactions;
     }
 
     private NotificationDeliverySender sender(NotificationChannel channel) {

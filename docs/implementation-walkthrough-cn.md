@@ -263,7 +263,9 @@ credit_account_id + period_start + period_end
 - `status`：`PENDING`、`PROCESSING`、`SENT`、`DEAD`。
 - `next_attempt_at`：PENDING 时是下次可投递时间；PROCESSING 时是 lease deadline。
 - `lease_token`：本轮 worker ownership；finalize 前重新 FOR UPDATE 校验，防止迟到回执覆盖新 owner 的结果。
-- `attempts`：durable 重试次数；到 `max-attempts` 或 provider 4xx（permanent failure）进 `DEAD`。
+- `attempts`：真实 provider failure/lease timeout 的 durable 重试次数；到 `max-attempts` 或 provider 4xx
+  （permanent failure）进 `DEAD`。本地 throttling/worker pool rejection 发生在 HTTP 前，只延后
+  `next_attempt_at`，不增加 attempts。
 - `provider_message_id`：provider 回执 id，拿到才 `SENT`。发送幂等键派生自 delivery `id`，跨 retry 不变，
   透传给 provider 做下游去重。
 
@@ -743,7 +745,8 @@ curl -X POST http://localhost:8080/api/presentments \
      APP_PUSH/EMAIL 两条 `notification_deliveries/PENDING`。
    - duplicate delivery claim 失败后直接返回，避免重复通知用户。
    - 真正的发送由后台投递管线异步完成（poller 认领 PENDING delivery，worker 经 per-channel
-     sender + Feign 调 provider，成功 `SENT`、失败退避重试、4xx 或耗尽次数 `DEAD`）。
+     sender + Feign 调 provider，成功 `SENT`、失败退避重试、4xx 或耗尽次数 `DEAD`；本地限流没有
+     调用 provider，只释放 lease 并延后，不消耗 attempts）。
 
 12. Ledger 异步消费 `card_transaction.posted`
 

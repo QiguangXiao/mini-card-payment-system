@@ -2,11 +2,13 @@ package com.minicard.notification.infrastructure.delivery;
 
 import java.util.function.Supplier;
 
+import com.minicard.notification.application.delivery.NotificationDeliveryThrottledException;
 import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
 import org.springframework.stereotype.Component;
@@ -121,13 +123,20 @@ public class ResilientCallHelper {
             // notificationProviderClient.send(request).providerMessageId()
             // 因此这一行返回时，表示 provider 已经返回 message id；worker 后续才能用它 markSent。
             return decorated.get();
+        } catch (RequestNotPermitted exception) {
+            // 本地没有 permit 时 providerCall 尚未执行。这不是 provider failure，不能落入 worker 的
+            // markFailed(attempts+1)；翻译成应用层可识别的 throttled 语义后，只延后下一次领取。
+            throw new NotificationDeliveryThrottledException(
+                    "notification provider call throttled for " + circuitBreakerName,
+                    exception
+            );
         } catch (NotificationDeliveryPermanentException exception) {
             // 4xx 已由 ErrorDecoder 翻译成 permanent failure。不要包装成 IllegalStateException，
             // 否则 worker 看不到类型，只能按 transient failure 消耗 durable retry。
             throw exception;
         } catch (RuntimeException exception) {
-            // RequestNotPermitted(本 pod 对 provider 限速) / CallNotPermittedException(断路打开)
-            // / provider exception / retry exhausted 都到这里。
+            // CallNotPermittedException(断路打开) / provider exception / retry exhausted 到这里。
+            // RequestNotPermitted 已在上面单独翻译，不能再混入会消耗 durable attempts 的失败路径。
             // worker 会统一 markFailed，推进 durable retry/DEAD；helper 不直接碰 DB 状态机。
             throw new IllegalStateException(
                     "delivery provider call failed for " + circuitBreakerName + ": " + exception.getMessage(),

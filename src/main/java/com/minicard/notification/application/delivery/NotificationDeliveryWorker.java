@@ -1,6 +1,7 @@
 package com.minicard.notification.application.delivery;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -13,6 +14,7 @@ import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import com.minicard.notification.domain.delivery.NotificationDeliverySender;
 import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
@@ -41,9 +43,10 @@ import org.springframework.transaction.support.TransactionOperations;
  *    3.1 SELECT delivery FOR UPDATE + lease 校验（status==PROCESSING 且 leaseToken 未变）；
  *        lease 已变则 skip（迟到回执不能覆盖新 owner 的结果）
  *    3.2 markSent(providerMessageId)，释放 lease
- * 4. 失败/worker pool 拒绝: 同样走 finalize 短事务 + lease 校验
- *    4.1 transient failure(timeout/5xx): markFailed，attempts+backoff 回 PENDING 或进 DEAD
- *    4.2 permanent failure(provider 4xx): markPermanentFailed，直接 DEAD，避免无意义重试
+ * 4. 未执行/失败: 同样走 finalize 短事务 + lease 校验
+ *    4.1 throttled/worker pool 拒绝: rescheduleWithoutAttempt，只延后且不增加 attempts
+ *    4.2 transient failure(timeout/5xx): markFailed，attempts+backoff 回 PENDING 或进 DEAD
+ *    4.3 permanent failure(provider 4xx): markPermanentFailed，直接 DEAD，避免无意义重试
  * </pre>
  *
  * <p>stale worker 时间线（为什么 finalize 必须校验 leaseToken，而不能只看 status）：</p>
@@ -70,13 +73,15 @@ public class NotificationDeliveryWorker {
     private final Map<NotificationChannel, NotificationDeliverySender> senders;
     private final Clock clock;
     private final TransactionOperations transactionOperations;
+    private final MeterRegistry meterRegistry;
 
     public NotificationDeliveryWorker(
             NotificationDeliveryRepository deliveryRepository,
             NotificationDeliveryProperties properties,
             List<NotificationDeliverySender> deliverySenders,
             Clock clock,
-            TransactionOperations transactionOperations
+            TransactionOperations transactionOperations,
+            MeterRegistry meterRegistry
     ) {
         this.deliveryRepository = deliveryRepository;
         this.properties = properties;
@@ -85,6 +90,7 @@ public class NotificationDeliveryWorker {
         this.senders = sendersByChannel(deliverySenders);
         this.clock = clock;
         this.transactionOperations = transactionOperations;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -105,6 +111,11 @@ public class NotificationDeliveryWorker {
             String providerMessageId = sender.send(claimed);
             // 阶段 3：provider 返回成功回执后，才在短事务里校验 lease 并标 SENT。
             markSent(claimed, providerMessageId);
+        } catch (NotificationDeliveryThrottledException exception) {
+            // RateLimiter 拒绝发生在 provider HTTP 之前：只释放 lease 并延后到下一 poll 周期，
+            // 不增加 attempts。否则健康 provider 也可能仅因本地 backlog 被耗到 DEAD。
+            meterRegistry.counter("notification.delivery.throttled").increment();
+            rescheduleWithoutAttempt(claimed, "notification provider throttled", exception);
         } catch (NotificationDeliveryPermanentException exception) {
             // provider 4xx 等永久失败：请求/凭证/endpoint 不修，retry 多少次都不会成功。
             // 直接 DEAD 让问题尽快暴露给人工/admin，而不是白白消耗 8 次 durable retry。
@@ -123,15 +134,48 @@ public class NotificationDeliveryWorker {
     }
 
     /**
-     * worker pool 拒绝执行时，把已领取投递放回 retry/DEAD 状态机。
+     * worker pool 拒绝执行时，把已领取投递延后到下一轮，但不消耗投递 attempts。
      *
      * <p>事务归属：本方法本身不加 {@code @Transactional}；它委托
-     * {@link #markFailed(NotificationDelivery, String, RuntimeException)} 开启 finalize 短事务。</p>
+     * {@link #rescheduleWithoutAttempt(NotificationDelivery, String, RuntimeException)}
+     * 开启 finalize 短事务。</p>
      */
     public void markRejectedForRetry(NotificationDelivery claimed, RuntimeException exception) {
-        // worker pool 拒绝也按失败处理，把投递从 PROCESSING 放回 retry/DEAD，避免一直卡到 lease 过期。
-        // 这类失败发生在 provider 调用前，但 DB row 已经是 PROCESSING，所以仍然需要短事务 finalize。
-        markFailed(claimed, "notification delivery worker pool rejected", exception);
+        // worker pool 拒绝发生在 provider 调用前，和 throttling 一样不应增加 attempts；
+        // 但 DB row 已经是 PROCESSING，所以仍要短事务释放 lease 并推迟 nextAttemptAt。
+        rescheduleWithoutAttempt(
+                claimed,
+                "notification delivery worker pool rejected",
+                exception
+        );
+    }
+
+    /**
+     * 在独立短事务中释放当前 lease，并延后至少一个 poll 周期，不增加 attempts。
+     */
+    private void rescheduleWithoutAttempt(
+            NotificationDelivery claimed,
+            String reason,
+            RuntimeException exception
+    ) {
+        transactionOperations.executeWithoutResult(status -> {
+            NotificationDelivery delivery = lockCurrentLease(claimed);
+            if (delivery == null) {
+                return;
+            }
+            // 复用 poller 的 fixed delay，避免再增加一个 throttle-backoff 配置旋钮。
+            // 即使下轮仍拿不到 permit，也会再次延后而不是 busy loop 或错误进入 DEAD。
+            delivery.rescheduleWithoutAttempt(
+                    reason,
+                    Instant.now(clock),
+                    Duration.ofMillis(properties.fixedDelayMs())
+            );
+            deliveryRepository.updateDeliveryState(delivery);
+            log.debug(
+                    "notification_delivery_rescheduled deliveryId={} channel={} reason={} nextAttemptAt={}",
+                    delivery.id(), delivery.channel(), reason, delivery.nextAttemptAt(), exception
+            );
+        });
     }
 
     /**
@@ -206,6 +250,7 @@ public class NotificationDeliveryWorker {
      * 重新锁定当前 delivery row 并确认本 worker 仍持有 PROCESSING lease。
      *
      * <p>事务归属：只能在 {@link #markSent(NotificationDelivery, String)}
+     *、{@link #rescheduleWithoutAttempt(NotificationDelivery, String, RuntimeException)}
      * 或 {@link #markFailed(NotificationDelivery, String, RuntimeException)}
      * 创建的 finalize 短事务内部调用。</p>
      */

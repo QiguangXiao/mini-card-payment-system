@@ -22,8 +22,9 @@ public interface NotificationDeliverySender {
     /**
      * 发送一条已经领取的 delivery，成功时返回 provider message id。
      *
-     * <p>失败直接抛 {@link RuntimeException}：worker 会在 finalize 短事务中 markFailed，
-     * 推进 attempts/backoff/DEAD。sender 不直接更新 DB，避免 provider 细节污染状态机边界。</p>
+     * <p>失败直接抛 {@link RuntimeException}：provider 失败由 worker markFailed，推进
+     * attempts/backoff/DEAD；HTTP 前的本地 throttling 用专门异常只延后、不增加 attempts。
+     * sender 不直接更新 DB，避免 provider 细节污染状态机边界。</p>
      */
     String send(NotificationDelivery delivery);
 }

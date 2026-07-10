@@ -1,5 +1,6 @@
 package com.minicard.notification.domain.delivery;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -26,6 +27,7 @@ import lombok.experimental.Accessors;
  * PENDING    -> PROCESSING  markProcessing()           claimer 短事务写 lease（token + deadline）
  * PROCESSING -> SENT        markSent()                 worker finalize：provider 已回执（终态）
  * PROCESSING -> PENDING     markFailed()               worker 失败 finalize / recoverer lease 超时，backoff 后重试
+ * PROCESSING -> PENDING     rescheduleWithoutAttempt()  provider 未调用/worker 未执行，仅延后且不增加 attempts
  * PROCESSING -> DEAD        markFailed()               attempts >= maxAttempts（终态，等人工重放）
  * PROCESSING -> DEAD        markPermanentFailed()      provider 4xx 等永久失败，不消耗完整 retry budget
  * </pre>
@@ -247,6 +249,27 @@ public final class NotificationDelivery {
         long delaySeconds = Math.min(1L << Math.min(attempts - 1, 6), MAX_RETRY_DELAY_SECONDS);
         status = NotificationDeliveryStatus.PENDING;
         nextAttemptAt = failedAt.plusSeconds(delaySeconds);
+    }
+
+    /**
+     * 外部副作用尚未开始时释放 lease 并延后重新领取，但不消耗 durable retry budget。
+     *
+     * <p>典型来源是本地 RateLimiter 无 permit 或 worker pool 拒绝：两者都没有调用 provider。
+     * 如果复用 {@link #markFailed(String, Instant, int)}，持续 backlog 会让健康消息仅因本地容量不足
+     * 耗尽 attempts 进入 DEAD。这里仍设置 nextAttemptAt，避免立即重新领取形成 busy loop。</p>
+     */
+    public void rescheduleWithoutAttempt(String reason, Instant deferredAt, Duration retryDelay) {
+        Instant actualDeferredAt = Objects.requireNonNull(deferredAt);
+        Duration actualRetryDelay = Objects.requireNonNull(retryDelay);
+        if (actualRetryDelay.isNegative() || actualRetryDelay.isZero()) {
+            throw new IllegalArgumentException("retryDelay must be positive");
+        }
+        // attempts 刻意不变：本轮没有发起 provider HTTP，不应占用“真实投递失败”的预算。
+        lastError = truncate(requireText(reason, "reason"));
+        updatedAt = actualDeferredAt;
+        leaseToken = null;
+        status = NotificationDeliveryStatus.PENDING;
+        nextAttemptAt = actualDeferredAt.plus(actualRetryDelay);
     }
 
     /**

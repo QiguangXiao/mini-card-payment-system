@@ -3,6 +3,7 @@ package com.minicard.notification.infrastructure.delivery;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.minicard.notification.application.delivery.NotificationDeliveryThrottledException;
 import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -39,7 +40,7 @@ class ResilientCallHelperTest {
             calls.incrementAndGet();
             return "provider-message-2";
         }))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(NotificationDeliveryThrottledException.class)
                 .hasRootCauseInstanceOf(RequestNotPermitted.class);
 
         assertThat(calls).hasValue(1);

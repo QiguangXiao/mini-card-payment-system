@@ -85,7 +85,8 @@ public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
         // 向上取整并保底 1；返回 0 等于邀请客户端立刻重试，容易形成 retry storm。
         long retryAfterSeconds = Math.max(1, (decision.retryAfterMillis() + 999) / 1000);
         meterRegistry.counter("api.ratelimit.denied").increment();
-        log.warn(
+        // 逐请求 WARN 会让攻击流量同时放大日志量；拒绝规模由 api.ratelimit.denied counter 负责观测。
+        log.debug(
                 "api_rate_limit_denied path={} retryAfterSeconds={}",
                 request.getRequestURI(),
                 retryAfterSeconds

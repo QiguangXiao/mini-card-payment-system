@@ -62,10 +62,12 @@ public class RedisTokenBucketRateLimiter {
             + "  tokens = capacity\n"                                   // 新桶从满桶开始，允许一次 capacity burst。
             + "  ts = now\n"                                            // 从当前时刻开始累计后续 refill。
             + "end\n"                                                   // 结束初始化分支。
+            // 多 Pod 的 JVM clock 可能略有偏差。effective_now 只能向前：慢时钟请求不能把 Redis ts 写回过去，
+            // 否则快时钟 Pod 下次会把同一段墙钟时间重复算成 refill，放宽全局限流。
+            + "local effective_now = now\n"                              // 默认采用本次请求时间。
+            + "if effective_now < ts then effective_now = ts end\n"      // 慢时钟只是不补令牌，绝不让 ts 倒退。
             // lazy refill：按上次访问以来的毫秒数补令牌，封顶 capacity。
-            // elapsed 下限 0：多实例时钟略有偏差时，避免负 elapsed 把令牌越补越少。
-            + "local elapsed = now - ts\n"                               // 计算距离上次访问过去了多少毫秒。
-            + "if elapsed < 0 then elapsed = 0 end\n"                    // 防止负时间直接扣掉已有令牌。
+            + "local elapsed = effective_now - ts\n"                     // 单调时间差，因此一定 >= 0。
             + "tokens = tokens + elapsed * refill_per_ms\n"              // lazy refill：到请求到来时才补算令牌。
             + "if tokens > capacity then tokens = capacity end\n"        // 桶不能超过容量，否则长时间闲置会无限累积。
             + "local wait = 0\n"                                         // 0 是“本次放行”的返回约定。
@@ -76,7 +78,7 @@ public class RedisTokenBucketRateLimiter {
             + "  wait = math.ceil((1 - tokens) / refill_per_ms)\n"       // 还缺多少令牌 / 补充速率 = 等待毫秒数。
             + "end\n"                                                   // 结束 allow/deny 分支。
             // 拒绝时也要写回：refill 已经推进到 now，不写回会在下次重复补同一段时间。
-            + "redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)\n" // 把本次计算后的两个状态一起写回 HASH。
+            + "redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', effective_now)\n" // 写回单调 ts，阻止跨 Pod 重复 refill。
             // TTL 清理空闲调用方的桶 key；过期后重建 = 满桶，与"闲置足够久桶自然灌满"语义一致。
             + "redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))\n"       // 每次访问续 TTL，空闲 client 最终自动清理。
             + "return wait",                                             // Java 用 0/正毫秒数映射 allow/deny。
@@ -135,8 +137,9 @@ public class RedisTokenBucketRateLimiter {
             // Fail-open：与 RedisRiskVelocityCounter 同一个论证——限流是保护手段而不是业务依赖，
             // 一次 Redis 抖动如果 fail-closed，会把"防洪闸"变成"全站断路器"，比洪峰本身伤害更大。
             // 真正的洪峰兜底还有 Tomcat 线程池和 bulkhead 这两层物理闸门。
-            log.warn("api_rate_limit_redis_unavailable clientKey={} fallback=allow", clientKey, exception);
-            return RateLimitDecision.degradedAllow();
+            // 高频请求下每次都 WARN + stack trace 会把 Redis 故障放大成 log storm；报警应依赖上面的 counter。
+            log.debug("api_rate_limit_redis_unavailable clientKey={} fallback=allow", clientKey, exception);
+            return RateLimitDecision.allow();
         }
     }
 }

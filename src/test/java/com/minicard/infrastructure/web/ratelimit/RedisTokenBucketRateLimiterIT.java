@@ -4,6 +4,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -131,11 +137,64 @@ class RedisTokenBucketRateLimiterIT {
         assertThat(ttl).isPositive();
     }
 
+    @Test
+    void slowerPodClockCannotMoveTimestampBackwardAndRefillSameIntervalTwice() {
+        String clientKey = "client-clock-skew";
+        exhaust(limiterAt(T0), clientKey, 5); // ts=T0, tokens=0
+
+        // 快时钟 Pod 前进 100ms，刚好补 1 个令牌并消费，Redis ts=T0+100ms。
+        assertThat(limiterAt(T0.plusMillis(100)).tryConsume(clientKey).allowed()).isTrue();
+
+        // 慢时钟 Pod 仍在 T0：应拒绝，而且不能把 Redis ts 从 T0+100ms 写回 T0。
+        assertThat(limiterAt(T0).tryConsume(clientKey).allowed()).isFalse();
+
+        // 再由快时钟在同一个 T0+100ms 判定。若上一请求让 ts 倒退，这里会重复补 100ms 并错误放行。
+        assertThat(limiterAt(T0.plusMillis(100)).tryConsume(clientKey).allowed()).isFalse();
+        // 真正再过去 100ms 后才应得到下一个令牌。
+        assertThat(limiterAt(T0.plusMillis(200)).tryConsume(clientKey).allowed()).isTrue();
+    }
+
+    @Test
+    void concurrentRequestsCannotConsumeMoreThanBucketCapacity() throws Exception {
+        int capacity = 20;
+        int requestCount = 100;
+        RateLimitProperties properties = new RateLimitProperties(true, capacity, 10, false);
+        RedisTokenBucketRateLimiter limiter = limiterAt(T0, properties);
+        ExecutorService executor = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < requestCount; i++) {
+                results.add(executor.submit(() -> {
+                    start.await();
+                    return limiter.tryConsume("client-concurrent").allowed();
+                }));
+            }
+            start.countDown();
+
+            long allowed = 0;
+            for (Future<Boolean> result : results) {
+                if (result.get()) {
+                    allowed++;
+                }
+            }
+            // Clock 固定，不发生 refill；无论 100 个请求如何交错，Lua 原子扣减都只能放行 capacity 个。
+            assertThat(allowed).isEqualTo(capacity);
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
     private RedisTokenBucketRateLimiter limiterAt(Instant now) {
+        return limiterAt(now, PROPERTIES);
+    }
+
+    private RedisTokenBucketRateLimiter limiterAt(Instant now, RateLimitProperties properties) {
         return new RedisTokenBucketRateLimiter(
                 redisTemplate,
                 Clock.fixed(now, ZoneOffset.UTC),
-                PROPERTIES,
+                properties,
                 new SimpleMeterRegistry()
         );
     }

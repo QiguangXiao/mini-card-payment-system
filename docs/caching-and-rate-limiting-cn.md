@@ -306,6 +306,11 @@ return count
 >
 > 同一个"限流"，风控层给 decline（业务语义），API 层给 429（协议语义）——维度、算法、出口三个都不同。
 
+Token bucket 的 `ts` 必须单调不倒退：多 Pod JVM clock 有偏差时，Lua 使用
+`effectiveNow=max(now, storedTs)` 计算 refill 并写回。否则慢时钟 Pod 会把 `ts` 写回过去，
+快时钟 Pod 下一次又把同一段时间补一次令牌，放宽分布式限流。真 Redis IT 用两个 fixed Clock
+交替访问同一桶验证这个边界，不需要用 sleep 制造时间流逝。
+
 ### 4.2 在哪一层限流
 
 - **边缘/网关**（API Gateway throttling、WAF rate-based rule、Nginx/Envoy）：粗粒度、按 IP/API key，请求进应用前挡掉。

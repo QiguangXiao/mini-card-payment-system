@@ -156,10 +156,12 @@ notification_deliveries(
 NotificationDelivery：
   PENDING ──claim──▶ PROCESSING(lease=now+30s) ──provider ack──▶ SENT(终态)
                           │
+                          ├── 本地限流/worker pool 拒绝(HTTP 尚未发生)
+                          │      ──▶ PENDING(nextAttemptAt=now+fixedDelay, attempts 不变)
                           ├── transient 失败(超时/5xx/断路) 且 attempts<8 ──▶ PENDING（nextAttemptAt=now+2^(n-1)s, ≤60s）
                           ├── attempts≥8 ─────────────────────────────▶ DEAD(终态, 等人工/admin 重放)
                           ├── permanent 失败(provider 4xx, ErrorDecoder 转成
-                          │   NotificationDeliveryPermanentException) ──▶ DEAD(终态, 不消耗重试次数)
+                          │   NotificationDeliveryPermanentException) ──▶ DEAD(终态, 只记录本次失败，不耗完整预算)
                           └── lease 超时（worker 宕机）──recover──▶ 按一次 transient 失败处理（同上）
 ```
 
@@ -255,11 +257,10 @@ Retry( CircuitBreaker( RateLimiter( provider.send ) ) )
   **client-side throttling**，限制本 pod 打 provider 的速率。它不适合做入站全局限流：
   入站 API 限流要跨实例共享状态和 TTL，本项目用 Redis Lua token bucket；notification 出站配额
   通常可以按 pod 数摊分，放在本地内存里少一次 Redis 往返，也不会让 Redis 故障影响通知发送。
-  `timeout-duration=0` 表示抢不到许可就 fail-fast，不占住 worker thread 等令牌；worker 会把本轮
-  当 transient failure，交给 `notification_deliveries.next_attempt_at` 做 durable backoff。
-  **当前边界**：这条路径也会增加一次 delivery `attempts`，即“provider 尚未被调用”与“provider 调用失败”
-  暂时共用失败预算。若要严格按语义区分，应增加“不增加 attempts、只释放 lease 并延后”的 reschedule 转换，
-  而不是让 worker thread 阻塞等待 permit。
+  `timeout-duration=0` 表示抢不到许可就 fail-fast，不占住 worker thread 等令牌。helper 将
+  `RequestNotPermitted` 翻译成 `NotificationDeliveryThrottledException`；worker finalize 时释放 lease，
+  按 `fixed-delay-ms` 延后 `next_attempt_at`，但不增加 `attempts`，因为 provider HTTP 尚未发生。
+  `notification.delivery.throttled` counter 用来观察持续超配额，生产报警还应结合 oldest PENDING age。
 - **为什么 CircuitBreaker 包在 RateLimiter 外面**：这样 breaker OPEN 时可以先快速失败，不消耗
   本地 rate-limit permit。代价是 RateLimiter 的 `RequestNotPermitted` 会经过 breaker，所以
   `notificationPush` / `notificationEmail` 的 `circuitbreaker.ignore-exceptions` 必须包含它；
@@ -544,8 +545,8 @@ async future。
 - **地址/偏好仍是 demo**：等真实 User/Customer 聚合落地，再在创建期加入 channel selector，或在 sender 内查 contact/device token。
 - **DEAD 的处理**：当前只停重试、记 `last_error`，靠人工/admin。后续可加一个 admin 重放端点（把 DEAD 改回
   PENDING）和告警。
-- **可观测性**：worker/recoverer 已打结构化日志（`notification_delivery_sent/failed/recovered`）；后续可加
-  Micrometer 计数器（按 channel/outcome）和 DEAD 积压告警，与 risk 模块的 `MeterRegistry` 用法看齐。
+- **可观测性**：worker/recoverer 已打结构化日志（`notification_delivery_sent/failed/recovered`），
+  throttling 另有 `notification.delivery.throttled` counter；生产还应对 oldest PENDING age 和 DEAD backlog 告警。
 
 ---
 

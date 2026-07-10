@@ -1,5 +1,6 @@
 package com.minicard.notification.domain.delivery;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -84,6 +85,26 @@ class NotificationDeliveryTest {
         delivery.markFailed("boom again", NOW.plusSeconds(5), 2);
         assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.DEAD);
         assertThat(delivery.attempts()).isEqualTo(2);
+    }
+
+    @Test
+    // 测试目的：验证 provider 尚未调用时只延后，不消耗真正失败的 retry budget。
+    // variant：RateLimiter/worker pool 拒绝后释放 lease、回 PENDING，attempts 仍为 0。
+    void rescheduleWithoutAttemptDefersAndPreservesRetryBudget() {
+        NotificationDelivery delivery = pushDelivery();
+        delivery.markProcessing(NOW, 30, "lease-token-1");
+
+        delivery.rescheduleWithoutAttempt(
+                "notification provider throttled",
+                NOW.plusSeconds(1),
+                Duration.ofSeconds(2)
+        );
+
+        assertThat(delivery.status()).isEqualTo(NotificationDeliveryStatus.PENDING);
+        assertThat(delivery.attempts()).isZero();
+        assertThat(delivery.nextAttemptAt()).isEqualTo(NOW.plusSeconds(3));
+        assertThat(delivery.lastError()).isEqualTo("notification provider throttled");
+        assertThat(delivery.leaseToken()).isNull();
     }
 
     @Test
