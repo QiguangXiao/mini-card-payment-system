@@ -17,9 +17,18 @@ import org.springframework.stereotype.Component;
  * <p>关键词：重试断路, 同步装饰, provider resilience, retry circuit breaker,
  * synchronous decorator, 回復性(かいふくせい)。</p>
  *
- * <p>只收住 Retry + RateLimiter + CircuitBreaker 的重复装饰代码，不承载 Notification 业务语义：
- * 它不知道 delivery id、channel、provider 地址，也不更新 DB。这样它只是技术 helper，
- * 不会重新长成一个 ResilientNotificationSender 门面。</p>
+ * <h3>先理解三个组件分别解决什么</h3>
+ * <ul>
+ *   <li>{@code Retry}：一次调用遇到短暂失败后，在当前线程内再试几次。</li>
+ *   <li>{@code RateLimiter}：我方主动控制调用频率，避免超过 provider quota。</li>
+ *   <li>{@code CircuitBreaker}：近期失败过多时暂时 OPEN，让新调用快速失败，不再持续打故障 provider。</li>
+ * </ul>
+ * <p>它们都不负责 notification 的 DB 状态。跨进程、跨重启的 retry/backoff/DEAD 由
+ * {@code NotificationDeliveryWorker} 和 {@code notification_deliveries} 状态机负责；本类只处理
+ * “一次 worker attempt 内怎样调用 provider”。如果把两种 retry 混成一层，就难以回答重启后谁继续重试。</p>
+
+ * <p>本类只收住三层装饰的重复代码，不知道 delivery id、收件地址，也不更新 DB。
+ * 这是刻意保持的基础设施边界，避免 helper 重新长成承载业务流程的 sender facade。</p>
  *
  * <p>HTTP client 层指 Feign/WebClient/OkHttp/Apache HttpClient/供应商 SDK 这些真正发网络请求的地方。
  * 当前 notification provider 已经通过 Feign 调本地模拟 controller，所以 connect/read timeout
@@ -27,9 +36,9 @@ import org.springframework.stereotype.Component;
  * 超时抛出的异常再进入本 helper，被 Retry / CircuitBreaker 处理。这里不引入
  * Resilience4j TimeLimiter，避免为了硬超时重新带回额外线程池和 async future。</p>
  *
- * <p>RateLimiter 放在 notification 出站方向，而不是 API 入口方向：入口的 per-client/per-card
- * 限流需要跨实例共享状态和 TTL，已经由 Redis Lua token bucket 承担；这里是我方作为
- * provider client 主动保护下游配额，单实例内存限流就能表达"每个 pod 不要打太快"。</p>
+ * <p>这里的 RateLimiter 是出站 client-side throttling：限制“这个 Pod 调 provider 的速度”。
+ * 它不同于 API 入口的 Redis 分布式限流；多 Pod 部署时总速率约等于单 Pod 配额乘 Pod 数，
+ * 所以生产配置必须按 provider 全局 quota、Pod 数和安全余量拆分。</p>
  *
  * <p>重试预算只放在 Resilience4j 这一层：Spring Cloud OpenFeign 默认 {@code Retryer.NEVER_RETRY}，
  * 这个默认应保持不变。若未来给 Feign 自己也配置 retry，会变成 R4j 次数 × Feign 次数的真实 HTTP 请求，
@@ -63,43 +72,35 @@ public class ResilientCallHelper {
     /**
      * 用 Retry + RateLimiter + CircuitBreaker 包住一次 provider 调用并执行。
      *
-     * <p>阅读本方法先分清"组装"和"执行"两个时刻。providerCall 这个 lambda 在 sender 里被创建时
-     * 不发送任何东西：它只是一个装着代码的 Supplier 对象，并捕获了 sender 已构造好的 request 引用。
-     * 下面的 decorateSupplier 同样不执行——每包一层只是返回一个新 Supplier，其 get() 先做自己的事
-     * 再调用内层 get()。直到 decorated.get() 那一行，执行才真正开始。展开后的等效逻辑：</p>
+     * <p>R4j 的 programmatic decoration 可以理解为“给原函数一层层套包装纸”。
+     * {@code decorateSupplier} 只返回新的 Supplier，不会立即发 HTTP；直到调用最外层
+     * {@code decorated.get()}，包装才从外向内依次执行。表达式从内向外组装：</p>
      *
      * <pre>
-     * decorated.get()
-     * 1. Retry 进入第 attempt 次循环（最多 max-attempts=3）：
-     *    1.1 CircuitBreaker.acquirePermission()：breaker OPEN 时抛 CallNotPermittedException，
-     *        内层 RateLimiter/providerCall 一次都不执行（本轮 0 次 HTTP，也不消耗 rate-limit permit）
-     *    1.2 RateLimiter.acquirePermission()：本 pod 对该渠道的 provider 调用太密时，
-     *        立即抛 RequestNotPermitted（timeoutDuration=0），providerCall 不执行；该异常在
-     *        circuit breaker 配置中被 ignore，不计入 provider failure
-     *    1.3 providerCall.get()：此刻才拆开 lambda——Feign 代理把 request 序列化成 JSON、
-     *        发 HTTP、反序列化回执、取 providerMessageId
-     *    1.4 成功：breaker 记录 onSuccess（耗时进入 slow-call 统计），返回结果，循环结束
-     *    1.5 失败：breaker 记录 onError（失败率统计），异常抛给 Retry
-     * 2. Retry 捕获异常：命中 ignore-exceptions（RequestNotPermitted/CallNotPermitted/Permanent）
-     *    直接上抛不重试；
-     *    否则按指数退避等待 200ms、400ms 后回到步骤 1。重试执行的是同一个 lambda，
-     *    因此三次尝试用同一份 request 和同一个 idempotencyKey。
+     * Retry(
+     *   CircuitBreaker(
+     *     RateLimiter(
+     *       providerCall
+     *     )
+     *   )
+     * )
      * </pre>
      *
-     * <p>所以一次 call() 触发的真实 HTTP 请求数是 0 次（限流、断路打开或 4xx permanent）、
-     * 1 次（成功）或最多 3 次（transient 失败重试）。circuitBreaker/rateLimiter 都按渠道名从
-     * registry 取共享有状态实例：push 和 email 互不影响。</p>
+     * <p>执行顺序是 Retry → CircuitBreaker → RateLimiter → Feign。breaker 已 OPEN 时，内层不执行；
+     * limiter 无许可时，Feign 不执行；真正的 transient provider failure 才由外层 Retry 发起下一次 attempt。
+     * 因此一次 {@code call()} 可能产生 0、1 或最多 3 次真实 HTTP，请勿把“调用 helper 一次”误解成
+     * “一定只发一次网络请求”。所有 attempt 复用同一 request 和 idempotencyKey。</p>
      */
     public String call(String circuitBreakerName, Supplier<String> providerCall) {
-        // circuitBreakerName 由 sender 传入：notificationPush / notificationEmail。
-        // 这里同名取 CircuitBreaker + RateLimiter：一个名字表达"这个 provider channel"的出站保护组合。
-        // 名字要和 application.yml 的 resilience4j.*.instances.* 对齐，否则会用默认配置。
+        // 阶段 1：从 registry 取得“有状态”的保护组件。registry 不是每次 new 一个对象；
+        // 同名调用共享失败统计和 permit。名字必须和 application.yml 的 instances.* 对齐。
         CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(circuitBreakerName);
         RateLimiter rateLimiter = rateLimiterRegistry.rateLimiter(circuitBreakerName);
-        // retry 实例名固定为 notificationDelivery，对应 application.yml 的 retry.instances.notificationDelivery。
+        // push/email 共用 retry 规则，但 breaker/limiter 分渠道；一个渠道故障或配额耗尽不拖累另一个渠道。
         Retry retry = retryRegistry.retry(SHARED_RETRY_INSTANCE);
 
-        // 装饰顺序：Retry(CircuitBreaker(RateLimiter(providerCall)))。
+        // 阶段 2：只组装调用链，下面三行不会发 HTTP。装饰顺序为
+        // Retry(CircuitBreaker(RateLimiter(providerCall)))。
         // 1) Retry 在最外层：每次 transient retry attempt 都重新经过保护链，真正重试时也消耗 provider quota。
         // 2) CircuitBreaker 在 RateLimiter 外层：breaker OPEN 时先快速失败，不消耗本地 rate-limit permit。
         // 3) RateLimiter 拒绝(RequestNotPermitted)会被外层 breaker 看见，所以 application.yml 必须把它
@@ -114,7 +115,7 @@ public class ResilientCallHelper {
                 )
         );
         try {
-            // 阶段 3：这里才是真正的执行点。上面的 decorateSupplier 只是"包函数"，不会发 HTTP；
+            // 阶段 3：这里才是真正的执行点。上面的 decorateSupplier 只是“包函数”，不会发 HTTP；
             // decorated.get() 会先进入 Retry，再进入 CircuitBreaker，再进入 RateLimiter，最后才调用 providerCall.get()。
             // providerCall.get() 内部就是 sender 传进来的 Feign 调用：
             // notificationProviderClient.send(request).providerMessageId()

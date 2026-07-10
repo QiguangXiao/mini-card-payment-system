@@ -344,7 +344,9 @@ Redis 命令**单线程串行**执行；一段 Lua 脚本执行期间**不会被
 
 ## 第六部分：Redisson —— 什么时候 buy，什么时候 build
 
-**所有现成限流库（Redisson `RRateLimiter`、Bucket4j-redis、Spring Cloud Gateway `RedisRateLimiter`）底层都是 Lua。** "用库"没绕开 Lua，只是把它藏起来——懂 Lua 才有资格选库、调库。
+Redis-backed 限流库通常也需要 Lua 或等价的服务端原子机制，把 read-modify-write 收进一次执行；
+例如 Spring Cloud Gateway 的 Redis limiter 和许多 Bucket4j/Redisson Redis 实现都会隐藏这层细节。
+所以“用库”减少的是自研与维护成本，不会消除原子性、key 设计、TTL 和失败策略这些问题。
 
 - **Redisson 是什么**：完整 Redis 客户端 + 分布式对象框架，提供 `RLock`（可重入分布式锁，带 watchdog 自动续租）、`RMap`、`RSemaphore`、`RRateLimiter` 等。核心 Apache-2.0，部分高级特性在 PRO。
 - **何时 buy**：**同时需要一批分布式原语**，尤其是**分布式锁**——`RLock` 的边界 case（续租、误删别人的锁、可重入）手写极易出 bug。

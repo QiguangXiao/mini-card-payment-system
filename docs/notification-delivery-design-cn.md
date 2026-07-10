@@ -257,6 +257,9 @@ Retry( CircuitBreaker( RateLimiter( provider.send ) ) )
   通常可以按 pod 数摊分，放在本地内存里少一次 Redis 往返，也不会让 Redis 故障影响通知发送。
   `timeout-duration=0` 表示抢不到许可就 fail-fast，不占住 worker thread 等令牌；worker 会把本轮
   当 transient failure，交给 `notification_deliveries.next_attempt_at` 做 durable backoff。
+  **当前边界**：这条路径也会增加一次 delivery `attempts`，即“provider 尚未被调用”与“provider 调用失败”
+  暂时共用失败预算。若要严格按语义区分，应增加“不增加 attempts、只释放 lease 并延后”的 reschedule 转换，
+  而不是让 worker thread 阻塞等待 permit。
 - **为什么 CircuitBreaker 包在 RateLimiter 外面**：这样 breaker OPEN 时可以先快速失败，不消耗
   本地 rate-limit permit。代价是 RateLimiter 的 `RequestNotPermitted` 会经过 breaker，所以
   `notificationPush` / `notificationEmail` 的 `circuitbreaker.ignore-exceptions` 必须包含它；

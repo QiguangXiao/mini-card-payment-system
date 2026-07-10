@@ -79,16 +79,16 @@ public class StatementReadService {
     // 返回 1=写入，0=被拒（已有更新版本/墓碑挡住了这次迟到写）。
     // 整段在 Redis 内单线程原子执行，所以 GET 比较 + SET 之间不会被插入其他写。
     private static final RedisScript<Long> CAS_WRITE_SCRIPT = RedisScript.of(
-            "local incoming = tonumber(ARGV[1])\n"
-                    + "local current = redis.call('GET', KEYS[1])\n"
-                    + "if current then\n"
-                    + "  local cur = tonumber(string.match(current, '^([%-%d]+)|'))\n"
-                    + "  if cur ~= nil and cur > incoming then\n"
-                    + "    return 0\n"
-                    + "  end\n"
-                    + "end\n"
-                    + "redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])\n"
-                    + "return 1\n",
+            "local incoming = tonumber(ARGV[1])\n"                              // 准备写入的 statements.version。
+                    + "local current = redis.call('GET', KEYS[1])\n"             // 读取当前 L2 envelope；key 不存在返回 nil。
+                    + "if current then\n"                                        // 只有已有值时才需要比较版本。
+                    + "  local cur = tonumber(string.match(current, '^([%-%d]+)|'))\n" // 从“version|payload”截出数字前缀。
+                    + "  if cur ~= nil and cur > incoming then\n"                // Redis 已有更新版本或更新墓碑。
+                    + "    return 0\n"                                            // 拒绝旧值迟到回填，不覆盖新版本地板。
+                    + "  end\n"                                                   // 结束版本较新判断。
+                    + "end\n"                                                     // 结束 current 存在判断。
+                    + "redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])\n"      // 写 envelope，并用毫秒 TTL 自动过期。
+                    + "return 1\n",                                               // 告诉 Java 本次 CAS 写入成功。
             Long.class
     );
 
@@ -96,11 +96,11 @@ public class StatementReadService {
     // counterfactual：直接 DEL 可能误删"我超时后、别人刚抢到"的那把锁（经典误删他人锁 bug）。
     // GET + DEL 必须原子，所以放进一段 Lua；KEYS[1]=lockKey，ARGV[1]=token，返回删除数(1/0)。
     private static final RedisScript<Long> RELEASE_REBUILD_LOCK_SCRIPT = RedisScript.of(
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
-                    + "  return redis.call('DEL', KEYS[1])\n"
-                    + "else\n"
-                    + "  return 0\n"
-                    + "end\n",
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then\n" // 只有 Redis 中仍是自己的唯一 token 才拥有释放权。
+                    + "  return redis.call('DEL', KEYS[1])\n" // 比较成功后立即删除；Lua 保证中间不会被别人抢锁。
+                    + "else\n"                               // token 不同表示锁已过期并可能被新 owner 重建。
+                    + "  return 0\n"                         // 什么也不删，避免 stale owner 误删新锁。
+                    + "end\n",                              // 返回值是 Redis DEL 的 1 或显式的 0。
             Long.class
     );
 
@@ -266,7 +266,11 @@ public class StatementReadService {
      */
     private void releaseRebuildLock(String lockKey, String token) {
         try {
-            redisTemplate.execute(RELEASE_REBUILD_LOCK_SCRIPT, List.of(lockKey), token);
+            redisTemplate.execute(
+                    RELEASE_REBUILD_LOCK_SCRIPT, // compare-token-then-delete 脚本。
+                    List.of(lockKey),             // KEYS[1]：当前 statement 的 rebuild lock key。
+                    token                         // ARGV[1]：本 worker 抢锁时写入的 owner token。
+            );
         } catch (RuntimeException exception) {
             // 释放失败不影响正确性：锁会在 PX TTL 到点后自动消失，最多让下一个重建者多等一会儿。
             log.warn("statement_read_cache_rebuild_unlock_failed key={} action=rely_on_ttl", lockKey, exception);
@@ -358,11 +362,11 @@ public class StatementReadService {
      */
     private Long writeViaCas(String key, long version, String envelope, long ttlMillis) {
         return redisTemplate.execute(
-                CAS_WRITE_SCRIPT,
-                List.of(key),
-                Long.toString(version),
-                envelope,
-                Long.toString(ttlMillis)
+                CAS_WRITE_SCRIPT,          // compare-version-then-set 脚本。
+                List.of(key),              // KEYS[1]：statement L2 cache key。
+                Long.toString(version),    // ARGV[1]：准备写入的 statements.version。
+                envelope,                  // ARGV[2]：“version|payload”或“version|”墓碑。
+                Long.toString(ttlMillis)   // ARGV[3]：PX 使用的毫秒 TTL。
         );
     }
 

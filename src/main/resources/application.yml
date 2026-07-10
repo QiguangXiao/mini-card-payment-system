@@ -430,8 +430,13 @@ api:
     trust-forwarded-for: false
 
 resilience4j:
+  # Resilience4j 把“配置”与“有状态实例”分开：下面每个 instances.<name> 会进入对应 Registry。
+  # Java 注解或 registry.rateLimiter("name") 必须使用同一个 name，才能拿到这组阈值和累计状态。
+  # CircuitBreaker 看近期健康度，Retry 决定同一调用内再试几次，RateLimiter 控制频率，Bulkhead 控制并发。
   circuitbreaker:
     instances:
+      # COUNT_BASED 表示按最近 N 次调用统计，而不是按最近 N 秒统计。
+      # 至少积累 minimum-number-of-calls 后才计算失败率，避免启动后的第一个失败立即把 breaker 打开。
       externalRisk:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 5
@@ -502,11 +507,8 @@ resilience4j:
         # 继续在同一轮 R4j retry 里立刻重试只会继续抢不到许可，应交给 durable retry/backoff。
         # NotificationDeliveryPermanentException 来自 Feign ErrorDecoder 对 4xx 的分类：
         # 这类请求契约/认证/配置错误不靠重试恢复，应交给 worker 直接 DEAD。
-        # 为什么写在 yml 而不是 RetryConfigCustomizer 代码里：resilience4j-spring-boot 的主流做法是
-        # 让一条重试策略的全部旋钮（次数/退避/异常分类）与本文件其他 R4j 实例同址。
-        # 类名字符串没有编译期检查，但启动时会按名加载类，异常类改名漏改这里会启动失败；
-        # 若整行被误删则退化为"4xx 也白白快重试 3 次"——最终仍会 DEAD（helper 对该异常原样上抛，
-        # NotificationDeliveryWorker.markPermanentFailed 不依赖重试层），只是多了重试噪声。
+        # 异常分类和次数放在同一个实例下，review 时能一次看全 retry budget。
+        # 这里使用异常类名字符串：重命名异常类时必须同步修改，否则启动绑定会失败。
         ignore-exceptions:
           - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
@@ -522,6 +524,8 @@ resilience4j:
         limit-refresh-period: 1s
         # 0 = 抢不到许可立刻 fail-fast，不占住 notificationDeliveryWorkerExecutor 等令牌；
         # worker 会把本轮记为 transient failure 并按 notification_deliveries.next_attempt_at 退避。
+        # 当前实现会因此消耗一次 durable attempts；若要严格区分“未调用 provider”和“调用失败”，
+        # 应增加不增加 attempts 的 reschedule 状态转换，而不是在 RateLimiter 里等待。
         timeout-duration: 0
       notificationEmail:
         limit-for-period: 20

@@ -18,6 +18,11 @@ import org.springframework.stereotype.Component;
  * contract validation, JSON envelope, メッセージ読取(メッセージよみとり),
  * 契約検証(けいやくけんしょう)。</p>
  *
+ * <p>基础背景：{@code ConsumerRecord} 是 Kafka 交给 listener 的传输对象，包含 topic、partition、offset、
+ * key、headers 和 value。项目把 value 设计成统一的 {@code IntegrationEvent} envelope：外层放
+ * eventId/eventType/eventVersion/occurredAt，payload 才放具体业务字段。共享 envelope 让所有 listener
+ * 先用同一套规则验证消息身份、版本和幂等键。</p>
+ *
  * <p>契约分工：<b>consumer correctness 只依赖 self-describing envelope</b>——永远解析 body，
  * 用 body 的 eventType 决定 dispatch。header 是纯 observability 元数据(kcat/DLT/日志排查
  * 不解析 JSON 就能看到消息身份)，不参与 correctness，所以这里既不读 header，
@@ -45,14 +50,17 @@ public class IntegrationEventReader {
      */
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {
-            // value 是 Kafka message body。这里永远解析 body envelope，再由 listener 用 eventType dispatch。
+            // 阶段 1：把 record.value() 的 JSON 反序列化成统一 envelope；此时还没有执行业务逻辑。
             // 如果 JSON 坏了，会抛 EventContractException，交给 KafkaConsumerConfiguration 配置的
             // DefaultErrorHandler：contract failure 不重试，直接发到对应 consumer 的 DLT。
-            IntegrationEvent event = objectMapper.readValue(record.value(), IntegrationEvent.class);
-            // 集中 validate transport contract，consumer 就能专注业务字段。
+            IntegrationEvent event = objectMapper.readValue(
+                    record.value(),          // Kafka value 是 producer 写入的 JSON 字符串。
+                    IntegrationEvent.class   // 先只解析稳定 envelope，payload 暂时保留 JsonNode。
+            );
+            // 阶段 2：集中校验 transport contract，consumer 才能专注业务字段。
             // 如果每个 listener 自己解析/校验，contract failure 会变成不一致的异常和重试行为。
-            validate(event);
-            return event;
+            validate(event); // validate 失败会抛 not-retryable EventContractException。
+            return event;    // 返回后由具体 listener 判断 eventType 并解析业务 payload。
         } catch (JsonProcessingException exception) {
             // JSON 格式错误是永久 contract failure，重试同一消息也不会成功。
             throw new EventContractException("integration event JSON is invalid", exception);

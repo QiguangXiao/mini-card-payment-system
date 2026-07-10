@@ -12,12 +12,22 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * <p>关键词：拦截器, 入口限流, preHandle, HandlerInterceptor, rate limit interceptor,
  * 429, インターセプター, 流量制限(りゅうりょうせいげん)。</p>
  *
+ * <h3>它位于请求链的哪里</h3>
+ * <pre>
+ * HttpRequestLoggingFilter
+ *   -> DispatcherServlet 找到 Controller 路由
+ *   -> 本 interceptor.preHandle()
+ *   -> Controller 参数绑定 / request body 反序列化
+ *   -> AuthorizationService transaction
+ * </pre>
+ * <p>因此超限请求虽然已经进入 Spring MVC，但还没有解析 body、开启授权事务、访问 Redis 风控或
+ * 获取 MySQL row lock。这里拦截的目标不是抵御网络层 DDoS，而是尽早保护应用和数据库热路径。</p>
+
  * <h3>为什么是 Interceptor 而不是 Filter（interview 对比点）</h3>
- * <p>项目里已有的 {@code HttpRequestLoggingFilter} 是 Servlet Filter：它跑在
- * DispatcherServlet 之前，看不到路由信息，适合"对一切请求都成立"的横切逻辑（日志要覆盖
- * 包括本拦截器 429 在内的所有响应，所以它必须在更外层）。限流只针对特定业务路由
- * （授权热路径），Interceptor 由 Spring MVC 按 path pattern 精确挂载，preHandle 返回前
- * 就能短路请求，且抛出的异常会走 {@code @RestControllerAdvice} 统一映射——错误契约不分叉。</p>
+ * <p>{@code HttpRequestLoggingFilter} 在 DispatcherServlet 之前运行，适合“所有 HTTP 请求都需要”的
+ * request id 和日志；它也能包住本 interceptor 返回的 429。限流只针对一个 MVC endpoint，
+ * Interceptor 可以用 path pattern 精确挂载，而且抛出的异常会走 {@code @RestControllerAdvice}
+ * 生成统一错误结构。Filter 也能限流，但需要自己判断 URI、处理顺序并写 429 response。</p>
  *
  * <h3>限流维度：为什么是客户端 IP（以及生产里应该是什么）</h3>
  * <p>理想维度是 cardId，但它在 request body 里，而 preHandle 跑在 body 反序列化之前——
@@ -58,18 +68,21 @@ public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
             HttpServletResponse response,
             Object handler
     ) {
-        // path pattern 只挂 /api/authorizations（collection path），GET /{id} 不会进来；
-        // 再按 method 收窄到 POST，OPTIONS/HEAD 这类探测请求不消耗令牌。
+        // 阶段 1：WebMvcConfiguration 已按 path 收窄到 /api/authorizations，这里再按 method 收窄。
+        // GET /{id} 不匹配该 path；OPTIONS/HEAD 等非授权写请求也不应消耗令牌。
         if (!"POST".equals(request.getMethod())) {
             return true;
         }
 
+        // 阶段 2：先从连接/header 解析分桶 key，再让 Redis Lua 原子地补充并消费一个令牌。
+        // 这里只传 client key，不读取 body，所以拒绝发生在 JSON 解析和业务事务之前。
         RateLimitDecision decision = rateLimiter.tryConsume(resolveClientKey(request));
         if (decision.allowed()) {
             return true;
         }
 
-        // 向上取整到秒并保底 1：Retry-After 是整数秒，返回 0 等于邀请客户端立刻重试。
+        // 阶段 3：令牌不足时把内部毫秒等待值转换成 HTTP Retry-After 的整数秒。
+        // 向上取整并保底 1；返回 0 等于邀请客户端立刻重试，容易形成 retry storm。
         long retryAfterSeconds = Math.max(1, (decision.retryAfterMillis() + 999) / 1000);
         meterRegistry.counter("api.ratelimit.denied").increment();
         log.warn(
@@ -77,7 +90,7 @@ public class AuthorizationRateLimitInterceptor implements HandlerInterceptor {
                 request.getRequestURI(),
                 retryAfterSeconds
         );
-        // 抛异常而不是自己写 response：429 与其他错误码共用 GlobalExceptionHandler 的出口，
+        // 阶段 4：抛异常而不是自己写 response。429 与其他错误码共用 GlobalExceptionHandler 的出口，
         // JSON body 结构和日志行为保持一致。preHandle 抛出的异常同样会被 advice 捕获。
         throw new RateLimitExceededException(retryAfterSeconds);
     }

@@ -22,6 +22,10 @@ import org.springframework.stereotype.Component;
  * <p>RiskAssessmentService 依赖 ExternalRiskGateway port；这个 adapter 才知道
  * Feign DTO、HTTP endpoint、timeout/bulkhead/circuit breaker 和 fallback 指标。</p>
  *
+ * <p>基础背景：CircuitBreaker 根据近期调用结果在 CLOSED/OPEN/HALF_OPEN 间切换；OPEN 时不再调用
+ * provider，直接进入 fallback。Semaphore Bulkhead 则只允许固定数量的并发线程进入外部调用，
+ * 满时立即拒绝。前者按“近期是否健康”保护，后者按“现在有多少并发”保护，职责不同。</p>
+ *
  * <p>包约定：{@code infrastructure/gateway} 放我方的出站 client + adapter；
  * {@code infrastructure/external} 只放模拟第三方的 server（对齐 notification 的
  * delivery/external 划分）。adapter 实现的是 application 层 port，"给内部用"是它的本职。</p>
@@ -34,7 +38,9 @@ public class ExternalRiskGatewayAdapter implements ExternalRiskGateway {
     private final MeterRegistry meterRegistry;
 
     @Override
-    // @CircuitBreaker/@Bulkhead 依赖 Spring AOP proxy。fallback signature 必须包含原参数和 Throwable。
+    // @CircuitBreaker/@Bulkhead 是声明式写法：Spring AOP 会在 bean 外生成 proxy，调用本方法前后执行保护逻辑。
+    // 因此必须从其他 bean 调用这个 public 方法；同类 self-invocation 会绕过 proxy。fallback signature
+    // 必须保留原参数并追加 Throwable，R4j 才能在失败时找到它。
     // Bulkhead 用 semaphore，而不是线程池隔离：当前调用仍在 authorization transaction 线程内，
     // 如果丢到另一个线程，Spring transaction/thread-bound connection 语义会变得很难解释。
     // maxConcurrentCalls 要小于 Hikari pool 的可用余量，防止外部风控 brownout 把连接池全部钉住。

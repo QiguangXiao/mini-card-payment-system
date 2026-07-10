@@ -17,6 +17,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>未来 Notification 拆成独立微服务时，它依然只依赖 Kafka integration event contract，
  * 不依赖 authorization domain class。这里不做通知业务规则，只把授权事件翻译成通知请求。</p>
+ *
+ * <p>阅读顺序：{@code @KafkaListener} 负责把 record 送进方法；{@link IntegrationEventReader}
+ * 负责 transport contract；本 adapter 按 eventType 路由并把 payload 翻译成 command；
+ * {@link RequestNotificationService} 才负责 Inbox idempotency 和创建通知投递记录。</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -34,7 +38,8 @@ public class AuthorizationNotificationListener {
             containerFactory = "notificationKafkaListenerContainerFactory"
     )
     public void onAuthorizationEvent(ConsumerRecord<String, String> record) {
-        // @KafkaListener 的 groupId 决定“哪一组消费者共享进度”；containerFactory 决定 retry/DLT 策略。
+        // 阶段 1：@KafkaListener 的 topics 决定从哪里读，groupId 决定和谁共享消费进度，
+        // containerFactory 决定线程数、retry、DLT 和 offset commit 策略。
         // 如果所有 bounded context 共用一个 group，Notification 可能抢走 Risk/Ledger 应该处理的消息。
         // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
         // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
@@ -42,8 +47,10 @@ public class AuthorizationNotificationListener {
         // 但设置 ack-mode=record，让 Spring Kafka container 在本方法正常 return 后自动提交这条 record 的 offset。
         // 如果 read()/requestNotification() 抛异常，异常会交给 notificationKafkaListenerContainerFactory
         // 配置的 DefaultErrorHandler：先按策略 retry，仍失败再投递到 notification DLT。
+        // 阶段 2：先解析并校验公共 envelope。坏 JSON/缺 eventId 会作为 contract failure 直接进入 DLT。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();
+        // 阶段 3：只把本 bounded context 感兴趣的 eventType 翻译成 notification command。
         if (AUTHORIZATION_APPROVED.equals(event.eventType())) {
             requestNotification(event, payload, NotificationType.AUTHORIZATION_APPROVED);
             return;
@@ -58,6 +65,8 @@ public class AuthorizationNotificationListener {
             JsonNode payload,
             NotificationType type
     ) {
+        // 阶段 4：进入 application service。eventId 会成为 Inbox 幂等键；Kafka retry/重复投递
+        // 不会重复创建同一批 notification_deliveries。
         service.requestNotification(new RequestNotificationCommand(
                 event.eventId(),
                 NotificationSubjectType.AUTHORIZATION,

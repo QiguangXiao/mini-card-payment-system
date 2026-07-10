@@ -24,6 +24,7 @@ public record KafkaConsumersProperties(
 ) {
 
     public KafkaConsumersProperties {
+        // compact constructor 会在 Spring 完成配置绑定时执行；缺 section 应在启动期暴露，而不是等 listener 创建。
         if (notification == null || riskFeature == null || ledger == null) {
             throw new IllegalArgumentException("messaging.consumers sections must be configured");
         }
@@ -37,6 +38,7 @@ public record KafkaConsumersProperties(
             int concurrency
     ) {
         public Consumer {
+            // 0 不表示“关闭消费”：它会让 container 无法创建；真正的开关应使用条件装配而不是非法并发数。
             if (concurrency <= 0) {
                 throw new IllegalArgumentException("consumer concurrency must be positive");
             }

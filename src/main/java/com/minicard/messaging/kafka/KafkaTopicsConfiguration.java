@@ -17,8 +17,9 @@ import org.springframework.kafka.config.TopicBuilder;
  * 拆开的原因：生产环境 topic 通常由运维/IaC 管理，consumer 行为才随应用发布——
  * 两者的变更节奏和责任人不同，混在一个类里会让"改消费重试策略"看起来像在动集群资源。</p>
  *
- * <p>NewTopic bean 由 Spring Kafka 的 KafkaAdmin 在启动时幂等创建，本地开发不用手工建 topic；
- * topic 已存在时不会被修改，所以调整 partition 数只对新环境生效。</p>
+ * <p>NewTopic bean 由 Spring Kafka 的 KafkaAdmin 在启动时幂等处理，本地开发不用手工建 topic。
+ * topic 已存在时不会重复创建；声明的 partition 数更大时 KafkaAdmin 可以扩容，但 Kafka 不支持缩小
+ * partition，已有 topic 的 replication factor 也不会靠这段 builder 自动重排。生产仍应由 IaC 管理变更。</p>
  */
 @Configuration
 // Kafka topic 名、DLT 名都从配置绑定进来，避免 listener/publisher 写死环境差异。
@@ -31,40 +32,40 @@ public class KafkaTopicsConfiguration {
         // 3 个 partitions 用来演示 consumer-group parallelism。
         // event key 使用 authorizationId，保证同一 authorization 的事件进入同一 partition。
         // 本地 Kafka 只有 1 个 broker，所以 replicas 必须是 1。
-        return TopicBuilder.name(properties.authorizationEvents())
-                .partitions(3)
-                .replicas(1)
-                .build();
+        return TopicBuilder.name(properties.authorizationEvents()) // name 来自 YAML，发布者和 listener 共用同一来源。
+                .partitions(3)  // 一条 record 只进入其中一个 partition；partition 是 group 并行度上限。
+                .replicas(1)    // 副本数不能超过 broker 数；本地只有一个 broker。
+                .build();       // 只构造 NewTopic 描述，真正创建由 KafkaAdmin 在启动阶段完成。
     }
 
     @Bean
     public NewTopic transactionEventsTopic(KafkaTopicsProperties properties) {
         // CardTransaction 是用户可见交易流水；单独 topic 让未来 notification 微服务
         // 可以只订阅交易事实，不需要理解 authorization 内部生命周期。
-        return TopicBuilder.name(properties.transactionEvents())
-                .partitions(3)
-                .replicas(1)
-                .build();
+        return TopicBuilder.name(properties.transactionEvents()) // card_transaction.* 的发送目的地。
+                .partitions(3)  // 允许同 group 最多三个 consumer 并行处理不同 partition。
+                .replicas(1)    // 本地学习环境单副本；生产通常提高副本数容忍 broker 故障。
+                .build();       // 返回 NewTopic bean 给 KafkaAdmin。
     }
 
     @Bean
     public NewTopic statementEventsTopic(KafkaTopicsProperties properties) {
         // Statement events 单独 topic，未来账单通知、PDF 生成、还款提醒可以独立订阅。
         // event key 使用 creditAccountId，保证同一账户账单顺序。
-        return TopicBuilder.name(properties.statementEvents())
-                .partitions(3)
-                .replicas(1)
-                .build();
+        return TopicBuilder.name(properties.statementEvents()) // statement.* 事件 topic。
+                .partitions(3)  // key 相同的 record 会稳定落到同一 partition。
+                .replicas(1)    // 单 broker 环境只能配置 1。
+                .build();       // topic 已存在时创建操作是幂等的。
     }
 
     @Bean
     public NewTopic repaymentEventsTopic(KafkaTopicsProperties properties) {
         // Repayment 是独立业务事实，不混入 statement topic。
         // event key 使用 creditAccountId，方便同一账户还款通知、对账投影按顺序处理。
-        return TopicBuilder.name(properties.repaymentEvents())
-                .partitions(3)
-                .replicas(1)
-                .build();
+        return TopicBuilder.name(properties.repaymentEvents()) // repayment.* 事件 topic。
+                .partitions(3)  // 不代表启动三个 listener；实际并发还由 consumer factory 决定。
+                .replicas(1)    // replication factor，和 consumer concurrency 是两个完全不同的概念。
+                .build();       // 结束 builder，生成资源声明。
     }
 
     @Bean
@@ -89,9 +90,9 @@ public class KafkaTopicsConfiguration {
     private NewTopic deadLetterTopic(String topicName) {
         // DLT partition 数和 source topic 对齐，因为 recoverer 会保留原 partition。
         // 如果 DLT partition 更少，发送到原 partition 可能失败，反而让 offset 无法推进。
-        return TopicBuilder.name(topicName)
-                .partitions(3)
-                .replicas(1)
-                .build();
+        return TopicBuilder.name(topicName) // 每个 bounded context 传入自己的 DLT 名。
+                .partitions(3)  // 必须覆盖 recoverer 可能保留的源 partition 编号 0..2。
+                .replicas(1)    // 本地 broker 限制；不表达 DLT 的消费并发。
+                .build();       // 生成供 KafkaAdmin 创建的 NewTopic bean。
     }
 }

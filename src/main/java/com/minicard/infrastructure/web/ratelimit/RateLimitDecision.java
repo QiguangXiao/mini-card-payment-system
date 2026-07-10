@@ -6,8 +6,10 @@ package com.minicard.infrastructure.web.ratelimit;
  * <p>关键词：限流判定, 降级放行, retry after, rate limit decision,
  * fail-open, 判定結果(はんていけっか)。</p>
  *
- * <p>结构对齐 {@code VelocityCheckResult}：用 degraded 标记"Redis 不可用时的降级放行"，
- * 让调用方（和 metrics）能区分"真的有余量"和"没查成所以放行"。</p>
+ * <p>为什么不只返回 boolean：拒绝时 HTTP 层还需要 {@code retryAfterMillis} 生成
+ * {@code Retry-After}；Redis 不可用时虽然同样放行，但 {@code degraded=true} 保留了
+ * “正常有令牌”和“限流器没判定成功”的语义差别。当前 unavailable metric 在 limiter 内记录，
+ * 这个字段主要用于测试和未来调用方策略，不参与业务正确性。</p>
  */
 public record RateLimitDecision(
         /** 是否放行本次请求。 */

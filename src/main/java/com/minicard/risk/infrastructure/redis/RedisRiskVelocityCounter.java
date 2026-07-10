@@ -33,6 +33,11 @@ import org.springframework.stereotype.Repository;
  * 收益与命中率无关、对每个请求都成立。这才是支付系统里 Redis 最对口的用法
  * （high-traffic + 分布式 + 原子计数）。</p>
  *
+ * <h3>先理解 sliding window log</h3>
+ * <p>Redis ZSET 是“member 唯一、按 score 排序”的集合。本实现把一次授权尝试存成一个 member，
+ * 把发生时间的毫秒值存成 score；检查时删除窗口下界以前的 member，再用 ZCARD 统计剩余数量。
+ * 因此它保存的是过去 N 秒内每一次真实尝试，而不是只保存一个累计数字。</p>
+
  * <h3>为什么用 sliding window（ZSET）而不是 fixed window（INCR）</h3>
  * <p>fixed window（按分钟 bucket `INCR`）实现简单，但有 boundary burst 问题：在窗口边界附近，
  * 攻击者可以在前一个窗口末尾和后一个窗口开头各打满，瞬时速率达到上限的 2 倍。
@@ -66,16 +71,17 @@ public class RedisRiskVelocityCounter implements RiskVelocityCounter {
      * ARGV[3]=唯一成员；ARGV[4]=key 的 TTL 秒数。返回窗口内（含本次）的尝试数。</p>
      */
     private static final RedisScript<Long> SLIDING_WINDOW = RedisScript.of(
-            // ZADD 把"本次尝试"按时间戳记入有序集合。
-            "redis.call('ZADD', KEYS[1], ARGV[1], ARGV[3])\n"
+            // Lua 基础：KEYS[1] 是这张卡的 Redis key；ARGV[] 是 Java 传入的时间、member 和 TTL。
+            // ZADD 把“本次尝试”按时间戳记入有序集合。
+            "redis.call('ZADD', KEYS[1], ARGV[1], ARGV[3])\n" // score=发生时间，member=本次尝试的唯一标识。
             // 裁掉 score < 窗口下界 的旧尝试（'(' 表示开区间，保留正好等于下界的）。
-            + "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. ARGV[2])\n"
+            + "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. ARGV[2])\n" // 删除窗口下界以前的旧尝试。
             // 剩下的就是窗口内的尝试数（包含本次）。
-            + "local count = redis.call('ZCARD', KEYS[1])\n"
+            + "local count = redis.call('ZCARD', KEYS[1])\n" // ZCARD 返回裁剪后仍在窗口内的 member 数。
             // 给整个 key 续期：长时间没有授权的卡，其窗口 key 会自动过期，避免 Redis 内存泄漏。
             // 如果不 EXPIRE，海量历史卡的空窗口 key 会永久堆积。
-            + "redis.call('EXPIRE', KEYS[1], ARGV[4])\n"
-            + "return count",
+            + "redis.call('EXPIRE', KEYS[1], ARGV[4])\n" // 续期整个 ZSET；长期不再刷卡的 key 会自动消失。
+            + "return count",                            // 把含本次尝试的窗口计数返回 Java。
             Long.class
     );
 
@@ -105,6 +111,7 @@ public class RedisRiskVelocityCounter implements RiskVelocityCounter {
      */
     @Override
     public VelocityCheckResult countRecentAuthorizations(String cardId, Instant since) {
+        // Clock 可在测试中固定；now 同时用于 ZSET score 和唯一 member 的可读前缀。
         Instant now = Instant.now(clock);
         // 唯一成员：同一毫秒内的并发尝试 score 可能相同，ZSET 成员必须唯一，否则会被去重导致少计。
         String member = now.toEpochMilli() + "-" + UUID.randomUUID();
@@ -112,13 +119,14 @@ public class RedisRiskVelocityCounter implements RiskVelocityCounter {
         long ttlSeconds = properties.local().velocityWindowSeconds() + 1;
 
         try {
+            // 一次 execute 对 Redis 来说是一段不可插入其他命令的 Lua 执行；Java 侧不需要再加 JVM 锁。
             Long count = redisTemplate.execute(
-                    SLIDING_WINDOW,
-                    List.of(KEY_PREFIX + cardId),
-                    Long.toString(now.toEpochMilli()),
-                    Long.toString(since.toEpochMilli()),
-                    member,
-                    Long.toString(ttlSeconds)
+                    SLIDING_WINDOW,                        // 要执行的脚本，声明返回 Long count。
+                    List.of(KEY_PREFIX + cardId),          // KEYS[1]：一张卡对应一个 ZSET。
+                    Long.toString(now.toEpochMilli()),     // ARGV[1]：本次 member 的 score。
+                    Long.toString(since.toEpochMilli()),   // ARGV[2]：滑动窗口下界。
+                    member,                               // ARGV[3]：防同毫秒去重的唯一 member。
+                    Long.toString(ttlSeconds)              // ARGV[4]：空闲 ZSET 的 TTL 秒数。
             );
             return VelocityCheckResult.available(count == null ? 0 : count.intValue(), VelocitySource.REDIS);
         } catch (DataAccessException exception) {

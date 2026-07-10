@@ -21,6 +21,10 @@ import org.springframework.stereotype.Component;
  * 放我方出站 client + adapter（按机制命名，对齐 risk/gateway、notification/delivery），
  * {@code infrastructure/external} 只放模拟第三方的 server。</p>
  *
+ * <p>基础背景：CircuitBreaker 平时是 CLOSED，正常放行并统计结果；失败率超过阈值后变成 OPEN，
+ * 新任务不再等待网络 timeout，而是快速进入 fallback；等待一段时间后用 HALF_OPEN 的少量探测调用
+ * 判断银行是否恢复。它不保存扣款任务，durable retry 仍属于 DelayJob。</p>
+ *
  * <p>R4j 组合刻意与另外两家不同（选择规则见 spring-java-technical-learning §10.3）：</p>
  * <pre>
  * - CircuitBreaker: 要。银行网关宕机时快速失败，让 DelayJob 尽早退避，
