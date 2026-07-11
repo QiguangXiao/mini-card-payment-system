@@ -146,6 +146,63 @@ mini-card.repayment-events.v1       repayment.received
 
 `concurrency`（如 risk feature = 3）只提高同 group 内并行度，**有效并行度受 partition 数限制**（3 partitions → 最多 3 个有效线程，再大只是空闲）。数值配置在 `messaging.consumers.*.concurrency`（绑定类 `KafkaConsumersProperties`）——它和 worker pool size 一样是"处理并行度"，统一放 YAML 而不是硬编码在 factory 里。
 
+### 5.5 消费速率与 poll 循环：本项目刻意走默认值的参数（以及生产什么时候要拧）
+
+先纠正一个常见直觉：**Kafka 没有"每秒最多推给你多少条"的配置，因为 consumer 是 pull 模型**——
+你不调 `poll()` 就没有消息进来；处理不过来的消息留在 broker 里变成 consumer lag。
+所以消费速率不是"配"出来的，而是由 `单批条数 × 处理一条的耗时` 自然决定的。能拧的旋钮都围绕
+"一口咬多大"和"多久必须咬一口"。
+
+本项目 `application.yml` 里**没有出现**、走 Kafka client 默认值的参数：
+
+| 参数 | 默认值 | 管什么 | 本项目为什么默认就够 |
+| --- | --- | --- | --- |
+| `max.poll.records` | 500 | 一次 `poll()` 最多返回几条 | listener 单条只做"inbox 幂等插入 + 业务行"一个短事务（毫秒级）：500 × ~5ms ≈ 2.5s，远小于 5 分钟上限 |
+| `max.poll.interval.ms` | 300000（5min） | 两次 `poll()` 的最大间隔，超过即被认定"消费卡死"踢出 group | 同上，单批 2.5s 安全余量巨大 |
+| `session.timeout.ms` | 45000 | 心跳超时，判定"进程死没死" | 默认的宕机检测速度对秒级容忍的投影/通知足够 |
+| `heartbeat.interval.ms` | 3000 | 后台心跳频率 | 跟随 session.timeout 的默认比例即可 |
+| `fetch.min.bytes` / `fetch.max.wait.ms` | 1 / 500 | broker 攒多少数据/等多久才回包（吞吐 vs 延迟） | 本地流量小，不需要为吞吐攒批 |
+| `partition.assignment.strategy` | RangeAssignor（列表里带 CooperativeSticky 供升级） | rebalance 时怎么重分 partition | 单实例学习环境感受不到 rebalance 代价 |
+
+**"要不要配"的判断公式只有一条**：`max.poll.records × 单条最坏耗时 < max.poll.interval.ms`。
+本项目满足是因为架构先把慢活挪走了——listener 只写 DB，昂贵的 provider HTTP 在 poller/worker 那条
+DB 队列后面（§7 的 inbox + 通知的 delivery 队列）。**消费得快不是调参调出来的，是 listener 里不干慢活换来的。**
+
+反过来，把慢活放进 listener 的系统长这样（生产最常见的 Kafka 事故模式）：
+
+```text
+事故重放：listener 里同步调慢 HTTP，max.poll.records 没校准
+t0     poll() 返回 500 条，每条同步调一次外部接口（平均 800ms）→ 这批要 400s
+t300s  broker 5 分钟内没等到下一次 poll()，判定该 consumer 消费卡死，踢出 group。
+       注意：心跳线程此刻还在正常跳——心跳只证明进程活着（session.timeout 管这个），
+       证明不了消费没卡住（max.poll.interval 管这个）。两条存活判定是分开的。
+t300s  rebalance：它的 partition 分给同组其他实例，从上次提交的 offset 重放
+       → 已处理未提交的几百条被重复处理（幂等没做好的系统在这里出业务事故）
+t400s  原 consumer 处理完想提交 offset → CommitFailedException（已不是成员）→ 重新 join
+       → 又触发一次 rebalance。处理速度不改，就无限循环 = rebalance storm
+```
+
+修法优先级：把慢活挪出 listener（本项目的结构性答案）> 调小 `max.poll.records`（50~100）>
+调大 `max.poll.interval.ms`（治标，且拉长真故障的发现时间）。
+
+**真实生产项目通常显式配置的清单**（按动机分组）：
+
+1. **防 rebalance storm**：`max.poll.records` 按上面公式校准；升级到 `CooperativeStickyAssignor`
+   （增量重分配，rebalance 不再全组 stop-the-world）；K8s 滚动发布再加 static membership
+   （`group.instance.id`），重启的 pod 回来还认领原 partition，避免每次发布触发两轮 rebalance。
+2. **吞吐**（日志/埋点这类高吞吐 topic）：调大 `fetch.min.bytes`（如 64KB）+ `fetch.max.wait.ms`，
+   用一点延迟换 broker 攒批，网络往返数量级下降。
+3. **正确性**：上游用 Kafka 事务时 consumer 配 `isolation.level=read_committed`；
+   `auto.offset.reset` 生产多用 `latest` 并配合 lag 告警——注意它**只在 group 没有已提交 offset 时生效**
+   （新 group / offset 过期被清），不是"每次启动从哪读"，这是最常被面试问倒的误解。
+4. **容量**：partition 数是并行度天花板，扩 consumer 实例扩不过它；而 partition 只能加不能减，
+   加了还会改变 key→partition 映射（短暂破坏同 key 有序），所以要提前规划。
+
+**生产怎么应对"机器能力"——不是动态调参，而是三件套**：静态保守值（按最坏单批耗时留余量）+
+**consumer lag 当压力表**（lag 持续增长 = 消费能力不足；lag 逼近 retention = 快要丢数据，双阈值告警）+
+lag 驱动横向扩容（KEDA/HPA 按 lag 加实例，上限 partition 数）。pull 模型下弱机器自动消费得慢，
+lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"感知能力动态调参"简单且可审计。
+
 ---
 
 ## 6. Kafka adapter 与 envelope
