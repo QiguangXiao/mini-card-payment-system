@@ -1,3 +1,26 @@
+# 当前默认配置面向“单实例本地学习 / 小项目”：显式限制同时执行的 request workers，避免 Tomcat 默认
+# 200 个线程一起争只有 10 个连接的 Hikari pool。connector 层仍可持有更多连接，见 accept-count 注释。
+# 它是 starting point，不是压测后的 SLA。
+# 生产大流量参考（例如 4 vCPU/8 GiB、8+ API Pods）：max threads 可从 200~300、accept-count 100~200、
+# max-connections 4096~8192 起步，但必须和每 Pod Hikari、RDS 总连接预算、external provider capacity 一起压测；
+# 单纯把线程调大不会提高同账户 row lock 或 MySQL writer 的吞吐。
+server:
+  tomcat:
+    threads:
+      max: 80
+      min-spare: 10
+    # accept-count 不是“80 个 worker 满后还能排多少业务请求”：Tomcat 先接受并持有最多
+    # max-connections 个连接；达到该上限后，accept-count 才是 OS listen backlog，再满才拒绝新连接。
+    # 真正带明确重试语义的主动背压仍是 API RateLimiter 的 429，以及 DB pool 耗尽后的 503。
+    accept-count: 50
+    max-connections: 2048
+    # 等待已接受连接提交 HTTP request line 的时间；必须放在 server.tomcat 下，server.connection-timeout
+    # 在 Boot 3 已不绑定。它不是整个 controller 请求的业务 timeout。
+    connection-timeout: 3s
+    # 不显式配置时 keep-alive 会继承上面的 3s。小项目设 30s 保留连接复用；生产在 ALB 等 LB 后面时，
+    # 后端值应略大于 LB idle timeout（例如 LB=60s、后端=65s），避免复用边界产生间歇 502。
+    keep-alive-timeout: 30s
+
 spring:
   application:
     # application name 会进入 Actuator/Micrometer tags，生产排查时用于区分服务。
@@ -15,6 +38,23 @@ spring:
     # driver-class-name 对 MySQL 8 通常可由 URL 推断；这里显式写出来，是为了让学习者一眼看出
     # 当前 persistence source of truth 是 MySQL，而不是 H2/PostgreSQL/内存库。
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 小项目推荐：maximum=10 足以覆盖当前学习流量；显式写出是为了不把 library default 当容量设计。
+      # 生产大流量参考：每 API Pod 可从 20~30 起步，例如 8 Pods × 25 = 200 条最坏连接；
+      # 必须小于 RDS/RDS Proxy 可承载总连接并给 migration、admin、batch 留余量。不要看到 pending 就盲目扩池。
+      maximum-pool-size: 10
+      minimum-idle: 5
+      # 小项目和支付 API 都不应沿用 Hikari 默认 30s 排队；HTTP 侧 1s 后由专门 handler 返回 503，
+      # 客户端应等待 Retry-After 并复用原 Idempotency-Key，不能生成新 key。
+      # 这个共享 DataSource 同时服务 Kafka listener/worker：池若连续耗尽约 5s，listener 可能在
+      # Hikari 1s × 3 次获取 + Kafka FixedBackOff(1s × 2) 后进入 DLT；当前 DLT 尚无 monitor/replay，
+      # 这是快速失败换来的明确 trade-off，详见 traffic-rate-limiting-and-capacity-cn.md 的 overload trace。
+      # 生产大流量通常从 500~1000ms 起步，再按 API timeout/SLO 校准，并优先隔离 API/consumer/batch workload。
+      connection-timeout: 1000
+      # 500ms 单独约束坏连接 aliveness check，给 1s 的总获取连接预算保留余量；这是预算拆分而非 Hikari 强制约束。
+      validation-timeout: 500
+      idle-timeout: 600000
+      max-lifetime: 1800000
   sql:
     init:
       # Schema migration 交给 Liquibase；不要再启用 Spring SQL init，
@@ -174,8 +214,9 @@ messaging:
     ledger:
       group-id: mini-card-ledger-v1
       concurrency: 2
-    dead-letter-monitor:
-      group-id: mini-card-dead-letter-monitor-v1
+    # 当前只由 error handler 把失败 record 写入上面的三个 DLT，没有 @KafkaListener 消费 DLT。
+    # 生产补齐时应增加独立 monitor group 订阅三个 DLT，记录 metric/告警，并在修复根因后受控 replay；
+    # 不要收到死信就自动回投 source topic，否则永久坏消息会形成 source -> DLT -> source 的无限循环。
 
 outbox:
   publisher:
@@ -221,7 +262,11 @@ delay-jobs:
     # 对应代码：DelayJobRecoverer 扫 status='PROCESSING' AND next_attempt_at<=now（lease 过期 = worker 可能宕机）。
     recovery-fixed-delay-ms: 5000
     # 对应代码：DelayJobPoller 单轮领取上限（LIMIT）。
-    max-per-run: 100
+    # 小项目推荐 16：均匀分布时约为两个 4-thread pool 总并发 8 的 2 倍，减少 queue 中提前燃烧 lease。
+    # 类型倾斜时会退化：若 16 条全是 AUTO_REPAYMENT，就是单个 4-thread pool 并发的 4 倍，general pool 空闲。
+    # 生产大流量参考：若拆成独立 job Pods、每 Pod 两池各 8 threads，可从 32/Pod 起步；
+    # 最终应改成 capacity-aware claim，再用 backlog/oldest-age/queue-reject 压测决定，而不是固定追求更大 batch。
+    max-per-run: 16
     # 对应字段：delay_jobs.attempts；达到上限后 DelayJob.markFailed 置 DEAD，等人工处理。
     max-attempts: 10
     # 对应字段：delay_jobs.next_attempt_at 在 PROCESSING 时表示 lease deadline。
@@ -252,7 +297,10 @@ notification:
     # 对应代码：NotificationDeliveryRecoverer 扫 status='PROCESSING' AND next_attempt_at<=now。
     recovery-fixed-delay-ms: 5000
     # 对应代码：NotificationDeliveryPoller 单轮领取的 LIMIT。
-    batch-size: 50
+    # 小项目推荐 40：对齐当前 push 20/s + email 20/s 的每 Pod 总 provider quota，减少持续 reschedule。
+    # 生产大流量参考：若 provider 全局 quota=1000/s、10 Pods、保留 20% headroom，则每渠道约 80/s/Pod，
+    # batch 可从每 Pod 总可消化量附近起步；必须按“全局 quota ÷ Pod 数 × 安全系数”计算，不能随扩容线性放大。
+    batch-size: 40
     # PROCESSING lease 超时秒数：必须 > 一次"provider 调用(含 Resilience4j 重试) + finalize"的正常耗时，
     # 否则正常投递还没结束 lease 就过期，recoverer 会重复领取。
     # 对应字段：notification_deliveries.next_attempt_at 在 PROCESSING 时表示 lease deadline。
@@ -419,9 +467,12 @@ api:
     # kill switch：false 时整个限流装配（含 interceptor）都不注册，切换需要重启。
     enabled: true
     # 令牌桶容量 = 允许的瞬时突发量。冷启动/闲置后重建的桶从满桶开始，第一波允许打满 20 个。
+    # 小项目推荐 20；生产大流量若按认证 client 维度且合同允许持续 50/s，可从 burst 100 起步。
+    # 生产数字必须来自 client SLA/merchant tier，而不是为了提高系统 QPS统一放宽所有调用方。
     capacity: 20
     # 每秒补充令牌数 = 允许的持续速率。持续洪峰会被压到 10 req/s，多余请求收到 429。
     # 注意这是 per-instance 视角之外的**全局**值：桶在 Redis 里，多实例共享同一个调用方的桶。
+    # 小项目推荐 10/s；生产大流量示例可按 authenticated client 从 50/s 起步，并在 gateway 再设全局保护。
     refill-per-second: 10
     # 是否信任 X-Forwarded-For。默认 false（安全默认值）：该 header 可伪造，直连场景下
     # 攻击者每个请求换一个首段 = 每个请求一个新桶，per-IP 限流被完全绕过。
@@ -521,6 +572,8 @@ resilience4j:
       # 出站 provider quota 通常可以按实例数摊分，放本地内存能少一次 Redis 往返，也避免 Redis 故障
       # 影响后台通知发送。真实生产应按 provider 给的全局 quota / pod 数 / 安全余量配置。
       notificationPush:
+        # 小项目推荐 20/s/Pod。生产示例：provider 全局 quota=1000/s、10 Pods、保留 20% headroom，
+        # 则每渠道配置约 80/s/Pod；扩/缩 Pod 时必须重算，不能让集群总速率意外越过 provider quota。
         limit-for-period: 20
         limit-refresh-period: 1s
         # 0 = 抢不到许可立刻 fail-fast，不占住 notificationDeliveryWorkerExecutor 等令牌；
@@ -528,6 +581,7 @@ resilience4j:
         # 按 fixed-delay-ms 延后 next_attempt_at，但不增加 attempts，因为 provider HTTP 尚未发生。
         timeout-duration: 0
       notificationEmail:
+        # 与 push 分渠道计算；真实 email/push provider 通常配额不同，生产不要机械保持相同数字。
         limit-for-period: 20
         limit-refresh-period: 1s
         timeout-duration: 0
@@ -537,6 +591,8 @@ resilience4j:
         # 使用 semaphore bulkhead，同线程限并发，不把 @Transactional 内的调用丢到另一个线程。
         # 这个值必须小于 Hikari pool 可用连接数减去 headroom：如果 Hikari 是 10，就不能把 risk bulkhead 配成 10。
         # 这样外部风控全堵时，最多只有 max-concurrent-calls 条授权事务占着连接，其他端点仍有余量。
+        # 小项目推荐 4（Hikari=10，必须留连接给其他路径）。生产大流量每 API Pod 可从 8~12 起步，
+        # 前提是 Hikari 20~30、provider quota 和压测都支持；事务内 HTTP 未拆前不要直接追求更大。
         max-concurrent-calls: 4
         # 0 表示 bulkhead 满时立即 fail-closed，而不是排队继续占 Tomcat request thread。
         max-wait-duration: 0

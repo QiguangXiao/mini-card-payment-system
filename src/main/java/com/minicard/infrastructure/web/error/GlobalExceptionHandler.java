@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -99,6 +101,34 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfterSeconds()))
                 .body(new ErrorResponse("RATE_LIMIT_EXCEEDED", exception.getMessage(), Instant.now()));
+    }
+
+    /**
+     * 数据库连接池耗尽或数据库不可用时返回 503，明确告诉客户端这是暂时容量故障。
+     */
+    @ExceptionHandler({
+            CannotCreateTransactionException.class,
+            CannotGetJdbcConnectionException.class
+    })
+    public ResponseEntity<ErrorResponse> handleDatabaseUnavailable(Exception exception) {
+        // @Transactional 路径通常在事务开始时抛 CannotCreateTransactionException；非事务查询可能直接抛
+        // CannotGetJdbcConnectionException。只匹配这两个顶层类型，不遍历 cause 链，避免把 outcome unknown
+        // 等其他事务异常误报成可安全重试的连接池过载。
+        // 反事实：如果落到 catch-all 500，客户端无法区分“暂时没有 DB capacity”和真正的内部 bug。
+        // 503 + Retry-After 允许客户端稍后复用同一个 Idempotency-Key 重试，仍由服务端幂等约束防重复资金动作。
+        log.warn(
+                "database_connection_unavailable exceptionType={} message={}",
+                exception.getClass().getSimpleName(),
+                exception.getMessage()
+        );
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(new ErrorResponse(
+                        "DATABASE_UNAVAILABLE",
+                        "Database capacity is temporarily unavailable; retry later and reuse the same "
+                                + "Idempotency-Key for state-changing requests",
+                        Instant.now()
+                ));
     }
 
     @ExceptionHandler({

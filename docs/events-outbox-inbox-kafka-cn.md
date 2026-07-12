@@ -214,20 +214,21 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
   - `topicFor` 按 `eventType` 前缀路由到各 context topic，未知类型 fail-fast。
 - payload 把 `amount` 表示为 **decimal 文本 + currency**，跨 JSON 存储保精度，防 consumer 误用二进制浮点。
 
-> header 与 payload 都带 `eventId/eventType`：header 是 transport-level metadata（routing/logging/DLT），payload 是 durable contract；`IntegrationEventReader` 校验两者一致，防 transport contract 损坏。
+> header 与 payload 都带 `eventId/eventType`：header 是 transport-level observability metadata（logging/DLT 排查），payload 是 durable contract。`IntegrationEventReader` 只信任 self-describing body；手工 replay 没有 header 也能正确消费，header 写错只会误导排查，不参与 correctness。
 
 ---
 
 ## 7. Consumer side：契约校验 + 双层幂等
 
 - **每个 context 一个 listener + 独立 group + 独立 DLT**：`AuthorizationNotificationListener` / `CardTransactionNotificationListener` / `StatementNotificationListener` / `RepaymentNotificationListener`（Notification）、`AuthorizationRiskFeatureListener`（Risk）、`CardTransactionLedgerListener` / `RepaymentLedgerListener`（Ledger）。互不影响、可独立扩缩与重放。
-- `IntegrationEventReader.read(...)`：反序列化 + 集中校验 transport contract（`eventId/payload` 必填、`eventType` 必填、`eventVersion >= 1`、**header 的 eventId 必须等于 payload 的 eventId**）。契约错误抛 `EventContractException`（永久失败）。`requiredText/requiredInstant` 让坏格式表现为 contract failure，而不是底层 `DateTimeParseException`。
+- `IntegrationEventReader.read(...)`：反序列化 + 集中校验 self-describing body envelope（`eventId/payload` 必填、`eventType` 必填、`eventVersion >= 1`）；header 只用于 observability，不参与 correctness。契约错误抛 `EventContractException`（永久失败）。`requiredText/requiredUuid/requiredDecimal/requiredCurrency/requiredInstant` 统一读取 payload 的通用数据类型，具体 eventType 需要哪些字段仍由 listener 声明。
 - **双层幂等（消费侧最关键）**：
   1. **Inbox claim（第一道）**：`ConsumerInboxRepository.claim(consumerName, eventId)`，底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)` 判定"第一次消费"，`DuplicateKeyException → false`。
   2. **业务唯一键（第二道）**：`ledger_entries` 对 `source_event_id + entry_type` 唯一、`notifications.source_event_id` 唯一。挡住"绕过 inbox 的手工 replay / 补偿脚本"。
   - **inbox claim 与业务写在同一个 `@Transactional`**（见 `RecordLedgerEntryService`）。**反向事实**：否则 claim 成功但业务写失败会"假装消费过"，造成**丢消费**。
 - **错误处理与 DLT**（`KafkaConsumerConfiguration`）：`DeadLetterPublishingRecoverer`（保留原 partition 便于排查/重放）+ `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；**`addNotRetryableExceptions(EventContractException.class)`**——永久契约错误直进 DLT 不空转，瞬时错误才退避重试。DLT topic：`mini-card.notification.dlt.v1` / `mini-card.authorization-risk-feature.dlt.v1` / `mini-card.ledger.dlt.v1`。
   - **为什么每个 consumer 一个 DLT**：同一条消息可能对 Risk 成功、对 Notification 失败；分开后可只修复/replay 失败的 consumer，不影响其他 context。
+  - **当前运维边界**：系统只负责把失败 record 发进三个 DLT，尚无 listener/monitor group 消费它们，也没有 DLT metric、告警或 replay 工具。生产应增加独立 monitor group 同时订阅三个 DLT，记录原 topic/partition/offset、异常 headers 与 `eventId` 并告警；修复根因后再受控 replay，不能自动回投造成无限循环。
 
 ---
 
@@ -281,12 +282,12 @@ consumer_inbox(consumer_name, event_id, processed_at, PRIMARY KEY (consumer_name
 
 ## 11. 评价：优点与真实 gap（已对齐代码核对）
 
-**优点（可照着讲一轮系统设计面）**：Transactional Outbox 落地正确（aggregate 缓冲 → 同事务写 outbox → 幂等重放不重复 append）；投递复用 claim/publish/finalize/recover 四段、等 ack 不持锁、lease+token 重校验+recoverer 兜底、指数退避+DEAD；显式 at-least-once + 双层消费者幂等且同事务；envelope/contract 成熟（header↔payload eventId 一致性校验）；Kafka 层职责干净（同步等 ack、按聚合 partition、per-context topic/group/DLT、可重试 vs 不可重试分类）；schema 配套索引/约束到位。
+**优点（可照着讲一轮系统设计面）**：Transactional Outbox 落地正确（aggregate 缓冲 → 同事务写 outbox → 幂等重放不重复 append）；投递复用 claim/publish/finalize/recover 四段、等 ack 不持锁、lease+token 重校验+recoverer 兜底、指数退避+DEAD；显式 at-least-once + 双层消费者幂等且同事务；self-describing body envelope 与 typed contract reader 边界清楚；Kafka 层职责干净（同步等 ack、按聚合 partition、per-context topic/group/DLT、可重试 vs 不可重试分类）；schema 配套索引/约束到位。
 
 **真实 gap（都不是 bug，是"上生产还差的工程化"，本次已核对仍存在）**：
 
 1. **数据保留 / 清理缺失（最该补）**。`outbox_events` 的 PUBLISHED 行、`consumer_inbox` 的所有行**永不删除**（已核对 `messaging` 下无 retention/cleanup job）。索引保证热路径快，但**存储无界增长**。生产需按 `published_at`/`processed_at` 滚动归档或时间分区 `DROP PARTITION`。*面试几乎必问"outbox 表会不会爆"。*
-2. **producer 侧 DEAD 是死胡同，缺可观测 / 重放**。消费侧有 DLT（且 `application.yml` 配了一个 `dead-letter-monitor` group 监控消费 DLT），但 **outbox 事件转 `DEAD` 后只是躺在表里**，已核对 `messaging/outbox` 无 metrics/告警/重放入口。至少应有 `DEAD` 计数指标 + 把 DEAD 改回 PENDING 的运维路径。
+2. **producer 侧 DEAD 和 consumer 侧 DLT 都缺完整运维闭环**。消费失败会被写入三个 per-context DLT，但当前没有 listener/monitor group 消费，因而没有 DLT metric、告警或 replay 工具；outbox 事件转 `DEAD` 后也只是躺在表里。生产补齐时，consumer 侧应由独立 monitor group 订阅三个 DLT并告警，修复代码或数据后再受控 replay；producer 侧至少应有 `DEAD` 计数指标 + 把 DEAD 改回 PENDING 的运维路径。
 3. **`eventVersion` 有字段但无消费侧版本协商**。`IntegrationEventReader` 只校验 `eventVersion >= 1`（已核对），**consumer 不按版本分支也不拒绝未知版本**。schema evolution 目前是"约定"不是"强制"：发不兼容的 v2 且字段恰好重叠时会被**静默误读**。要补：consumer 按 `(eventType, eventVersion)` 路由 / 拒绝，或上 schema registry。
 
 > 跨 topic 无全局有序、polling 的秒级延迟，是**有意取舍**而非 gap。
@@ -333,7 +334,7 @@ partitionKey=聚合 id 保证同聚合有序；`concurrency=3` 不破坏单 part
 `idx_outbox_publishable(status,...)` 让 PENDING 聚簇，PUBLISHED 堆积不影响扫描。但存储无限涨是真 gap（#1）：按 `published_at` 滚动迁冷表/删除，或按天时间分区 `DROP PARTITION`（比 DELETE 省）。
 
 **Q8. 为什么 payload 用 `JsonNode` 而不是强类型 DTO？字段写错谁兜？**
-envelope 稳定 + payload 灵活（Tolerant Reader），避免 DTO 爆炸和版本僵化。`IntegrationEventReader.requiredText/requiredInstant` 显式校验，缺字段抛 `EventContractException`→直进 DLT。代价是无编译期类型安全，规模大时上 schema registry（Avro/Protobuf）。
+envelope 稳定 + payload 灵活（Tolerant Reader），避免 DTO 爆炸和版本僵化。`IntegrationEventReader.requiredText/requiredUuid/requiredDecimal/requiredCurrency/requiredInstant` 显式校验，缺字段或格式错误抛 `EventContractException`→直进 DLT。reader 只提供共通读取规则，具体 eventType 需要哪些字段仍由 listener 声明。代价是无编译期类型安全，规模大时上 schema registry（Avro/Protobuf）。
 
 **Q9. 如何演进 event schema 不炸下游？你这套现在能强制版本兼容吗？**
 向后兼容加字段；破坏性变更升 `eventVersion` 或新 `eventType` 让新老 consumer 并存。**现在不能强制**（gap #3）：`eventVersion` 只校验 `>=1`，consumer 不按版本分支。要补按 `(eventType, eventVersion)` 路由/拒绝或上 schema registry。

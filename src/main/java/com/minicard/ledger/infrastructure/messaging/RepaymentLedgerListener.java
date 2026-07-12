@@ -1,10 +1,5 @@
 package com.minicard.ledger.infrastructure.messaging;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.Currency;
-import java.util.UUID;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.ledger.application.RecordLedgerEntryCommand;
 import com.minicard.ledger.application.RecordLedgerEntryService;
@@ -47,12 +42,13 @@ public class RepaymentLedgerListener {
         JsonNode payload = event.payload();
         service.record(RecordLedgerEntryCommand.repaymentReceived(
                 event.eventId(),
-                UUID.fromString(eventReader.requiredText(payload, "repaymentId")),
-                UUID.fromString(eventReader.requiredText(payload, "creditAccountId")),
+                eventReader.requiredUuid(payload, "repaymentId"),
+                eventReader.requiredUuid(payload, "creditAccountId"),
                 // repayment.amount 也从 text 转 BigDecimal；不要把 JSON number 转 double 后再转金额。
-                new BigDecimal(eventReader.requiredText(payload, "amount")),
-                Currency.getInstance(eventReader.requiredText(payload, "currency")),
-                Instant.parse(eventReader.requiredText(payload, "receivedAt"))
+                // reader 只校验 transport format；金额为正、币种匹配等业务规则仍留在 domain。
+                eventReader.requiredDecimal(payload, "amount"),
+                eventReader.requiredCurrency(payload, "currency"),
+                eventReader.requiredInstant(payload, "receivedAt")
         ));
     }
 }

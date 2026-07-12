@@ -1,10 +1,5 @@
 package com.minicard.ledger.infrastructure.messaging;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.Currency;
-import java.util.UUID;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.minicard.ledger.application.RecordLedgerEntryCommand;
 import com.minicard.ledger.application.RecordLedgerEntryService;
@@ -49,13 +44,14 @@ public class CardTransactionLedgerListener {
         // 如果本 consumer 失败，Kafka retry/DLT 处理，不会回滚 posted transaction。
         service.record(RecordLedgerEntryCommand.cardTransactionPosted(
                 event.eventId(),
-                UUID.fromString(eventReader.requiredText(payload, "cardTransactionId")),
-                UUID.fromString(eventReader.requiredText(payload, "creditAccountId")),
+                eventReader.requiredUuid(payload, "cardTransactionId"),
+                eventReader.requiredUuid(payload, "creditAccountId"),
                 // 金额从 JSON text 构造 BigDecimal，避免 asDouble() 这类二进制浮点转换丢精度。
-                new BigDecimal(eventReader.requiredText(payload, "amount")),
-                Currency.getInstance(eventReader.requiredText(payload, "currency")),
-                // 时间和 UUID 在 adapter 边界解析；解析失败会让 listener 失败并交给 Kafka retry/DLT。
-                Instant.parse(eventReader.requiredText(payload, "postedAt"))
+                // typed helper 把坏 UUID/金额/币种/时间统一包装成 EventContractException，直接进入 DLT；
+                // 如果在 listener 里直接调用 JDK parser，永久坏消息会被误当成瞬时异常重复 retry。
+                eventReader.requiredDecimal(payload, "amount"),
+                eventReader.requiredCurrency(payload, "currency"),
+                eventReader.requiredInstant(payload, "postedAt")
         ));
     }
 }

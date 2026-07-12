@@ -1,7 +1,9 @@
 package com.minicard.messaging.kafka;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Currency;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,6 +41,12 @@ class IntegrationEventReaderTest {
                 .isEqualTo(event.payload().get("authorizationId").asText());
         assertThat(reader.requiredInstant(parsed.payload(), "approvedAt"))
                 .isEqualTo(Instant.parse("2026-06-14T00:00:00Z"));
+        assertThat(reader.requiredUuid(parsed.payload(), "authorizationId"))
+                .isEqualTo(UUID.fromString(event.payload().get("authorizationId").asText()));
+        assertThat(reader.requiredDecimal(parsed.payload(), "amount"))
+                .isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(reader.requiredCurrency(parsed.payload(), "currency"))
+                .isEqualTo(Currency.getInstance("JPY"));
     }
 
     @Test
@@ -89,6 +97,25 @@ class IntegrationEventReaderTest {
         assertThatThrownBy(() -> reader.requiredInstant(payload, "approvedAt"))
                 .isInstanceOf(EventContractException.class)
                 .hasMessage("approvedAt must be an ISO-8601 instant");
+    }
+
+    @Test
+    // 测试目的：UUID/金额/币种的确定性格式错误必须直接归类为 contract failure，不能浪费 Kafka retry。
+    void rejectsInvalidTypedPayloadFieldsAsContractFailures() {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("authorizationId", "not-a-uuid");
+        payload.put("amount", "not-a-decimal");
+        payload.put("currency", "NOT-A-CURRENCY");
+
+        assertThatThrownBy(() -> reader.requiredUuid(payload, "authorizationId"))
+                .isInstanceOf(EventContractException.class)
+                .hasMessage("authorizationId must be a valid UUID");
+        assertThatThrownBy(() -> reader.requiredDecimal(payload, "amount"))
+                .isInstanceOf(EventContractException.class)
+                .hasMessage("amount must be a valid decimal");
+        assertThatThrownBy(() -> reader.requiredCurrency(payload, "currency"))
+                .isInstanceOf(EventContractException.class)
+                .hasMessage("currency must be a valid ISO 4217 currency");
     }
 
     private IntegrationEvent event(String eventType, int version) {

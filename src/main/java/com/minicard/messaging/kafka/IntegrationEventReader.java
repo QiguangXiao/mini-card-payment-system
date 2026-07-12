@@ -1,7 +1,10 @@
 package com.minicard.messaging.kafka;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Currency;
+import java.util.UUID;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -97,6 +100,45 @@ public class IntegrationEventReader {
             throw new EventContractException(fieldName + " is required");
         }
         return value.asText();
+    }
+
+    /**
+     * 读取必填 UUID 字段，并把确定性的格式错误统一归类为 permanent contract failure。
+     */
+    public UUID requiredUuid(JsonNode root, String fieldName) {
+        String value = requiredText(root, fieldName);
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException exception) {
+            // 如果让 IllegalArgumentException 直接逃逸，Kafka 会把不会自愈的坏 UUID 当成瞬时异常空转 retry。
+            throw new EventContractException(fieldName + " must be a valid UUID", exception);
+        }
+    }
+
+    /**
+     * 读取必填十进制字段；这里只验证 transport format，正数、币种精度等业务规则仍由 domain 负责。
+     */
+    public BigDecimal requiredDecimal(JsonNode root, String fieldName) {
+        String value = requiredText(root, fieldName);
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException exception) {
+            // 同一 payload 重试不会把非法数字变合法，必须标成 contract failure 后直接进入 DLT。
+            throw new EventContractException(fieldName + " must be a valid decimal", exception);
+        }
+    }
+
+    /**
+     * 读取必填 ISO 4217 币种字段；账户币种是否匹配属于业务校验，不放在共享 reader。
+     */
+    public Currency requiredCurrency(JsonNode root, String fieldName) {
+        String value = requiredText(root, fieldName);
+        try {
+            return Currency.getInstance(value);
+        } catch (IllegalArgumentException exception) {
+            // 非法币种代码是永久消息错误；不包装时会被 DefaultErrorHandler 无意义地重试两次。
+            throw new EventContractException(fieldName + " must be a valid ISO 4217 currency", exception);
+        }
     }
 
     /**

@@ -465,7 +465,7 @@ docs/nosql-tradeoffs-cn.md
 
 | 优先级 | 建议 | 价值 |
 | --- | --- | --- |
-| P0 | `docs/high-traffic-system-design-cn.md` | 把容量、瓶颈、扩容策略系统化 |
+| P0 | `docs/traffic-rate-limiting-and-capacity-cn.md` | 把容量、限流、瓶颈、扩容策略系统化 |
 | P0 | k6/Gatling 脚本 | 有实际压测入口 |
 | P1 | 指标清单 | p95/p99、DB pool、lock wait、Kafka lag、cache hit ratio |
 | P1 | backpressure 策略 | worker queue 满、限流、retry/DEAD 的解释 |
@@ -748,7 +748,7 @@ JD 提到 Confluence、Miro、JIRA、Slack、Zoom、Office 365，以及 multicul
 
 如果有 1 天：
 
-1. 补 `docs/high-traffic-system-design-cn.md`。
+1. 学习 `docs/traffic-rate-limiting-and-capacity-cn.md`。
 2. 补 `docs/aws-ecs-deployment-cn.md`。
 3. 补 `docs/nosql-tradeoffs-cn.md`。
 4. 选做 gRPC Risk adapter 或最小 Reconciliation。

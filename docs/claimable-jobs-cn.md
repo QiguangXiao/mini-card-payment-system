@@ -241,7 +241,7 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 **真实 gap（不是 bug，是上生产还差的工程化）**：
 
-1. **DEAD 全家族缺可观测与重放（最该补）**。三者达 maxAttempts 转 DEAD 后只是躺在表里，**无指标/告警/"DEAD→重新入队"运维入口**。授权过期没释放额度、自动扣款没扣、某分片没出账——目前只能人去查表。注意：消费侧已有 Kafka DLT（且配了 dead-letter-monitor group），但**生产/执行侧没有对等物**。
+1. **DEAD 全家族缺可观测与重放（最该补）**。三者达 maxAttempts 转 DEAD 后只是躺在表里，**无指标/告警/"DEAD→重新入队"运维入口**。授权过期没释放额度、自动扣款没扣、某分片没出账——目前只能人去查表。注意：消费侧虽已有 Kafka DLT 写入，但同样没有 monitor group、告警和受控 replay 工具，尚未形成运维闭环。
 2. **完成态行无保留策略**。`delay_jobs` 的 DONE、`statement_jobs` 的 DONE、`outbox_events` 的 PUBLISHED 都**永不清理**，表无界增长。`delay_jobs` 还有个微妙点：`uk(job_type,agg_type,agg_id)` 让一个聚合的 DONE 行**永久占用唯一键**（这本身是想要的 idempotency），所以清理时要保留 key 或迁冷表，不能裸删。
 3. **StatementJob 单账户失败连坐整片（账户级重试隔离缺口）**。`failedAccountCount>0` 就把**整个 shard** 标失败回 PENDING 重领。账户级幂等让重跑安全且代价小（UNBILLED 过滤让重试自然收敛到失败账户），但重试**预算**记在 job 上：一个**永久失败**的账户每轮都烧掉一次 attempt，把整片 cycle 到 DEAD——同片里"晚一点就能成功"的账户（如等 ledger projection 补齐）被连坐，失去重试机会；且 DEAD 在 shard 粒度**看不出哪个账户坏了**（账户级明细只在日志里）。
    - **主要触发源是 ledger 投影滞后**（statement 生成前的缺失检查抛 retryable）。正常滞后是秒级，`max-attempts: 10` 足够覆盖；真正"永远补不齐"只会来自 ledger 消息进了 DLT——低概率且可观测，**ledger DLT 告警是这个缺口的第一道观测线**。
