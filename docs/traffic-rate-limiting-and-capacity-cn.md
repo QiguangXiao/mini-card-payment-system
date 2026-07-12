@@ -720,32 +720,233 @@ Tomcat 容量更大只会让排队更深，不会增加资金写吞吐。
 
 ---
 
-## 9. 合理性评审：应该保留、可以调整、需要补齐
+## 9. 学习与 interview 边界收口评审
 
-### 应该保留
+### 9.1 总体结论：正确性边界成熟，展示型机制已经接近饱和
 
-- API 系统保护与 card velocity 业务规则分层，分别返回 429 与 risk decline。
-- external risk `timeout + semaphore bulkhead + circuit breaker + fail-closed`。
-- Notification `Retry(CB(RateLimiter(call)))`，并忽略本地 throttle 对 breaker/retry 的污染。
-- Bank debit 只用 CircuitBreaker + durable retry，不叠加内存 Retry。
-- 各类 worker 分池、bounded queue、claim lease、`SKIP LOCKED`。
-- 同账户 row lock correctness，不为 QPS 换 eventual consistency。
+这个项目在流量与可靠性上已经足够支撑 Backend Engineer interview，继续增加新组件的边际收益很低。
+最好的收口不是“每个组件都删掉”，而是：
 
-### 可以调整
+```text
+核心 correctness / failure boundary：保留并学透
+同类机制的第二、第三套实现：保留作类比，不重复深挖
+只为展示技术名词的开关/备用实现：优先删除
+生产 sizing 数字：会计算、会验证，不背答案
+```
 
-- Tomcat/Hikari 已按小项目显式配置；生产按 Pod 角色和 RDS 总连接预算重新 sizing，不能机械照抄。
-- API limiter key 从 IP 演进为 authenticated client/merchant，并按可信代理配置真实源地址。
-- Notification `batch-size=40` 已与当前每 Pod 总 provider quota 40/s 对齐；生产按全局 quota/Pod 数重算。
-- 根据真实 provider quota / Pod 数重算本地 RateLimiter，扩容不能自动把全局 quota 一起扩大。
-- 根据 lag 增加 Kafka partitions，而不是只改 concurrency。
+目前没有必要再加入：
 
-### 需要补齐
+- 第二种分布式限流算法。
+- 新的 Bulkhead/TimeLimiter 组合。
+- 新的消息中间件或额外 retry framework。
+- 为每种 worker 再抽一个通用 job framework。
+- 为了“大流量”先拆微服务、分库分表或引入 service mesh。
 
-- **capacity-aware claim**：poller 应按 executor 可用 slot 领取，或者不在 submit 前把大量行改成 PROCESSING。
+这些不会显著提高当前项目的 interview 价值，反而会稀释最重要的资金正确性、事务、锁与失败恢复主线。
+
+### 9.2 必须重点学透的七条边界
+
+| 必须学透 | 要能讲到什么程度 | 当前代码锚点 |
+| --- | --- | --- |
+| 三种限流语义 | API 429、card risk decline、provider throttle 的维度/算法/出口为何不同 | `RedisTokenBucketRateLimiter`、`RedisRiskVelocityCounter`、`ResilientCallHelper` |
+| transaction / connection / row lock | external risk 虽在 account lock 前却仍占 transaction/Hikari；同账户为什么必须串行 | `AuthorizationService`、`ExternalRiskGatewayAdapter` |
+| rate / concurrency / queue | RateLimiter、Semaphore、worker pool、queue 各限制什么；能用 Little's Law 粗算 | 本文 §1、`WorkerExecutorConfiguration` |
+| at-least-once 与幂等 | Outbox 为什么可能重复发，Inbox/unique key 如何防重复副作用，DLT 不等于修复 | `OutboxWorker`、`RecordLedgerEntryService`、Kafka listeners |
+| lease deadline 与 owner token | claim 为什么短事务、外部动作为什么事务外、迟到 worker 为什么不能 finalize | Outbox/DelayJob/Notification/Statement workers |
+| retry 分类与放大 | permanent、transient、throttled、circuit-open 为什么走不同路径；双层 retry 如何相乘 | `EventContractException`、Notification/Bank retry |
+| 过载 HTTP 语义 | 429、503、business decline、500 分别表示什么；状态变更 retry 必须复用 Idempotency-Key | interceptor、`GlobalExceptionHandler` |
+
+“学透”的标准不是背类名，而是能画出 A/B actor 和失败时间线。例如必须能独立解释：
+
+```text
+请求 A/B 同时刷同一账户 → account row lock 如何防 over-approve
+Hikari 连续耗尽 5s → HTTP 503 与 Kafka DLT 为什么分叉
+worker A lease 过期、worker B 接管 → A 的迟到回执为什么必须被 token 拒绝
+provider throttle → 为什么不增加 durable attempts
+Kafka ack 成功但 Outbox finalize 前宕机 → 为什么会重复发且必须 Inbox 幂等
+```
+
+### 9.3 保留，但不需要重点学透
+
+| 保留项 | 保留价值 | 学习深度收口 |
+| --- | --- | --- |
+| Tomcat NIO 参数 | 理解 threads/connections/backlog 分层，避免说错 accept-count | 会解释语义即可，不背 Connector 内部实现 |
+| Hikari lifecycle 参数 | 展示连接池不是只有 max size | 知道 timeout/lifetime 目的，不背所有默认值 |
+| Resilience4j COUNT_BASED 窗口细节 | 能观察 breaker CLOSED/OPEN/HALF_OPEN | 不背 5/3、10/5、half-open permit 等全部阈值 |
+| Kafka producer idempotence 细节 | 说明 broker-side retry 去重与 consumer idempotency不同 | 记住 `acks=all + idempotence`，不深挖 sequence number 协议 |
+| Redis Lua 每一行 | 原子 read-modify-write 和跨 Pod clock monotonic 有教学价值 | 能讲原子性与 `max(now, storedTs)`，不必默写 Lua |
+| Statement cache CAS/tombstone | 展示 late write、cache stampede、跨 Pod single-flight | 学一个竞态 trace；不用把 Lua/Caffeine/PubSub 全部背熟 |
+| 模拟 provider 参数 | 本地可注入 latency/failure，方便观察 breaker | 会使用，不需要当业务设计重点 |
+| Scheduler bean 数与线程名 | thread dump/隔离排查方便 | 知道 scheduler 薄、worker 真执行即可 |
+
+这些内容在追问时能加分，但不应该抢走 Authorization transaction、row lock、idempotency、Outbox/Inbox
+和 lease safety 的复习时间。
+
+### 9.4 当前有点过度，应该收在哪里
+
+#### 1. 五套 worker/scheduler 隔离都在一个小应用里
+
+当前 Outbox、DelayJob、Auto Repayment、Notification、Statement 各有独立 worker pool，scheduler 也按机制拆开。
+
+判断：**设计上说得通，但展示密度偏高**。它证明了 bounded pool / bulkhead / workload isolation，
+不需要再为未来 job type 新增第六、第七个 pool。
+
+收口方式：
+
+- 选 `Outbox` 作为 publish/finalize reference。
+- 选 `NotificationDelivery` 作为外部副作用 + throttle reference。
+- 选 `StatementJob` 作为分片 batch reference。
+- DelayJob、Auto Repayment 只讲与上述 reference 不同的业务语义，不再逐类背所有方法。
+
+不要强行抽成一个 GenericClaimableJobFramework。四类状态机虽然形状相似，但 publish、未来动作、通知投递、
+账单分片的失败语义不同；为了减少类数量做大泛型框架，会比当前重复更难 interview 解释。
+
+#### 2. Notification 的保护层最多
+
+```text
+bounded worker pool
+→ Retry
+→ CircuitBreaker
+→ RateLimiter
+→ Feign timeout
+→ durable retry/backoff/DEAD
+→ provider idempotency
+```
+
+判断：**略复杂，但适合作为唯一一条“完整外部调用可靠性”教学线路**。保留它，停止把同样组合复制给 Bank、
+Risk 或其他 adapter。Bank 只用 CircuitBreaker + durable retry、Risk 用 Bulkhead + CircuitBreaker 的差异正好说明
+“按调用语义选择组件”，比所有线路配置齐全更有价值。
+
+重点只学装饰顺序和失败分类，不需要背每个 channel 的全部 R4j 数字。
+
+#### 3. Statement cache 防护较多
+
+L1 + L2 + jitter + rebuild lock + tombstone/version CAS + 可选 Pub/Sub 已经超过普通 interview demo 的最低需要。
+
+判断：**缓存学习价值高，但相对支付主链路投入偏多**。当前应停止扩展，不再加入 refresh-ahead、
+stale-while-revalidate、Bloom filter、更多 distributed-lock 方案。
+
+收口方式：重点理解两个问题即可：
+
+1. cache miss storm 为什么需要 single-flight；
+2. 旧 GET 迟到写回为什么需要 version/tombstone。
+
+其余 TTL、jitter、Pub/Sub 是辅助策略，只需知道存在和失败时如何 fallback。
+
+#### 4. 生产大流量数字写得很全
+
+这些数字适合作为 sizing 示例，不是系统能力承诺。继续增加更多 Small/Medium/Large 表会制造 false precision。
+
+收口方式：保留一组公式和一个示例，之后只用真实压测结果替换，不再继续手工丰富推荐数字。
+
+### 9.5 可以删除什么
+
+#### 已经应该删且已经删掉
+
+- 没有任何 listener 使用的 `dead-letter-monitor.group-id`：只存在配置、不产生运行时行为，是典型 ghost config。
+
+#### 如果要进一步瘦身，按这个顺序删除
+
+| 删除候选 | 为什么可以删 | 删除后保留什么 |
+| --- | --- | --- |
+| `JdbcRiskVelocityCounter` + `risk.velocity.store` 切换 | 默认一直用 Redis；JDBC 版主要是算法对照，每笔 COUNT 会给主库加压 | 保留 Redis sliding window 和文档中的 SQL 对比即可 |
+| 默认关闭的 Statement L1 Pub/Sub broadcast 路径 | L1 30s TTL 已是 correctness fallback；Pub/Sub 只缩短跨 Pod stale window | 保留 L1/L2、version/tombstone、rebuild lock |
+| 文档中重复的生产规格表 | 不能代替压测，容易随代码漂移 | 保留本文一份 sizing 表和公式 |
+
+这三个是“可删候选”，不是 correctness bug。真正删除时要同步测试、配置、文档，不能只删一个 bean 留下
+幽灵开关。若当前目标是先准备 interview，不必立即做删除型重构；知道它们不是主线即可。
+
+### 9.6 不能删除的边界
+
+下面这些即使让代码变多，也属于金融/异步 correctness，不应为了“简洁”删除：
+
+- `Idempotency-Key` claim + request fingerprint。
+- CreditAccount `SELECT ... FOR UPDATE`。
+- Authorization/业务状态与 Outbox/DelayJob 的同事务写入。
+- Consumer Inbox + 业务 unique key 双层幂等。
+- `PROCESSING` lease deadline + owner token + finalize revalidation。
+- Worker pool bounded queue 和 rejection handling。
+- Kafka permanent/transient exception 分类与 DLT。
+- External Risk timeout/bulkhead/fail-closed。
+- Bank debit provider idempotency key。
+- DB connection unavailable 的 503 + Retry-After 语义。
+
+这些是项目最值得展示的“复杂度有来源”。删掉后代码可能更短，但会失去金融后端最重要的讨论价值。
+
+### 9.7 哪些数字需要记住
+
+#### 第一档：建议记住的当前项目锚点
+
+只记能串起设计关系的少数数字：
+
+| 数字 | 为什么值得记 |
+| --- | --- |
+| API token bucket `burst 20 / sustained 10s⁻¹` | 能解释 burst 与长期速率，以及429 |
+| Card velocity `3 attempts / 60s` | 能区分系统保护与业务风控；第4次 decline |
+| Hikari `10`、external risk permits `4` | 最重要的资源 headroom 关系：4必须小于10 |
+| Kafka topic `3 partitions`、consumer concurrency `2/3` | 能解释 partition 才是 group 并行上限 |
+| 通用 worker pool `4` | 当前多数异步线路的并发基准 |
+| Notification `20/s/channel` | 两渠道合计40 deliveries/s，约20 notifications/s |
+| Hikari acquire `1s`、Kafka总尝试 `3` | 能推演“池耗尽约5s → consumer DLT” |
+
+这不是让你死背 YAML，而是让你能不看代码讲一轮当前系统。
+
+#### 第二档：应该现场推导，不要死背
+
+| 推导结果 | 推导方式 |
+| --- | --- |
+| Risk 正常约 `40 calls/s/Pod` | `4 permits / 0.1s latency` |
+| Risk 800ms 时约 `5 calls/s/Pod` | `4 / 0.8s` |
+| Notification 约 `20 events/s/Pod` | 每 event 两渠道，各渠道20/s |
+| Bank timeout 时约 `2 calls/s/Pod` | `4 workers / 2s timeout` |
+| Statement 完成窗口 | `账户数 × 单账户耗时 / workers` |
+| 总 DB connections | `Pod 数 × 每 Pod pool + admin/batch headroom` |
+| backlog drain time | `backlog / (恢复消费率 - 当前生产率)` |
+
+interview 更看重你能否写出公式、说明假设和验证指标，而不是报出预先背好的 QPS。
+
+#### 第三档：不需要记，知道去哪里查
+
+- Tomcat `80/2048/50/3s/30s` 的全部组合。
+- Hikari `minimum-idle/validation/idle/max-lifetime` 的精确数字。
+- CircuitBreaker window、minimum calls、threshold、half-open permits 的每个值。
+- 各 queue capacity、recover scan interval、lease timeout 的全部秒数。
+- Cache TTL、jitter、tombstone、lock wait 的全部值。
+- 文档里的生产 `200~300 threads`、`20~30 connections`、`24~48 partitions` 等 sizing 示例。
+
+这些数字会随机器、Pod 数、provider quota、SLO 和压测结果改变。正确回答是：
+
+```text
+我知道它控制什么
+→ 我知道它与哪些相邻预算必须满足大小关系
+→ 我会通过什么指标/压测调整
+```
+
+而不是“我记得生产一定配 25 个连接”。
+
+### 9.8 最终学习优先级
+
+```text
+P0  Authorization transaction + idempotency + account row lock
+P0  Outbox/Inbox at-least-once + Kafka retry/DLT
+P0  claim lease + owner token + crash/stale-worker recovery
+P1  三种 limiter 语义 + RateLimiter/Semaphore/CircuitBreaker 区别
+P1  Hikari/Tomcat/worker/Kafka 的背压与瓶颈推导
+P1  Notification 作为完整 external-call resilience reference
+P2  Statement cache 的两个核心竞态
+P2  Tomcat、Hikari、Kafka、R4j 的具体配置旋钮
+P3  Lua 细节、所有生产推荐数字、每个 scheduler/worker 类的重复实现
+```
+
+### 9.9 仍然需要补齐，但不要再扩散范围
+
+- **capacity-aware claim**：poller 按 executor 可用 slot 领取，避免 queue 中提前燃烧 lease。
 - **statement backoff**：失败分片不要每轮立即重领。
-- **workload isolation**：生产把 API、Kafka consumers、statement/batch 至少按 profile 分开部署和 sizing。
+- **workload isolation**：生产把 API、Kafka consumers、statement/batch 分 profile 部署和 sizing。
 - **DLT/DEAD/backlog 运维闭环**：指标、告警、受控 replay。
 - **真实压测证据**：当前没有可引用的最大 QPS、p95/p99 或 saturation point。
+
+这五项补完后应停止继续增加机制，把时间转向压测、故障演练和口头表达。
 
 > [!CAUTION]
 > 不建议直接把 Hikari 10 改成 50、external risk permit 4 改成 40。
