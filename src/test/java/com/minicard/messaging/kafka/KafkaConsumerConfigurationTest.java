@@ -12,21 +12,21 @@ class KafkaConsumerConfigurationTest {
 
     private static final Map<String, String> DLT_BY_GROUP_ID = Map.of(
             "mini-card-notification-v1", "mini-card.notification.dlt.v1",
-            "mini-card-ledger-v1", "mini-card.ledger.dlt.v1"
+            "mini-card-risk-feature-v1", "mini-card.authorization-risk-feature.dlt.v1"
     );
 
     @Test
     // 测试目的：同一 source topic 被多个 group 消费，DLT 必须跟随"失败的消费组"。
-    // 反向事实：如果按 record.topic() 查表，ledger 消费 transaction-events 失败会进 notification DLT。
+    // 反向事实：如果按 record.topic() 查表，risk 消费 authorization-events 失败会进 notification DLT。
     void routesFailureToTheFailingConsumerGroupsDeadLetterTopic() {
-        Exception ledgerFailure = new ListenerExecutionFailedException(
+        Exception riskFailure = new ListenerExecutionFailedException(
                 "listener failed",
-                "mini-card-ledger-v1",
+                "mini-card-risk-feature-v1",
                 new RuntimeException("db connection unavailable")
         );
 
-        assertThat(KafkaConsumerConfiguration.resolveDeadLetterTopic(DLT_BY_GROUP_ID, ledgerFailure))
-                .isEqualTo("mini-card.ledger.dlt.v1");
+        assertThat(KafkaConsumerConfiguration.resolveDeadLetterTopic(DLT_BY_GROUP_ID, riskFailure))
+                .isEqualTo("mini-card.authorization-risk-feature.dlt.v1");
     }
 
     @Test

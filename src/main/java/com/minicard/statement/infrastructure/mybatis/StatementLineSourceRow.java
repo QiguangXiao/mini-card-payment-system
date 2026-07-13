@@ -6,14 +6,12 @@ import java.time.Instant;
 /**
  * Statement line source 的 SQL projection row。
  *
- * <p>关键词：账单来源行, 交易账本连接, SQL projection,
- * statement line source row, ledger join, SQL射影(エスキューエルしゃえい)。</p>
+ * <p>关键词：账单来源行, 交易快照, SQL projection,
+ * statement line source row, SQL射影(エスキューエルしゃえい)。</p>
  */
 public record StatementLineSourceRow(
         /** 待出账的 card transaction id。 */
         String cardTransactionId,
-        /** 对应 ledger entry id；证明交易已经形成内部账务事实。 */
-        String ledgerEntryId,
         /** 外部网络交易 id，用于对账和展示。 */
         String networkTransactionId,
         /** 原始 authorization id。 */

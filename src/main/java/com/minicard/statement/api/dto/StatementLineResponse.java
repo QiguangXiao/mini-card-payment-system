@@ -10,7 +10,7 @@ import com.minicard.statement.domain.StatementLine;
 /**
  * Statement line API response DTO。
  *
- * <p>关键词：账单明细响应, 交易快照, ledger reference, statement line response,
+ * <p>关键词：账单明细响应, 交易快照, statement line response,
  * transaction snapshot, 請求明細レスポンス(せいきゅうめいさいレスポンス)。</p>
  */
 public record StatementLineResponse(
@@ -18,8 +18,6 @@ public record StatementLineResponse(
         UUID id,
         /** 对应 card transaction id。 */
         UUID cardTransactionId,
-        /** 对应 append-only ledger entry id；老数据可能为空，新生成账单应有值。 */
-        UUID ledgerEntryId,
         /** 外部网络交易 id。 */
         String networkTransactionId,
         /** 原 authorization id。 */
@@ -38,7 +36,6 @@ public record StatementLineResponse(
         return new StatementLineResponse(
                 line.id(),
                 line.cardTransactionId(),
-                line.ledgerEntryId().orElse(null),
                 line.networkTransactionId(),
                 line.authorizationId(),
                 line.cardId(),
@@ -52,7 +49,6 @@ public record StatementLineResponse(
         return new StatementLineResponse(
                 line.id(),
                 line.cardTransactionId(),
-                line.ledgerEntryId(),
                 line.networkTransactionId(),
                 line.authorizationId(),
                 line.cardId(),

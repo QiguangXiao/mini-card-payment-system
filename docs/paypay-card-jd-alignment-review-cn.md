@@ -53,7 +53,7 @@
 | 业务主链路 | Authorization → Posting → Statement → Repayment 全通 | ✅ 核心叙事完整 |
 | 生产代码 | 15,683 行 / 258 个 main 类（≈持平） | 体量足够，甚至偏多 |
 | 测试代码 | 6,990 行 / 64 个测试类（+1 类），含 Testcontainers 集成测试 | 测试占比 ~45%，健康且有真实集成测试 |
-| Bounded context | ~12 个（含 Notification/Risk/Ledger 三个独立 consumer） | 广度足够，甚至偏多 |
+| Bounded context | 多个业务与机制边界（含 Notification/Risk 两个独立 consumer） | 广度足够，不再增加投影型 context |
 | 文档 | **29,228 行 / 36 个文件**（上次 26,835 / 28，**+2,393 行 / +8 文件**） | ⚠️ 是生产代码的 **~1.86 倍**（上次 ~1.7），**review 警告后仍在涨**，是最固执的过度 |
 | 可靠性基建 | Outbox + Inbox + **三套** claimable job（DelayJob/Outbox/StatementJob，本月又给三套统一加了 explicit lease token）+ Resilience4j + DLT + statement L1/L2 缓存（Lua CAS + Pub/Sub 失效） | ✅ 顶配但**继续在已饱和处加投入**（见 §3.2）|
 | 云 / 部署落地 | 只有 `docker-compose.yml`；**仍无 Dockerfile、无 CI、无 IaC、无压测数据**（一个月零变化） | ❌ 与公司栈（ECS/CFN/CodePipeline）最大的真实差距，且**纹丝未动** |
@@ -177,7 +177,7 @@
 
 ### 3.3 Bounded context 的广度 > 深度（轻度过度）
 
-Notification / Risk / Ledger 三个独立 consumer group + 各自 DLT，广度已经很够。
+Notification / Risk 两个独立 consumer group + 各自 DLT，已经足够学习 group 隔离与 dead-letter routing。
 继续按 `ToDo.md` 的 P3/P4/P5（refund / dispute / settlement）加领域，
 **只会增加广度，不增加面试说服力**——`ToDo.md` 自己也是这么判断的，这点你已经做对了。
 

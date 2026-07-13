@@ -24,7 +24,7 @@ Backend Engineer interview.
 The project currently contains a runnable issuer-side credit card backend slice:
 card authorization, presentment posting, statement generation, manual and
 automatic repayment, notification creation, local and simulated external risk
-checks with Redis velocity counting, minimal Ledger projection, Kafka-based event
+checks with Redis velocity counting, Kafka-based event
 delivery, Transactional Outbox, Consumer Inbox, DelayJob scheduling, and
 Caffeine L1 + Redis L2 cache-aside for statement GET read models.
 
@@ -183,8 +183,6 @@ from a locked `CreditAccount`. Presentment posting later moves money from
 `reserved_amount` to `posted_balance` and creates a posted `CardTransaction`.
 Statement generation snapshots posted transactions into `statement_lines`, and
 repayment reduces `posted_balance` while advancing statement payment status.
-Minimal Ledger then consumes posted transaction and repayment events to record
-append-only internal accounting entries.
 `GET /api/statements/{id}` uses a small statement read-model cache: Caffeine is
 the per-JVM L1 and Redis is the cross-instance L2. Repayment updates the MySQL
 source of truth first, then evicts the statement read cache after transaction
@@ -209,16 +207,12 @@ transaction as the state change. A scheduled publisher later sends them to Kafka
 using at-least-once delivery. Future business actions such as authorization
 expiry and automatic repayment are scheduled through DelayJob, not Outbox.
 
-Three independent consumer groups demonstrate different production patterns:
+Two independent consumer groups demonstrate different production patterns:
 
 - The independent Notification bounded context creates idempotent `Notification`
   aggregates and owns their delivery lifecycle.
 - The existing Risk bounded context maintains an idempotent, replayable
   card-risk feature projection. It is deliberately not modeled as an aggregate.
-- The Ledger bounded context records minimal append-only accounting entries from
-  posted transaction and repayment events. It is a learning projection, not a
-  production-grade general ledger.
-
 Each consumer has its own retry and dead-letter topic.
 
 Local development includes these sample cards:
@@ -280,7 +274,6 @@ Dead-letter topics:
 ```text
 mini-card.notification.dlt.v1
 mini-card.authorization-risk-feature.dlt.v1
-mini-card.ledger.dlt.v1
 ```
 
 Stop local services:

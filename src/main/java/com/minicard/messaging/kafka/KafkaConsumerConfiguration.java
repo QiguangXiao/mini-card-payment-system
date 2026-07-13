@@ -34,18 +34,18 @@ import org.springframework.util.backoff.FixedBackOff;
  * {@link DefaultErrorHandler}——自动装进去。各 listener 的并发在自己的
  * {@code @KafkaListener(concurrency)} 上声明；topic 创建由 {@link KafkaTopicsConfiguration} 负责。</p>
  *
- * <p>反事实（为什么从三个 per-context factory 收敛成一个 handler）：三个 factory 只差
+ * <p>反事实（为什么从多个 per-context factory 收敛成一个 handler）：这些 factory 只差
  * DLT 名和 concurrency，是同一消费模型套不同参数值，且带来两个真实的坑。其一，Boot 的默认
  * factory 只按 bean 名 kafkaListenerContainerFactory 让位，三个自定义名 bean 存在时它仍然
  * 被创建——新 listener 忘写 containerFactory 属性会静默挂上没有 DLT 的默认 error handler，
  * 快速重试后记日志、提交 offset、消息丢弃。其二，DLT 正确性依赖每个 listener 手选 factory，
- * 旧注释甚至需要警告"误用 ledger/risk factory 会进错 DLT"。现在默认 factory 自带本 handler，
+ * 旧注释甚至需要警告"误用其他 context factory 会进错 DLT"。现在默认 factory 自带本 handler，
  * 新 listener 默认安全；DLT 跟随失败的消费组，没有可以绑错的配置点。只有当各 context 的
  * ack 模式、批量消费、serde、事务或目标集群真正不同时，才应该回到多 factory。</p>
  *
  * <h3>为什么按失败 group 路由 DLT，而不是按 source topic</h3>
- * <p>transaction/repayment/authorization 三个 topic 都被多个 group 消费：同一条 record 可能
- * 对 Ledger 失败而对 Notification 成功。按 record.topic() 查表会把 Ledger 的失败发进错误的
+ * <p>authorization topic 同时被 Notification 和 Risk group 消费：同一条 record 可能
+ * 对 Risk 失败而对 Notification 成功。按 record.topic() 查表会把 Risk 的失败发进错误的
  * DLT。container 把 listener 异常包成携带失败 groupId 的 {@link ListenerExecutionFailedException}，
  * 这正是 per-consumer DLT 语义的路由键。路由行为由 KafkaConsumerConfigurationTest 钉住。</p>
  *
@@ -65,7 +65,7 @@ public class KafkaConsumerConfiguration {
     public DefaultErrorHandler kafkaListenerCommonErrorHandler(
             // KafkaTemplate 在这里不是发业务事件，而是给 recoverer 发布失败 record 到 DLT。
             KafkaTemplate<Object, Object> kafkaTemplate,
-            // topics 提供三个 per-context DLT 名，避免在 Java 中写死环境相关字符串。
+            // topics 提供两个 per-context DLT 名，避免在 Java 中写死环境相关字符串。
             KafkaTopicsProperties topics,
             // consumers 提供各 context 的 group-id，作为 DLT 路由表的 key。
             KafkaConsumersProperties consumers
@@ -75,8 +75,7 @@ public class KafkaConsumerConfiguration {
         // 两个 context 误配同一个 group 会在启动期炸掉，而不是运行期串 DLT。
         Map<String, String> deadLetterTopicByGroupId = Map.of(
                 consumers.notification().groupId(), topics.notificationDeadLetter(),
-                consumers.riskFeature().groupId(), topics.riskFeatureDeadLetter(),
-                consumers.ledger().groupId(), topics.ledgerDeadLetter()
+                consumers.riskFeature().groupId(), topics.riskFeatureDeadLetter()
         );
 
         // 阶段 2：定义"这条 record 最终处理不了时发到哪里"。DLT 不是自动修复机制，
@@ -87,8 +86,9 @@ public class KafkaConsumerConfiguration {
                 // 保留源 partition 编号，便于用 record key 关联排查；注意 DLT 内顺序不等于源
                 // topic 顺序（只有失败消息进入、各自经历不同次数 retry），replay 的正确性仍靠
                 // Inbox + 业务唯一键幂等，不能依赖 DLT 顺序恢复业务顺序。
-                // partition 前提：DLT partitions 不少于源 topic，否则按源 partition 发布会失败；
-                // 该对齐由 KafkaTopicsConfiguration 声明、KafkaTopicsConfigurationTest 钉住。
+                // 为了稳定保留源 partition，DLT partitions 不应少于源 topic；否则 recoverer 在确认
+                // 目标 partition 不存在时会退化为 producer 自动选 partition，关联排查能力变弱。
+                // 该对齐策略由 KafkaTopicsConfiguration 声明、KafkaTopicsConfigurationTest 钉住。
                 (record, exception) -> new TopicPartition(
                         resolveDeadLetterTopic(deadLetterTopicByGroupId, exception),
                         record.partition()

@@ -290,7 +290,6 @@ class StatementReadServiceTest {
                 LocalDate.parse("2026-07-25"),
                 List.of(new StatementLineSource(
                         UUID.randomUUID(),
-                        UUID.randomUUID(),
                         "ntx-001",
                         UUID.randomUUID(),
                         "card-123",

@@ -27,12 +27,6 @@ public interface StatementBillingMapper {
             @Param("shardCount") int shardCount
     );
 
-    int countUnbilledPostedTransactionsMissingLedger(
-            @Param("creditAccountId") String creditAccountId,
-            @Param("periodStartInclusive") Instant periodStartInclusive,
-            @Param("periodEndExclusive") Instant periodEndExclusive
-    );
-
     List<StatementLineSourceRow> findBillableLineSourcesForUpdate(
             @Param("creditAccountId") String creditAccountId,
             @Param("periodStartInclusive") Instant periodStartInclusive,

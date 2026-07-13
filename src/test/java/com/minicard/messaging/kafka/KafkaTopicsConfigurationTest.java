@@ -18,9 +18,9 @@ class KafkaTopicsConfigurationTest {
             .withInitializer(new ConfigDataApplicationContextInitializer());
 
     @Test
-    // 测试目的：钉住 DeadLetterPublishingRecoverer 保留源 partition 的硬性前提——
-    // 每个 DLT 的 partition 数必须不少于任何源 topic，否则源 partition N 的失败消息
-    // 无法发布到 DLT partition N，DLT publish 失败会让 offset 无法推进。
+    // 测试目的：钉住 DeadLetterPublishingRecoverer 稳定保留源 partition 的项目策略——
+    // 每个 DLT 的 partition 数不少于任何源 topic；否则 recoverer 在确认目标 partition
+    // 不存在时会退化为 producer 自动选 partition，排查/replay 失去稳定对应关系。
     // 谁把源 topic 扩到 6 个 partition 而忘了同步 DLT，这里会先失败。
     void deadLetterTopicsCoverEverySourceTopicPartition() {
         contextRunner.run(context -> {
@@ -37,8 +37,7 @@ class KafkaTopicsConfigurationTest {
             );
             List<NewTopic> deadLetterTopics = List.of(
                     configuration.notificationDeadLetterTopic(properties),
-                    configuration.riskFeatureDeadLetterTopic(properties),
-                    configuration.ledgerDeadLetterTopic(properties)
+                    configuration.riskFeatureDeadLetterTopic(properties)
             );
 
             for (NewTopic deadLetterTopic : deadLetterTopics) {

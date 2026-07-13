@@ -1229,7 +1229,7 @@ cache 不是 source of truth，它只是可失败的性能层。
 
 ## 14. 补充技术点地图：更多模块里的非重复细节
 
-这一章补充上一轮没有充分覆盖的包：notification、consumer inbox、ledger、statement batch、repayment、Outbox XML、risk JDBC 和 API response mapping。
+这一章补充上一轮没有充分覆盖的包：notification、consumer inbox、statement batch、repayment、Outbox XML、risk JDBC 和 API response mapping。
 
 重点仍然是同一个问题：
 
@@ -1285,7 +1285,6 @@ public final class OutboxEvent {
 位置：
 
 - `RequestNotificationService.CONSUMER_NAME`
-- `RecordLedgerEntryService.CONSUMER_NAME`
 - `consumer_inbox`
 
 Consumer Inbox 的唯一键通常是：
@@ -1325,7 +1324,7 @@ side effect may run again
 
 - `ConsumerInboxMapper.xml`
 - `MyBatisConsumerInboxRepository`
-- Notification/Ledger consumer
+- Notification/Risk consumer
 
 Inbox claim 写法是直接 insert：
 
@@ -1542,8 +1541,6 @@ payload.put("currency", requestedAmount.currency().getCurrencyCode());
 
 位置：
 
-- `CardTransactionLedgerListener`
-- `RepaymentLedgerListener`
 - Notification/Risk listeners
 
 Listener 从 `JsonNode` 读取 text，再转成业务类型：
@@ -2226,7 +2223,6 @@ covered Java files: 136 / 226 = 60.2%
 | Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、Outbox adapter、repayment row/domain mapping |
 | Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、statement read cache、repository duplicate 粒度 |
 | Notification | 高覆盖 | stable consumer name、fluent getter、eventType-before-payload、generic subject type、notification row/domain mapping |
-| Ledger | 高覆盖 | append-only mapper、Inbox idempotency、typed JSON parsing、`BigDecimal(String)`、source type enum |
 | Risk | 已补强 | Feign port、JdbcTemplate adapter、typed config、projection consumer name、atomic upsert、simulated external API |
 | Outbox | 完整覆盖 | properties/configuration/port/event/repository/mapper/claimer/worker/recoverer/XML、backoff、lease、ack/finalize |
 | Inbox | 完整覆盖 | consumer-level idempotency、insert-first claim、DuplicateKeyException -> false |
@@ -2243,7 +2239,6 @@ covered Java files: 136 / 226 = 60.2%
 | `creditaccount` | 5 / 8 |
 | `delayjob` | 11 / 13 |
 | `infrastructure` | 14 / 14 |
-| `ledger` | 7 / 12 |
 | `messaging` | 16 / 22 |
 | `monitoring` | 2 / 2 |
 | `notification` | 11 / 14 |
@@ -2270,10 +2265,10 @@ covered Java files: 136 / 226 = 60.2%
 6. 读 `KafkaTopicsConfiguration`、`KafkaConsumerConfiguration`、`KafkaOutboxMessagePublisher`、`IntegrationEventReader`，理解 Kafka container、DLT、ack、JSON contract。
 7. 读 `StatementReadService`、`StatementReadCacheProperties` 和 `docs/caching-and-rate-limiting-cn.md`，理解第三方 cache、TTL jitter、single-flight 和 transaction hook；再读 `RedisRiskVelocityCounter` 理解 Redis velocity 计数。
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
-9. 读 `RequestNotificationService`、`RecordLedgerEntryService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
+9. 读 `RequestNotificationService`、`ProjectRiskFeatureCommand`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
 10. 读 `OutboxEvent`、`DelayJob`、`OutboxEventMapper.xml`、`CardTransactionMapper.xml`，理解 backoff、XML escaping 和 MyBatis `<foreach>`。
 11. 读 `StatementCycleService`、`JapaneseBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
-12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Ledger listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
+12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Notification/Risk listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
 
 每读一个点，都问一句：
 

@@ -35,7 +35,7 @@ Application service  控制 transaction boundary
 
 > controller / domain object **不**直接依赖 MyBatis。MyBatis 是 infrastructure adapter（数据库读写 + row mapping）；service 负责 use case 和事务边界；domain 负责状态和业务规则。
 
-`mybatis.mapper-locations: classpath:mappers/**/*.xml`。当前 mapper：authorization / card / creditaccount / delayjob / inbox / ledger / notification(+delivery) / outbox / repayment / risk / statement(+job+billing) / transaction。
+`mybatis.mapper-locations: classpath:mappers/**/*.xml`。当前 mapper：authorization / card / creditaccount / delayjob / inbox / notification(+delivery) / outbox / repayment / risk / statement(+job+billing) / transaction。
 
 ### 1.2 Mapper 接口 ↔ XML 绑定
 

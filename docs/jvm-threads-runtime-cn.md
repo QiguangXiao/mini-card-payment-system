@@ -187,7 +187,6 @@ mini-card JVM
 | --- | --- | --- | --- |
 | Notification | Authorization/CardTransaction/Statement/Repayment（4 个） | `mini-card-notification-v1` | 2/容器 |
 | Risk | AuthorizationRiskFeature | `mini-card-risk-feature-v1` | 3（对齐 3 partitions） |
-| Ledger | CardTransaction/Repayment（2 个） | `mini-card-ledger-v1` | 2/容器 |
 
 > concurrency 是**每个 listener container** 的 consumer thread 数，不是"整个 context 总共 N 个线程"。concurrency 提高的是不同 partition 的并行；**同一 partition 内仍由一个 consumer 顺序处理**——保证同 aggregate 顺序靠稳定 partition key（authorizationId / creditAccountId），不是让所有 consumer 串行。listener 慢会让本 partition 后续 record 延迟、consumer lag 上升、甚至触发 rebalance；本项目 listener 只做本地 DB 投影、不调外部 provider（好边界）。
 
@@ -210,7 +209,7 @@ Outbox：outbox-scheduler-1 claim(FOR UPDATE SKIP LOCKED) → 提交 outbox-work
 
 DelayJob：delay-job-scheduler-N claim → delay-job-worker-N dispatch(jobType) → 业务 service → lock job row → markDone/retry/DEAD
 
-Kafka listener：consumer thread poll → IntegrationEventReader.read → @Transactional( Inbox claim → 写 notification/risk/ledger 投影 ) → ack record
+Kafka listener：consumer thread poll → IntegrationEventReader.read → @Transactional( Inbox claim → 写 notification/risk 投影 ) → ack record
   为何要 Inbox：Kafka+MySQL 非同一本地事务、at-least-once，listener 可能 DB 写成功后 offset commit 前崩溃 → 重投 → Inbox(consumerName,eventId) 防重复副作用。
 ```
 

@@ -15,7 +15,6 @@ import com.minicard.statement.domain.StatementLine;
 public record StatementLineReadModel(
         UUID id,
         UUID cardTransactionId,
-        UUID ledgerEntryId,
         String networkTransactionId,
         UUID authorizationId,
         String cardId,
@@ -28,7 +27,6 @@ public record StatementLineReadModel(
         return new StatementLineReadModel(
                 line.id(),
                 line.cardTransactionId(),
-                line.ledgerEntryId().orElse(null),
                 line.networkTransactionId(),
                 line.authorizationId(),
                 line.cardId(),

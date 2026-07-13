@@ -63,10 +63,8 @@ class ApplicationCapacityConfigurationTest {
             );
             assertThat(consumers.notification().groupId()).isEqualTo("mini-card-notification-v1");
             assertThat(consumers.riskFeature().groupId()).isEqualTo("mini-card-risk-feature-v1");
-            assertThat(consumers.ledger().groupId()).isEqualTo("mini-card-ledger-v1");
             assertThat(consumers.notification().concurrency()).isEqualTo(2);
             assertThat(consumers.riskFeature().concurrency()).isEqualTo(3);
-            assertThat(consumers.ledger().concurrency()).isEqualTo(2);
         });
     }
 

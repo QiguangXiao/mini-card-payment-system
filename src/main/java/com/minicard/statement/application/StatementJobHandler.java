@@ -32,7 +32,7 @@ import org.springframework.stereotype.Service;
  * 真正锁交易、创建 {@code statements + statement_lines}、标记交易 {@code BILLED} 的动作都在
  * {@code StatementGenerationService} 内部完成；本类只负责 fan-out 和结果计数。</p>
  *
- * <p>单个账户失败被隔离：rejected（无可出账交易）算 skipped，retryable（如 ledger 未就绪）
+ * <p>单个账户失败被隔离：rejected（无可出账交易）算 skipped，retryable（如短暂数据库故障）
  * 算 failed，其余异常也算 failed。整个分片不会因为一个坏账户而全部回滚。</p>
  */
 @Service
@@ -117,7 +117,7 @@ public class StatementJobHandler {
                 generated++;
             } catch (StatementGenerationException exception) {
                 if (exception.retryable()) {
-                    // 可恢复失败：例如 posted transaction 已经存在，但 ledger entry projection 还没补齐。
+                    // 可恢复失败：例如短暂数据库故障或锁超时。
                     // 这类失败让整个 shard 最终回到 PENDING/DEAD，由 dispatcher 的 job retry 机制处理。
                     failed++;
                     log.warn(

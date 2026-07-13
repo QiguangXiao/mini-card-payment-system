@@ -194,13 +194,12 @@ messaging:
     statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
     # DLT(dead-letter topic) 按 consumer 职责拆开。
-    # Notification 坏消息不应该阻塞 Risk projection 或 Ledger projection 的排查/重放。
+    # Notification 坏消息不应该阻塞 Risk projection 的排查/重放。
     notification-dead-letter: mini-card.notification.dlt.v1
     risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
-    ledger-dead-letter: mini-card.ledger.dlt.v1
   consumers:
     # group-id 表示同一个 bounded context 的一组实例共同消费。
-    # 同一 topic 可以被 notification/risk/ledger 多个 group 独立消费，互不抢 offset。
+    # 同一 topic 可以被 notification/risk 多个 group 独立消费，互不抢 offset。
     # group-id 有两个读者：各 @KafkaListener 的 groupId 占位符（消费进度归属），以及绑定类
     # KafkaConsumersProperties——KafkaConsumerConfiguration 用它构建"失败 group -> DLT"路由表，
     # 失败消息按失败的消费组进自己的 DLT（同一 topic 多 group 消费，不能按 topic 推导）。
@@ -214,11 +213,8 @@ messaging:
       group-id: mini-card-risk-feature-v1
       # 对齐 source topic 的 3 个 partitions：授权事件量最大，风控画像投影吃满并行度。
       concurrency: 3
-    ledger:
-      group-id: mini-card-ledger-v1
-      concurrency: 2
-    # 当前只由 error handler 把失败 record 写入上面的三个 DLT，没有 @KafkaListener 消费 DLT。
-    # 生产补齐时应增加独立 monitor group 订阅三个 DLT，记录 metric/告警，并在修复根因后受控 replay；
+    # 当前只由 error handler 把失败 record 写入上面的两个 DLT，没有 @KafkaListener 消费 DLT。
+    # 生产补齐时应增加独立 monitor group 订阅两个 DLT，记录 metric/告警，并在修复根因后受控 replay；
     # 不要收到死信就自动回投 source topic，否则永久坏消息会形成 source -> DLT -> source 的无限循环。
 
 outbox:

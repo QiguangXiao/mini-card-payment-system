@@ -65,7 +65,7 @@ class StatementGenerationServiceTest {
 
     @Test
     // 测试目的：验证账单生成 happy path 会锁账户、锁候选交易、创建 statement/lines 并标记交易已出账。
-    // variant：两笔 unbilled posted transactions 均有 ledger entry，生成 total/minimum payment 和 statement.closed 事件。
+    // variant：两笔 unbilled posted transactions 生成 total/minimum payment 和 statement.closed 事件。
     void generatesStatementFromUnbilledPostedTransactions() {
         CreditAccount account = account();
         StatementLineSource first = lineSource("ntx-001", "1000.00");
@@ -76,11 +76,6 @@ class StatementGenerationServiceTest {
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30")
         )).thenReturn(Optional.empty());
-        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
-                eq(ACCOUNT_ID),
-                eq(Instant.parse("2026-05-31T15:00:00Z")),
-                eq(Instant.parse("2026-06-30T15:00:00Z"))
-        )).thenReturn(false);
         when(billingRepository.findBillableLineSourcesForUpdate(
                 eq(ACCOUNT_ID),
                 eq(Instant.parse("2026-05-31T15:00:00Z")),
@@ -94,8 +89,8 @@ class StatementGenerationServiceTest {
         assertThat(statement.totalAmount().amount()).isEqualByComparingTo("1500.00");
         assertThat(statement.minimumPaymentAmount().amount()).isEqualByComparingTo("1000.00");
         assertThat(statement.items())
-                .extracting(item -> item.ledgerEntryId().orElseThrow())
-                .containsExactly(first.ledgerEntryId(), second.ledgerEntryId());
+                .extracting(item -> item.cardTransactionId())
+                .containsExactly(first.cardTransactionId(), second.cardTransactionId());
         verify(statementRepository).insert(statement);
         verify(billingRepository).markCardTransactionsBilled(statement.id(), List.of(first, second), NOW);
         verify(dueJobScheduler).scheduleAutoRepayment(statement);
@@ -138,7 +133,7 @@ class StatementGenerationServiceTest {
 
     @Test
     // 测试目的：验证没有可出账交易时拒绝生成 0 元账单。
-    // variant：ledger 完整但候选交易为空，抛 StatementGenerationException 且不写 statement。
+    // variant：候选交易为空，抛 StatementGenerationException 且不写 statement。
     void rejectsGenerationWhenNoUnbilledPostedTransactionsExist() {
         CreditAccount account = account();
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
@@ -147,11 +142,6 @@ class StatementGenerationServiceTest {
                 LocalDate.parse("2026-06-01"),
                 LocalDate.parse("2026-06-30")
         )).thenReturn(Optional.empty());
-        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
-                any(),
-                any(),
-                any()
-        )).thenReturn(false);
         when(billingRepository.findBillableLineSourcesForUpdate(
                 any(),
                 any(),
@@ -161,31 +151,6 @@ class StatementGenerationServiceTest {
         assertThatThrownBy(() -> service.generate(command()))
                 .isInstanceOf(StatementGenerationException.class)
                 .hasMessageContaining("no unbilled posted transactions");
-        verify(statementRepository, never()).insert(any());
-        verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
-        verify(eventPublisher, never()).append(any());
-    }
-
-    @Test
-    // 测试目的：验证 posted transaction 缺 ledger entry 时应 retry，而不是生成残缺账单。
-    // variant：missing-ledger 检查命中，直接抛 retryable failure，不插入 statement 或排自动还款。
-    void retriesWhenPostedTransactionsAreWaitingForLedgerEntries() {
-        CreditAccount account = account();
-        when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
-        when(statementRepository.findByCycleForUpdate(
-                ACCOUNT_ID,
-                LocalDate.parse("2026-06-01"),
-                LocalDate.parse("2026-06-30")
-        )).thenReturn(Optional.empty());
-        when(billingRepository.existsUnbilledPostedTransactionMissingLedger(
-                any(),
-                any(),
-                any()
-        )).thenReturn(true);
-
-        assertThatThrownBy(() -> service.generate(command()))
-                .isInstanceOf(StatementGenerationException.class)
-                .hasMessageContaining("waiting for ledger entries");
         verify(statementRepository, never()).insert(any());
         verify(dueJobScheduler, never()).scheduleAutoRepayment(any());
         verify(eventPublisher, never()).append(any());
@@ -224,7 +189,6 @@ class StatementGenerationServiceTest {
     private StatementLineSource lineSource(String networkTransactionId, String amount) {
         return new StatementLineSource(
                 UUID.randomUUID(),
-                UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),
                 "card-123",
@@ -240,7 +204,6 @@ class StatementGenerationServiceTest {
                 LocalDate.parse("2026-06-30"),
                 LocalDate.parse("2026-07-25"),
                 List.of(new StatementLineSource(
-                        UUID.randomUUID(),
                         UUID.randomUUID(),
                         "ntx-existing",
                         UUID.randomUUID(),

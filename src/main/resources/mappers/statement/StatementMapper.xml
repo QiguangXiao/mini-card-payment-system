@@ -32,7 +32,6 @@
             <arg column="id" javaType="java.lang.String"/>
             <arg column="statement_id" javaType="java.lang.String"/>
             <arg column="card_transaction_id" javaType="java.lang.String"/>
-            <arg column="ledger_entry_id" javaType="java.lang.String"/>
             <arg column="network_transaction_id" javaType="java.lang.String"/>
             <arg column="authorization_id" javaType="java.lang.String"/>
             <arg column="card_id" javaType="java.lang.String"/>
@@ -50,7 +49,7 @@
     </sql>
 
     <sql id="statementItemColumns">
-        id, statement_id, card_transaction_id, ledger_entry_id, network_transaction_id,
+        id, statement_id, card_transaction_id, network_transaction_id,
         authorization_id, card_id, amount, currency, posted_at, created_at
     </sql>
 
@@ -88,10 +87,9 @@
         <!--
           插入样例：id='77777777-7777-7777-7777-7777777777a1'，
           statement_id='77777777-7777-7777-7777-777777777701'，
-          card_transaction_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1'，
-          ledger_entry_id='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1'。
-          防重复样例：statement_lines.card_transaction_id 和 ledger_entry_id 的 unique key
-          分别防止同一交易或同一 ledger fact 被重复放进账单。
+          card_transaction_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1'。
+          防重复样例：statement_lines.card_transaction_id 的 unique key
+          防止同一 posted transaction 被重复放进账单。
         -->
         INSERT INTO statement_lines (
             <include refid="statementItemColumns"/>
@@ -99,7 +97,6 @@
             #{id},
             #{statementId},
             #{cardTransactionId},
-            #{ledgerEntryId,jdbcType=CHAR},
             #{networkTransactionId},
             #{authorizationId},
             #{cardId},

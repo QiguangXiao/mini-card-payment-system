@@ -129,7 +129,6 @@ public class MyBatisStatementRepository implements StatementRepository {
                 line.id().toString(),
                 line.statementId().toString(),
                 line.cardTransactionId().toString(),
-                line.ledgerEntryId().map(UUID::toString).orElse(null),
                 line.networkTransactionId(),
                 line.authorizationId().toString(),
                 line.cardId(),
@@ -145,7 +144,6 @@ public class MyBatisStatementRepository implements StatementRepository {
                 UUID.fromString(row.id()),
                 UUID.fromString(row.statementId()),
                 UUID.fromString(row.cardTransactionId()),
-                optionalUuid(row.ledgerEntryId()),
                 row.networkTransactionId(),
                 UUID.fromString(row.authorizationId()),
                 row.cardId(),
@@ -155,7 +153,4 @@ public class MyBatisStatementRepository implements StatementRepository {
         );
     }
 
-    private UUID optionalUuid(String value) {
-        return value == null ? null : UUID.fromString(value);
-    }
 }

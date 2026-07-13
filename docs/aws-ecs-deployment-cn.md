@@ -41,7 +41,6 @@ client
           - inbox_events
           - delay_jobs
           - statements
-          - ledger_entries
       -> Redis + Caffeine snapshot cache
       -> Kafka topics
           - authorization-events
@@ -512,7 +511,7 @@ client
   -> HTTP response
   -> Outbox worker in another scheduler tick
   -> MSK topic mini-card.authorization-events.v1
-  -> Notification/Risk/Ledger consumers
+  -> Notification/Risk consumers
 ```
 
 注意一个细节：ALB 可以把请求转发给 `task-a`，而下一次重试可能转发给 `task-b`。所以应用不能依赖 JVM 内存锁保护资金状态。
@@ -750,7 +749,7 @@ Outbox publisher:
 
 结果:
   DB 状态已经变更
-  但没有事件通知 Notification/Risk/Ledger
+  但没有事件通知 Notification/Risk
 ```
 
 Outbox 把“业务状态”和“待发布事件”放进同一个 MySQL transaction boundary，使故障后可以重扫补发。
@@ -786,7 +785,7 @@ MSK 暂时不可用
 
 - 如果 `outbox_events` backlog 超过阈值，要报警。
 - 如果 backlog 长时间不下降，要考虑降级、限流或暂停部分非核心流量。
-- 如果事件消费者落后，Notification、Risk projection、Ledger projection 都会有 eventual consistency 延迟。
+- 如果事件消费者落后，Notification、Risk projection 会有 eventual consistency 延迟。
 
 ### 9.2 Topic 和 Consumer Group
 
@@ -804,7 +803,6 @@ mini-card.repayment-events.v1
 ```text
 notification-service-group
 risk-feature-group
-ledger-projection-group
 ```
 
 即使现在代码还是单体部署在一个 ECS service 里，Kafka 的 consumer group 语义仍然存在。将来拆服务时，这些 group 可以自然迁移到独立 ECS service。
@@ -918,7 +916,7 @@ CloudWatch 在这里有三类作用：
 
 | 指标 | 为什么重要 |
 | --- | --- |
-| consumer lag | Notification/Risk/Ledger 是否落后 |
+| consumer lag | Notification/Risk 是否落后 |
 | broker CPU/network | broker 是否过载 |
 | produce error rate | Outbox 发布是否异常 |
 | under replicated partitions | Kafka 高可用风险 |
@@ -1170,7 +1168,7 @@ request B returns 500
 | 回源读请求 | statement cache miss 后查 RDS | RDS read IO/CPU | 中等 |
 | 金融写请求 | `POST /api/authorizations` | RDS transaction + row lock + risk | 最难 |
 | 异步发布 | Outbox -> MSK | Kafka + Outbox backlog | 可通过 worker 和 broker 调整 |
-| 异步消费 | MSK -> Notification/Risk/Ledger | consumer lag + DB writes | 可通过 partitions/group 扩展 |
+| 异步消费 | MSK -> Notification/Risk | consumer lag + DB writes | 可通过 partitions/group 扩展 |
 
 所以不要问一个笼统的“能扛多少 QPS”。要拆成：
 

@@ -387,7 +387,7 @@ publish 成功后 mark PUBLISHED
 | --- | --- | --- |
 | Outbox | 本服务状态变化后可靠发布事件 | `outbox_events`, `OutboxPoller`, `OutboxClaimer`, `OutboxWorker` |
 | Inbox | 本服务消费外部事件时防重复 side effect | `consumer_inbox` |
-| DLT | 消息无法处理时隔离坏消息 | `mini-card.notification.dlt.v1`, `mini-card.authorization-risk-feature.dlt.v1`, `mini-card.ledger.dlt.v1` |
+| DLT | 消息无法处理时隔离坏消息 | `mini-card.notification.dlt.v1`, `mini-card.authorization-risk-feature.dlt.v1` |
 
 一句话：
 
@@ -776,7 +776,7 @@ interview回答：
 
 答：
 
-> 它是学习项目，不是完整生产信用卡核心。当前 Ledger 只是 minimal projection，用来理解消费入账和还款入账的账本分录，不是生产级 double-entry general ledger。真实系统还需要账户持有人、权限认证、更完整审计日志、settlement/reconciliation、refund/dispute、监管报表、监控告警、迁移工具、灰度发布、密钥管理和更严格的安全控制。但当前项目已经覆盖后端interview最常问的交易状态、一致性、幂等、锁、异步可靠性和失败恢复。
+> 它是学习项目，不是完整生产信用卡核心。项目刻意不实现 Ledger；真实 accounting system 需要 balanced journal、科目、调整/冲正和严格审计，不能用单边分录投影代替。真实系统还需要账户持有人、权限认证、settlement/reconciliation、refund/dispute、监管报表、监控告警、迁移工具、灰度发布、密钥管理和更严格的安全控制。但当前项目已经覆盖后端interview最常问的交易状态、一致性、幂等、锁、异步可靠性和失败恢复。
 
 ### Q20：如果高并发下授权接口变慢，你会怎么排查？
 
@@ -799,7 +799,7 @@ interview回答：
 9. 解释 statement generation 如何防止同一交易进入两张账单。
 10. 解释 repayment 如何防止超额还款和重复还款。
 11. 解释 DelayJob 的 `PROCESSING` 为什么是 lease。
-12. 解释 minimal Ledger 为什么消费 `card_transaction.posted` 和 `repayment.received`，而不是 authorization。
+12. 解释为什么 CardTransaction、Statement、Ledger 和 Reconciliation 不是同一个概念，以及本项目为什么只实现交易与账单、不实现 accounting Ledger。
 13. 解释 DDD 在项目里带来了什么，哪里没有强行套 DDD。
 14. 解释 MyBatis 相比 JPA 在这个项目里的优势。
 15. 解释金额为什么用 `BigDecimal` 和 `DECIMAL(19,2)`。

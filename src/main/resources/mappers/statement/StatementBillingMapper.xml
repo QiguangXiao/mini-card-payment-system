@@ -8,7 +8,6 @@
                type="com.minicard.statement.infrastructure.mybatis.StatementLineSourceRow">
         <constructor>
             <arg column="card_transaction_id" javaType="java.lang.String"/>
-            <arg column="ledger_entry_id" javaType="java.lang.String"/>
             <arg column="network_transaction_id" javaType="java.lang.String"/>
             <arg column="authorization_id" javaType="java.lang.String"/>
             <arg column="card_id" javaType="java.lang.String"/>
@@ -83,30 +82,9 @@
         ORDER BY credit_account_id
     </select>
 
-    <select id="countUnbilledPostedTransactionsMissingLedger" resultType="int">
-        <!--
-          查询样例：creditAccountId='11111111-1111-1111-1111-111111111111'，
-          periodStartInclusive='2026-06-01T00:00:00Z'，periodEndExclusive='2026-07-01T00:00:00Z'。
-          LEFT JOIN 用来找“交易已经 POSTED，但 ledger_entries 还没有对应事实”的异常。
-          如果跳过这个检查，statement 可能静默少收一笔交易，账单总额会小于交易事实表。
-        -->
-        SELECT COUNT(*)
-        FROM card_transactions c
-        LEFT JOIN ledger_entries l
-          ON l.source_type = 'CARD_TRANSACTION'
-         AND l.source_id = c.id
-         AND l.entry_type = 'CARD_TRANSACTION_POSTED'
-        WHERE c.credit_account_id = #{creditAccountId}
-          AND c.status = 'POSTED'
-          AND c.billing_status = 'UNBILLED'
-          AND c.posted_at &gt;= #{periodStartInclusive}
-          AND c.posted_at &lt; #{periodEndExclusive}
-          AND l.id IS NULL
-    </select>
-
     <!--
       生成 statement line 前同时锁住 card_transactions row。
-      LedgerEntry 是 append-only，不在这里更新；statement_lines.ledger_entry_id unique key 防重复出账。
+      statement_lines.card_transaction_id unique key 是数据库侧第二道防重复出账保护。
       查询样例：同一账户 2026-06 账期内，锁住所有 status='POSTED' 且 billing_status='UNBILLED' 的候选交易。
       索引样例：idx_card_transactions_statement_candidates
       (credit_account_id, status, billing_status, statement_id, posted_at) 能把候选范围压到单账户单账期。
@@ -115,7 +93,6 @@
     <select id="findBillableLineSourcesForUpdate" resultMap="statementLineSourceRowMap">
         SELECT
             c.id AS card_transaction_id,
-            l.id AS ledger_entry_id,
             c.network_transaction_id,
             c.authorization_id,
             c.card_id,
@@ -123,10 +100,6 @@
             c.currency,
             c.posted_at
         FROM card_transactions c
-        JOIN ledger_entries l
-          ON l.source_type = 'CARD_TRANSACTION'
-         AND l.source_id = c.id
-         AND l.entry_type = 'CARD_TRANSACTION_POSTED'
         WHERE c.credit_account_id = #{creditAccountId}
           AND c.status = 'POSTED'
           AND c.billing_status = 'UNBILLED'

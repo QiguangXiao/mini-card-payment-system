@@ -9,16 +9,15 @@ import com.minicard.shared.domain.Money;
 /**
  * 生成 statement line 时需要的消费事实。
  *
- * <p>关键词：账单明细来源, 卡交易, 账本分录, statement line source,
- * card transaction, ledger entry, 請求明細元(せいきゅうめいさいもと),
- * 取引と仕訳(とりひきとしわけ)。</p>
+ * <p>关键词：账单明细来源, 卡交易, statement line source,
+ * card transaction, 請求明細元(せいきゅうめいさいもと)。</p>
  *
- * <p>CardTransaction 是用户可见消费明细；LedgerEntry 是内部入账依据。
- * StatementLine 同时引用两者，避免只靠交易流水出账、却无法和账务分录对齐。</p>
+ * <p>CardTransaction 是本项目已经完成 posting 的交易事实；StatementLine 在出账事务内
+ * 把它冻结成历史快照。生产系统可再关联独立 accounting journal，但不应让可选异步投影
+ * 成为本项目账单生成的 liveness 前置条件。</p>
  */
 public record StatementLineSource(
         UUID cardTransactionId,
-        UUID ledgerEntryId,
         String networkTransactionId,
         UUID authorizationId,
         String cardId,
@@ -28,7 +27,6 @@ public record StatementLineSource(
 
     public StatementLineSource {
         Objects.requireNonNull(cardTransactionId, "cardTransactionId must not be null");
-        Objects.requireNonNull(ledgerEntryId, "ledgerEntryId must not be null");
         requireText(networkTransactionId, "networkTransactionId");
         Objects.requireNonNull(authorizationId, "authorizationId must not be null");
         requireText(cardId, "cardId");

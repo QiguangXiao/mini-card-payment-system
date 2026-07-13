@@ -71,7 +71,7 @@ public class KafkaTopicsConfiguration {
     @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         // Notification consumer 失败只进 notification DLT。
-        // 如果所有 consumer 共用一个 DLT，排查时很难判断是通知、风控还是账本投影坏了。
+        // 如果所有 consumer 共用一个 DLT，排查时很难判断是通知还是风控投影坏了。
         return deadLetterTopic(properties.notificationDeadLetter());
     }
 
@@ -81,17 +81,11 @@ public class KafkaTopicsConfiguration {
         return deadLetterTopic(properties.riskFeatureDeadLetter());
     }
 
-    @Bean
-    public NewTopic ledgerDeadLetterTopic(KafkaTopicsProperties properties) {
-        // Ledger projection 是财务学习重点；单独 DLT 便于只重放 ledger 消息，不影响 Notification。
-        return deadLetterTopic(properties.ledgerDeadLetter());
-    }
-
     private NewTopic deadLetterTopic(String topicName) {
         // DLT partition 数和 source topic 对齐，因为 recoverer 会保留原 partition。
-        // 如果 DLT partition 更少，发送到原 partition 可能失败，反而让 offset 无法推进。
+        // 如果 DLT partition 更少，recoverer 可能退化为 producer 自动选 partition，失去稳定对应关系。
         return TopicBuilder.name(topicName) // 每个 bounded context 传入自己的 DLT 名。
-                .partitions(3)  // 必须覆盖 recoverer 可能保留的源 partition 编号 0..2。
+                .partitions(3)  // 覆盖源 partition 0..2，保留排查和 replay 时的对应关系。
                 .replicas(1)    // 本地 broker 限制；不表达 DLT 的消费并发。
                 .build();       // 生成供 KafkaAdmin 创建的 NewTopic bean。
     }

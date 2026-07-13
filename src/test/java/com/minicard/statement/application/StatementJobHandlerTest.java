@@ -67,7 +67,7 @@ class StatementJobHandlerTest {
         doThrow(StatementGenerationException.rejected("no billable transactions"))
                 .when(statementGenerationService)
                 .generate(argThat(command -> command.creditAccountId().equals(SKIPPED_ACCOUNT_ID)));
-        doThrow(StatementGenerationException.retryable("ledger not ready"))
+        doThrow(StatementGenerationException.retryable("database temporarily unavailable"))
                 .when(statementGenerationService)
                 .generate(argThat(command -> command.creditAccountId().equals(RETRY_ACCOUNT_ID)));
 

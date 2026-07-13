@@ -39,7 +39,7 @@ public final class Repayment {
     private final UUID statementId;
     /** statement 对应的 credit account id；markReceived 时从账单侧补齐。 */
     private UUID creditAccountId;
-    /** 还款金额；金额保持正数，减少余额的方向由服务编排和 LedgerDirection 表达。 */
+    /** 还款金额；金额保持正数，减少账户欠款的方向由 application service 显式编排。 */
     private final Money amount;
     /** 还款状态；PENDING 表示 claim 已建立，RECEIVED 表示业务入账完成。 */
     private RepaymentStatus status;

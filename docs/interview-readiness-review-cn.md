@@ -76,7 +76,7 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 - Outbox row 与业务状态**同事务提交**（domain event 由聚合在状态转换处产生，service 只负责 append）。
 - producer 侧：`acks=all` + `enable.idempotence=true`；publish 等 broker ack 后才 markPublished。
 - "ack 后、markPublished 前崩溃" → 事件重发 → **consumer 端双重去重**：
-  Inbox claim（`consumer_inbox` 复合主键）+ 业务唯一键（如 `uk_ledger_entries_source_event_type`）。
+  Inbox claim（`consumer_inbox` 复合主键）+ 业务唯一键（如 `notifications.source_event_id`）。
 - 每个 bounded context 独立 consumer group + 独立 DLT，一个下游故障不影响其他投影。
 
 ### 1.5 Schema 与领域不变量互为防线
@@ -195,7 +195,7 @@ outbox 把问题收敛为"单库事务 + 可重放"。
 ### Q4. "同一聚合的两个事件会乱序吗？"
 
 要点：**会**——claim 按 created_at 排序，但 4 线程 worker 池并发 publish，同 partition key
-只保证分区内按发送序。当前 consumer 都是事实幂等投影（ledger/notification/risk），乱序无实害。
+只保证分区内按发送序。当前 Notification/Risk consumer 都必须以幂等和显式状态处理重复或乱序，不能依赖跨 topic 顺序。
 若需要严格 per-key 有序：按 partition_key 哈希到单线程 worker，或单 publisher 串行发送，
 代价是吞吐。**主动说出这一点**，别等面试官发现。
 
@@ -209,7 +209,7 @@ PENDING 行，需要额外的回收 job；mini 项目里单事务 + 并发上限
 ### Q6. "这个单体怎么拆成微服务？拆完 PostingService 的跨聚合事务怎么办？"
 
 要点：先按 bounded context 拆（authorization+credit account 是一个一致性核心，
-statement/repayment 一组，ledger/notification/risk 天然已是事件消费者）。
+statement/repayment 一组，notification/risk 天然已是事件消费者）。
 拆开 authorization 与 account 后，posting 的"授权转 POSTED + 余额迁移"从本地事务变成
 **saga**：预占确认 → 入账 → 失败补偿（重新释放 hold），幂等键贯穿每步。
 诚实立场："现在是 modular monolith，事件边界已按拆分设计，但我没有伪装它是微服务。"
@@ -309,11 +309,9 @@ T4  DelayJob 按 retry policy 重试：
 **修复后的面试价值**：这是"我在自查中发现了资金级竞态并修复"的最佳故事，
 能部分对冲缺支付生产经验的背景短板。
 
-### 6.3 账单批处理静默失败 — 严重度 Medium
+### 6.3 账单批处理失败缺少运维闭环 — 严重度 Medium
 
-ledger 是 Kafka 异步投影，`existsUnbilledPostedTransactionMissingLedger` 把账单生成挡回
-retryable；Kafka/consumer 宕机超过重试窗口（max-attempts=10）→ job DEAD →
-该账户该期**永不出账**，且无告警；下期查询窗口按 `posted_at` 圈定，也捞不回旧交易。
+StatementJob 重试耗尽后会进入 DEAD，但当前仍缺少 DEAD 计数告警和受控 replay 工具。
 修复：DEAD 计数 gauge + 告警 + runbook（DEAD→PENDING 重放安全性论证见 §5-Q9）。
 
 ### 6.4 高流量主张缺证据 — 严重度 Medium（背景相关）
@@ -399,7 +397,6 @@ runbook 精确补跑入口。
 | 通知投递栈（每渠道断路器 + slow-call 阈值 + lease 状态机 + 故障注入；硬超时交给 HTTP client） | 全项目最大子系统之一，但与 issuer 核心域无关 | 保留代码；面试降为一句话："通知走同一套可认领框架，附带渠道级熔断" |
 | 缓存栈后 50%（tombstone 版本地板、rebuild 单飞锁、Pub/Sub 广播） | tombstone CAS 的正确性论证很难白板 3 分钟讲清，讲一半反而显得不稳 | 主叙事止步于 cache-aside + after-commit 失效 + 为什么不双写；其余等追问 |
 | velocity 双实现（Redis + JDBC） | 学习价值高、面试价值低 | 一句"JDBC 版是精确性对照基线"带过 |
-| 账单生成以 ledger 就绪为前置 | 让批处理依赖 Kafka 管道存活，解释成本高 | 备 20 秒版本："账单是法律文件，宁可迟到不可缺分录；retryable + 人工重放兜底" |
 | 注释密度 | 学习工具没问题；但"每行都有注释"可能被读为不自信，且中文注释日方不可读 | 不删注释；用英文 ARCHITECTURE.md 承担对外叙事 |
 
 ---
@@ -516,7 +513,7 @@ runbook 精确补跑入口。
 > before the finalize: the row is still PROCESSING, a recoverer reclaims it after the lease
 > expires, and the event gets published again. That's why the overall contract is at-least-once,
 > and consumers deduplicate twice: an inbox table keyed by consumer name plus event ID as the
-> first gate, and a business-level unique key — for example, one ledger entry per source event —
+> first gate, and a business-level unique key — for example, one notification per source event —
 > as the second, which also protects manual replays that bypass the inbox.
 
 ### 9.6 可认领任务框架（Claimable Jobs with Lease Tokens）
@@ -648,11 +645,11 @@ runbook 精确补跑入口。
 > of the outbox, which is why consumer-side dedup still matters. On the consumer side,
 > auto-commit is off and the ack mode is per-record: the offset commits only after the listener
 > returns successfully, so a crash means redelivery, never silent loss. Each bounded context —
-> ledger, notification, risk — subscribes with its own consumer group, because they're
+> notification and risk — subscribes with its own consumer group, because they're
 > independent projections of the same facts: with separate groups every context receives every
 > event; sharing a group would randomly split events between them. Poison messages go to a
-> per-consumer dead-letter topic so one bad payload doesn't block a partition, and a monitor
-> group watches the DLTs. Partition keys are the aggregate ID, which gives per-partition
+> per-consumer dead-letter topic so one bad payload doesn't block a partition. The current
+> project still needs DLT metrics, alerting, and controlled replay. Partition keys are the aggregate ID, which gives per-partition
 > ordering — and I'll be upfront that with a parallel publisher pool, strict per-aggregate
 > ordering isn't guaranteed; my consumers are order-insensitive by design, and if I needed
 > strict ordering I'd serialize publishing per partition key and pay the throughput cost.
@@ -669,7 +666,7 @@ runbook 精确补跑入口。
 > statement must have paid-amount equal to total. Balances have non-negative checks and the
 > account-level invariant — reserved plus posted within the credit limit — is enforced in both
 > the aggregate and the database. Uniqueness carries the idempotency design: idempotency keys,
-> the network transaction ID, one statement per account per cycle, one ledger entry per source
+> the network transaction ID, one statement per account per cycle, one notification per source
 > event, one delay job per aggregate-and-type. The trade-off I'd acknowledge: putting state
 > machines into CHECK constraints means every status change ships as a migration, and MySQL
 > only enforces CHECK from 8.0.16 — for this project the extra safety is worth the coupling,

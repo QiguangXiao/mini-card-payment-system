@@ -39,14 +39,13 @@ import org.springframework.transaction.annotation.Transactional;
  * 1. SELECT credit_account FOR UPDATE（与 posting 共用的并发门）
  * 2. SELECT statement by (account, periodStart, periodEnd) FOR UPDATE；
  *    已存在: 直接返回幂等结果，不再扫交易
- * 3. 新建路径（对应 createStatement 的"创建阶段 1-7"）：
- *    3.1 本期 posted 交易缺 ledger entry: retryable 异常（等 projection，不出残缺账单）
- *    3.2 SELECT 本期可出账交易 FOR UPDATE（冻结明细快照）；为空: rejected（不生成 0 元账单）
- *    3.3 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
- *    3.4 INSERT statements/statement_lines（自然唯一键兜底幂等）
- *    3.5 交易标记 BILLED（防下一轮重复归账）
- *    3.6 schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
- *    3.7 append Outbox event statement.closed，随后 COMMIT
+ * 3. 新建路径（对应 createStatement 的创建阶段）：
+ *    3.1 SELECT 本期可出账交易 FOR UPDATE（冻结明细快照）；为空: rejected（不生成 0 元账单）
+ *    3.2 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
+ *    3.3 INSERT statements/statement_lines（自然唯一键兜底幂等）
+ *    3.4 交易标记 BILLED（防下一轮重复归账）
+ *    3.5 schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
+ *    3.6 append Outbox event statement.closed，随后 COMMIT
  * </pre>
  */
 @Service
@@ -114,21 +113,8 @@ public class StatementGenerationService {
             CreditAccount account,
             Instant now
     ) {
-        // 创建阶段 1：先检查 posted transaction 是否已具备 ledger entry。
-        // Statement line 需要 ledger_entry_id 做审计链路；缺 projection 时应 retry，而不是生成不完整账单。
-        if (billingRepository.existsUnbilledPostedTransactionMissingLedger(
-                account.id(),
-                periodStartInstant(command.periodStart()),
-                periodEndExclusiveInstant(command.periodEnd())
-        )) {
-            // Ledger 是 append-only projection，但 statement line 必须能追到 ledger_entry_id。
-            // 如果这里静默跳过缺 ledger 的交易，本期账单会漏消费，生产上会变成对账缺口。
-            throw StatementGenerationException.retryable(
-                    "posted card transactions are waiting for ledger entries"
-            );
-        }
-
-        // 创建阶段 2：锁定本期可出账交易快照。
+        // 创建阶段 1：锁定本期可出账交易快照。CardTransaction 是本项目的入账交易事实，
+        // Statement 不再等待一个异步 Ledger projection，避免下游 lag/DLT 反向阻塞账单主流程。
         // FOR UPDATE 防止这些交易在本事务完成前被另一轮 statement job 同时归账。
         List<StatementLineSource> lineSources = billingRepository
                 .findBillableLineSourcesForUpdate(
@@ -144,7 +130,7 @@ public class StatementGenerationService {
             );
         }
 
-        // 创建阶段 3：计算账单金额，构造 CLOSED statement 和不可变 statement lines。
+        // 创建阶段 2：计算账单金额，构造 CLOSED statement 和不可变 statement lines。
         // lineSources 是本事务锁定后的快照；Statement.close 会把这些来源转成账单行。
         Money totalAmount = totalAmount(lineSources);
         Statement statement = Statement.close(

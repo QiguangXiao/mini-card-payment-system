@@ -24,8 +24,6 @@ public record KafkaTopicsProperties(
         /** notification consumer 的 dead-letter topic。 */
         String notificationDeadLetter,
         /** risk feature consumer 的 dead-letter topic。 */
-        String riskFeatureDeadLetter,
-        /** ledger consumer 的 dead-letter topic。 */
-        String ledgerDeadLetter
+        String riskFeatureDeadLetter
 ) {
 }

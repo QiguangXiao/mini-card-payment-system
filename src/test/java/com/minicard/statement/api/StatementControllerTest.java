@@ -65,7 +65,6 @@ class StatementControllerTest {
                 .andExpect(jsonPath("$.status").value("CLOSED"))
                 .andExpect(jsonPath("$.totalAmount").value(1500.00))
                 .andExpect(jsonPath("$.minimumPaymentAmount").value(1000.00))
-                .andExpect(jsonPath("$.items[0].ledgerEntryId").exists())
                 .andExpect(jsonPath("$.items[0].networkTransactionId").value("ntx-001"));
     }
 
@@ -128,7 +127,6 @@ class StatementControllerTest {
 
     private StatementLineSource transaction(String networkTransactionId, String amount) {
         return new StatementLineSource(
-                UUID.randomUUID(),
                 UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),

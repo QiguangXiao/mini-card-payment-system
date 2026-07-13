@@ -13,8 +13,8 @@ import com.minicard.statement.domain.StatementLineSource;
  * shard query, billed marker, 請求対象検索(せいきゅうたいしょうけんさく),
  * 分割処理(ぶんかつしょり)。</p>
  *
- * <p>它把 CardTransaction + append-only LedgerEntry 拼成 statement line source；
- * StatementGenerationService 不直接知道 SQL join 和 shard hash 细节。</p>
+ * <p>它把已经 {@code POSTED + UNBILLED} 的 CardTransaction 读取为 statement line source；
+ * StatementGenerationService 不直接知道 SQL、row lock 和 shard hash 细节。</p>
  *
  * <p>分片查询的关键是“按账户分片”，不是“按交易分片”。实现类用
  * {@code MOD(CRC32(credit_account_id), shardCount) = shardNo} 先找出本 shard 负责的账户，
@@ -38,12 +38,6 @@ public interface StatementBillingRepository {
             Instant periodEndExclusive,
             int shardNo,
             int shardCount
-    );
-
-    boolean existsUnbilledPostedTransactionMissingLedger(
-            UUID creditAccountId,
-            Instant periodStartInclusive,
-            Instant periodEndExclusive
     );
 
     List<StatementLineSource> findBillableLineSourcesForUpdate(

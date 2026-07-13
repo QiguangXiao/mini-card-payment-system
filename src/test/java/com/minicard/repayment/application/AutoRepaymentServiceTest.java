@@ -109,7 +109,6 @@ class AutoRepaymentServiceTest {
                 LocalDate.parse("2026-07-27"),
                 List.of(new StatementLineSource(
                         UUID.randomUUID(),
-                        UUID.randomUUID(),
                         "ntx-001",
                         UUID.randomUUID(),
                         "card-123",

@@ -93,7 +93,6 @@ class StatementTest {
     void rejectsTransactionOutsideBillingPeriod() {
         StatementLineSource transaction = new StatementLineSource(
                 UUID.randomUUID(),
-                UUID.randomUUID(),
                 "ntx-late",
                 UUID.randomUUID(),
                 "card-123",
@@ -175,12 +174,9 @@ class StatementTest {
 
         // 快照行有自己的身份，不复用来源事实的 id；否则交易生命周期和账单快照生命周期会混在一起。
         assertThat(line.id())
-                .isNotEqualTo(source.cardTransactionId())
-                .isNotEqualTo(source.ledgerEntryId());
+                .isNotEqualTo(source.cardTransactionId());
         assertThat(line.statementId()).isEqualTo(statementId);
         assertThat(line.cardTransactionId()).isEqualTo(source.cardTransactionId());
-        // snapshot 工厂契约：新出账的 line 必须能追到 ledger entry；只有 restore 容忍历史数据的 null。
-        assertThat(line.ledgerEntryId()).contains(source.ledgerEntryId());
         assertThat(line.createdAt()).isEqualTo(NOW);
     }
 
@@ -194,7 +190,6 @@ class StatementTest {
             Instant postedAt
     ) {
         return new StatementLineSource(
-                UUID.randomUUID(),
                 UUID.randomUUID(),
                 networkTransactionId,
                 UUID.randomUUID(),

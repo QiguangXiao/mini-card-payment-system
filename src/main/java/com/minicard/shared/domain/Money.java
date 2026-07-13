@@ -12,7 +12,7 @@ import java.util.Objects;
  * 金額(きんがく), 通貨(つうか), 桁数(けたすう)。</p>
  *
  * <p>金融系统不能用 double 表示金额；这里用 BigDecimal + Currency，把非负、按币种小数位规则
- * 都收在值对象内。Money 是跨 bounded context 共享的内核值对象（statement/repayment/ledger/risk
+ * 都收在值对象内。Money 是跨 bounded context 共享的内核值对象（statement/repayment/risk
  * 等都用它），刻意不属于任何单一业务上下文，因此放在 com.minicard.shared.domain，
  * 而不是某个 domain 包下——否则其他 context 会被迫“依赖 authorization”这种假依赖。</p>
  */

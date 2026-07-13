@@ -14,11 +14,11 @@ import org.springframework.stereotype.Repository;
 /**
  * StatementBillingRepository 的 MyBatis adapter。
  *
- * <p>关键词：账单候选仓储, Ledger join, BILLED 标记,
- * statement billing repository, append-only ledger, 請求対象リポジトリ(せいきゅうたいしょうリポジトリ)。</p>
+ * <p>关键词：账单候选仓储, 交易快照, BILLED 标记,
+ * statement billing repository, transaction snapshot, 請求対象リポジトリ(せいきゅうたいしょうリポジトリ)。</p>
  *
- * <p>LedgerEntry 保持 append-only；这里只更新 CardTransaction 的 billing marker。
- * ledger_entry_id 通过 statement_lines 唯一约束防止重复出账。</p>
+ * <p>这里只锁定并更新 CardTransaction 的 billing marker；statement_lines 对
+ * card_transaction_id 的唯一约束提供第二道防重复出账保护。</p>
  */
 @Repository
 @RequiredArgsConstructor
@@ -50,19 +50,6 @@ public class MyBatisStatementBillingRepository implements StatementBillingReposi
                 .stream()
                 .map(UUID::fromString)
                 .toList();
-    }
-
-    @Override
-    public boolean existsUnbilledPostedTransactionMissingLedger(
-            UUID creditAccountId,
-            Instant periodStartInclusive,
-            Instant periodEndExclusive
-    ) {
-        return mapper.countUnbilledPostedTransactionsMissingLedger(
-                creditAccountId.toString(),
-                periodStartInclusive,
-                periodEndExclusive
-        ) > 0;
     }
 
     @Override
@@ -111,7 +98,6 @@ public class MyBatisStatementBillingRepository implements StatementBillingReposi
     private StatementLineSource toDomain(StatementLineSourceRow row) {
         return new StatementLineSource(
                 UUID.fromString(row.cardTransactionId()),
-                UUID.fromString(row.ledgerEntryId()),
                 row.networkTransactionId(),
                 UUID.fromString(row.authorizationId()),
                 row.cardId(),
