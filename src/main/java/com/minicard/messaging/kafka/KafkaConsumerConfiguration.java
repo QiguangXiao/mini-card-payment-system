@@ -51,7 +51,7 @@ import org.springframework.util.backoff.FixedBackOff;
  *
  * <h3>反序列化边界</h3>
  * <p>Kafka 层是 String 反序列化，poll 阶段基本不可能失败；malformed JSON 在
- * {@link IntegrationEventReader} 内变成 {@link EventContractException}（not-retryable，直进
+ * {@link IntegrationEventReader} 内变成 {@link InvalidIntegrationEventException}（not-retryable，直进
  * DLT）。所以这里不需要 ErrorHandlingDeserializer——那是 JsonDeserializer 架构下的解法，
  * 本项目刻意把 payload 解析放在 listener 内的 tolerant reader 里。</p>
  */
@@ -109,7 +109,7 @@ public class KafkaConsumerConfiguration {
         // malformed JSON 或 unsupported schema version 重试也不会自愈，
         // 所以 permanent contract failure 不消耗这 2 次 retry，直接进入 DLT。
         // 例如 payload 缺必填字段、时间格式错误；这些不是 DB 短暂抖动，重试同一条消息也不会变好。
-        errorHandler.addNotRetryableExceptions(EventContractException.class);
+        errorHandler.addNotRetryableExceptions(InvalidIntegrationEventException.class);
 
         // 阶段 4：交给 Spring Boot 的 Kafka 自动配置装进默认 listener factory。之后每个
         // @KafkaListener container 的异常路径统一是：

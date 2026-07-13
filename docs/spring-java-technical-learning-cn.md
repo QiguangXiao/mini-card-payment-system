@@ -832,7 +832,7 @@ downstream observes delay
 > 这里只保留几个 **Spring/库集成视角**的小点：
 
 - **`@KafkaListener` 是 inbound adapter**：方法只做 eventType 过滤 + payload→command 映射，真正 side effect 在 application service；每个 bounded context 独立 group + 独立 DLT。
-- **`DefaultErrorHandler` + `addNotRetryableExceptions`**：瞬时异常按 `FixedBackOff(1000ms, 2)` 重试再进 DLT，`EventContractException` 这种永久错误**不重试直接 DLT**。
+- **`DefaultErrorHandler` + `addNotRetryableExceptions`**：瞬时异常按 `FixedBackOff(1000ms, 2)` 重试再进 DLT，`InvalidIntegrationEventException` 这种永久错误**不重试直接 DLT**。
 - **捕获 `InterruptedException` 后恢复 interrupt flag**：`Thread.currentThread().interrupt()`——不吞 shutdown 信号，让阻塞等待（如 `send().get()`）能正确响应停机。
 - **`ObjectMapper` + `JsonNode`**：payload 用 `JsonNode` 而非每事件一组 DTO（envelope 稳定、payload 灵活，Tolerant Reader）；`ObjectMapper` 直接复用 Spring Boot 配置好的实例，保持序列化一致。
 
@@ -1198,7 +1198,7 @@ log.warn("failed " + event.id() + exception);
 | `TransactionOperations` | 不如 `@Transactional` 简洁 | 同一 worker 方法内拆事务 | self-invocation、长事务、finalize 边界不清 |
 | `afterCommit` evict | 延后一步 | commit 后写 tombstone，避免旧 DB 值回填 cache | stale snapshot |
 | `DefaultErrorHandler` + DLT | Kafka 配置复杂 | 坏消息隔离和 replay 入口 | partition 被坏消息卡住或错误被吞 |
-| `EventContractException` not retryable | 少重试 | malformed message 重试不会自愈 | 无意义 retry 占用 consumer |
+| `InvalidIntegrationEventException` not retryable | 少重试 | malformed message 重试不会自愈 | 无意义 retry 占用 consumer |
 | `Thread.currentThread().interrupt()` | 奇怪的固定写法 | 恢复中断信号 | shutdown 语义被吞 |
 | `record compact constructor` | 额外校验 | 所有创建路径统一 invariant | controller 外路径可造出坏对象 |
 | `BigDecimal.setScale(2)` | 格式化 | 统一 equality/display/DB scale | `1.0` 和 `1.00` 比较意外 |

@@ -220,7 +220,7 @@ executor 可用 capacity 的原因。
 | ack mode | `record` | 一条 listener 成功后推进一条 offset |
 | consumer auto commit | `false` | 不按后台定时器提前提交 |
 | consumer retry | 首次 + `2` 次 | 普通异常每次间隔 `1s` 后再进 DLT |
-| contract failure | `0` 次 retry | `EventContractException` 直接 DLT |
+| contract failure | `0` 次 retry | `InvalidIntegrationEventException` 直接 DLT |
 | producer acks | `all` | 等 ISR 确认，提高 durability |
 | producer max in-flight | `5` | idempotent producer 下兼顾 pipeline 和顺序 |
 | producer request timeout | `3s` | 单次 broker 响应上限 |
@@ -753,7 +753,7 @@ Tomcat 容量更大只会让排队更深，不会增加资金写吞吐。
 | rate / concurrency / queue | RateLimiter、Semaphore、worker pool、queue 各限制什么；能用 Little's Law 粗算 | 本文 §1、`WorkerExecutorConfiguration` |
 | at-least-once 与幂等 | Outbox 为什么可能重复发，Inbox/unique key 如何防重复副作用，DLT 不等于修复 | `OutboxWorker`、`RecordLedgerEntryService`、Kafka listeners |
 | lease deadline 与 owner token | claim 为什么短事务、外部动作为什么事务外、迟到 worker 为什么不能 finalize | Outbox/DelayJob/Notification/Statement workers |
-| retry 分类与放大 | permanent、transient、throttled、circuit-open 为什么走不同路径；双层 retry 如何相乘 | `EventContractException`、Notification/Bank retry |
+| retry 分类与放大 | permanent、transient、throttled、circuit-open 为什么走不同路径；双层 retry 如何相乘 | `InvalidIntegrationEventException`、Notification/Bank retry |
 | 过载 HTTP 语义 | 429、503、business decline、500 分别表示什么；状态变更 retry 必须复用 Idempotency-Key | interceptor、`GlobalExceptionHandler` |
 
 “学透”的标准不是背类名，而是能画出 A/B actor 和失败时间线。例如必须能独立解释：

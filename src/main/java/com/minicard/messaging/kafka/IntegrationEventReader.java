@@ -54,7 +54,7 @@ public class IntegrationEventReader {
     public IntegrationEvent read(ConsumerRecord<String, String> record) {
         try {
             // 阶段 1：把 record.value() 的 JSON 反序列化成统一 envelope；此时还没有执行业务逻辑。
-            // 如果 JSON 坏了，会抛 EventContractException，交给 KafkaConsumerConfiguration 配置的
+            // 如果 JSON 坏了，会抛 InvalidIntegrationEventException，交给 KafkaConsumerConfiguration 配置的
             // DefaultErrorHandler：contract failure 不重试，直接发到对应 consumer 的 DLT。
             IntegrationEvent event = objectMapper.readValue(
                     record.value(),          // Kafka value 是 producer 写入的 JSON 字符串。
@@ -62,11 +62,11 @@ public class IntegrationEventReader {
             );
             // 阶段 2：集中校验 transport contract，consumer 才能专注业务字段。
             // 如果每个 listener 自己解析/校验，contract failure 会变成不一致的异常和重试行为。
-            validate(event); // validate 失败会抛 not-retryable EventContractException。
+            validate(event); // validate 失败会抛 not-retryable InvalidIntegrationEventException。
             return event;    // 返回后由具体 listener 判断 eventType 并解析业务 payload。
         } catch (JsonProcessingException exception) {
             // JSON 格式错误是永久 contract failure，重试同一消息也不会成功。
-            throw new EventContractException("integration event JSON is invalid", exception);
+            throw new InvalidIntegrationEventException("integration event JSON is invalid", exception);
         }
     }
 
@@ -77,15 +77,15 @@ public class IntegrationEventReader {
         if (event.eventId() == null || event.payload() == null || event.payload().isNull()) {
             // 缺 eventId/payload 时无法做 idempotency 和业务解析，必须拒绝。
             // 如果放进业务 service，缺 eventId 会让 Inbox 无法去重，重复投递就可能重复写业务表。
-            throw new EventContractException("eventId and payload are required");
+            throw new InvalidIntegrationEventException("eventId and payload are required");
         }
         if (event.eventType() == null || event.eventType().isBlank()) {
             // eventType 是 dispatch key。缺它时 consumer 不知道这条消息属于哪个业务 contract。
-            throw new EventContractException("eventType is required");
+            throw new InvalidIntegrationEventException("eventType is required");
         }
         if (event.eventVersion() < 1) {
             // 版本号用于未来 schema 演进。非法版本不要猜测兼容，否则 replay 时会产生不可解释的数据。
-            throw new EventContractException("eventVersion must be positive");
+            throw new InvalidIntegrationEventException("eventVersion must be positive");
         }
     }
 
@@ -97,7 +97,7 @@ public class IntegrationEventReader {
     public String requiredText(JsonNode root, String fieldName) {
         JsonNode value = root.get(fieldName);
         if (value == null || !value.isTextual() || value.asText().isBlank()) {
-            throw new EventContractException(fieldName + " is required");
+            throw new InvalidIntegrationEventException(fieldName + " is required");
         }
         return value.asText();
     }
@@ -111,7 +111,7 @@ public class IntegrationEventReader {
             return UUID.fromString(value);
         } catch (IllegalArgumentException exception) {
             // 如果让 IllegalArgumentException 直接逃逸，Kafka 会把不会自愈的坏 UUID 当成瞬时异常空转 retry。
-            throw new EventContractException(fieldName + " must be a valid UUID", exception);
+            throw new InvalidIntegrationEventException(fieldName + " must be a valid UUID", exception);
         }
     }
 
@@ -124,7 +124,7 @@ public class IntegrationEventReader {
             return new BigDecimal(value);
         } catch (NumberFormatException exception) {
             // 同一 payload 重试不会把非法数字变合法，必须标成 contract failure 后直接进入 DLT。
-            throw new EventContractException(fieldName + " must be a valid decimal", exception);
+            throw new InvalidIntegrationEventException(fieldName + " must be a valid decimal", exception);
         }
     }
 
@@ -137,7 +137,7 @@ public class IntegrationEventReader {
             return Currency.getInstance(value);
         } catch (IllegalArgumentException exception) {
             // 非法币种代码是永久消息错误；不包装时会被 DefaultErrorHandler 无意义地重试两次。
-            throw new EventContractException(fieldName + " must be a valid ISO 4217 currency", exception);
+            throw new InvalidIntegrationEventException(fieldName + " must be a valid ISO 4217 currency", exception);
         }
     }
 
@@ -152,7 +152,7 @@ public class IntegrationEventReader {
         try {
             return Instant.parse(value);
         } catch (DateTimeParseException exception) {
-            throw new EventContractException(fieldName + " must be an ISO-8601 instant", exception);
+            throw new InvalidIntegrationEventException(fieldName + " must be an ISO-8601 instant", exception);
         }
     }
 }

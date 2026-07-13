@@ -51,7 +51,7 @@ class IntegrationEventReaderTest {
 
     @Test
     // 测试目的：验证缺少 payload 属于 event contract failure。
-    // variant：body envelope 没有 payload，listener 应抛 EventContractException，由 Kafka error handler 投 DLT。
+    // variant：body envelope 没有 payload，listener 应抛 InvalidIntegrationEventException，由 Kafka error handler 投 DLT。
     void rejectsMissingPayloadAsContractFailure() throws Exception {
         IntegrationEvent event = new IntegrationEvent(
                 UUID.randomUUID(),
@@ -67,7 +67,7 @@ class IntegrationEventReaderTest {
         );
 
         assertThatThrownBy(() -> reader.read(record))
-                .isInstanceOf(EventContractException.class)
+                .isInstanceOf(InvalidIntegrationEventException.class)
                 .hasMessage("eventId and payload are required");
     }
 
@@ -95,7 +95,7 @@ class IntegrationEventReaderTest {
         payload.put("approvedAt", "not-an-instant");
 
         assertThatThrownBy(() -> reader.requiredInstant(payload, "approvedAt"))
-                .isInstanceOf(EventContractException.class)
+                .isInstanceOf(InvalidIntegrationEventException.class)
                 .hasMessage("approvedAt must be an ISO-8601 instant");
     }
 
@@ -108,13 +108,13 @@ class IntegrationEventReaderTest {
         payload.put("currency", "NOT-A-CURRENCY");
 
         assertThatThrownBy(() -> reader.requiredUuid(payload, "authorizationId"))
-                .isInstanceOf(EventContractException.class)
+                .isInstanceOf(InvalidIntegrationEventException.class)
                 .hasMessage("authorizationId must be a valid UUID");
         assertThatThrownBy(() -> reader.requiredDecimal(payload, "amount"))
-                .isInstanceOf(EventContractException.class)
+                .isInstanceOf(InvalidIntegrationEventException.class)
                 .hasMessage("amount must be a valid decimal");
         assertThatThrownBy(() -> reader.requiredCurrency(payload, "currency"))
-                .isInstanceOf(EventContractException.class)
+                .isInstanceOf(InvalidIntegrationEventException.class)
                 .hasMessage("currency must be a valid ISO 4217 currency");
     }
 

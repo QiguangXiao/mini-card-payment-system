@@ -1503,7 +1503,7 @@ NoSQL 会放在 read model/projection，不会替代核心 MySQL transaction。
 项目锚点：
 
 - `IntegrationEventReader`
-- `EventContractException`
+- `InvalidIntegrationEventException`
 - message reader validation
 
 追问方向：

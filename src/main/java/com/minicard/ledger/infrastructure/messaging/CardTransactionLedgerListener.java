@@ -49,7 +49,7 @@ public class CardTransactionLedgerListener {
                 eventReader.requiredUuid(payload, "cardTransactionId"),
                 eventReader.requiredUuid(payload, "creditAccountId"),
                 // 金额从 JSON text 构造 BigDecimal，避免 asDouble() 这类二进制浮点转换丢精度。
-                // typed helper 把坏 UUID/金额/币种/时间统一包装成 EventContractException，直接进入 DLT；
+                // typed helper 把坏 UUID/金额/币种/时间统一包装成 InvalidIntegrationEventException，直接进入 DLT；
                 // 如果在 listener 里直接调用 JDK parser，永久坏消息会被误当成瞬时异常重复 retry。
                 eventReader.requiredDecimal(payload, "amount"),
                 eventReader.requiredCurrency(payload, "currency"),
