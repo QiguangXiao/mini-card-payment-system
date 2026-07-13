@@ -35,18 +35,19 @@ public class AuthorizationNotificationListener {
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",
             groupId = "${messaging.consumers.notification.group-id}",
-            containerFactory = "notificationKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.notification.concurrency}"
     )
     public void onAuthorizationEvent(ConsumerRecord<String, String> record) {
         // 阶段 1：@KafkaListener 的 topics 决定从哪里读，groupId 决定和谁共享消费进度，
-        // containerFactory 决定线程数、retry、DLT 和 offset commit 策略。
+        // concurrency 决定本 container 的并行线程数（有效上限是 topic partition 数）。
         // 如果所有 bounded context 共用一个 group，Notification 可能抢走 Risk/Ledger 应该处理的消息。
         // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
         // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
         // offset commit 也不是这里手写的：application.yml 关闭 Kafka 原生 auto commit，
         // 但设置 ack-mode=record，让 Spring Kafka container 在本方法正常 return 后自动提交这条 record 的 offset。
-        // 如果 read()/requestNotification() 抛异常，异常会交给 notificationKafkaListenerContainerFactory
-        // 配置的 DefaultErrorHandler：先按策略 retry，仍失败再投递到 notification DLT。
+        // 如果 read()/requestNotification() 抛异常，异常会交给默认 listener factory 上的全局
+        // DefaultErrorHandler：先按策略 retry，仍失败再按本 listener 的 groupId 路由到 notification DLT
+        //（KafkaConsumerConfiguration）。
         // 阶段 2：先解析并校验公共 envelope。坏 JSON/缺 eventId 会作为 contract failure 直接进入 DLT。
         IntegrationEvent event = eventReader.read(record);
         JsonNode payload = event.payload();

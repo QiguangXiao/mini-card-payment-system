@@ -42,7 +42,7 @@
 | scheduler | `PollingSchedulerConfiguration`、pollers | 打开 `@Scheduled` 并指定调度线程池 | 任务可能不运行，或共享默认 scheduler 互相拖住 |
 | worker executor | `WorkerExecutorConfiguration` | 后台业务和 poller 分线程池 | scheduler 线程直接跑长任务，任务堆积时不可控 |
 | MyBatis mapper | `AuthorizationMapper` + XML | SQL 显式、参数绑定、row mapping | SQL 和业务混杂，或出现 SQL injection/映射错误 |
-| Kafka listener factory | `KafkaConsumerConfiguration` | 每个 consumer group 有独立 retry/DLT/concurrency | 一个上下文失败影响其他上下文，重试策略混乱 |
+| Kafka 消费错误处理 | `KafkaConsumerConfiguration` | Boot 默认 factory + 全局唯一 error handler，DLT 按失败 group 路由；concurrency 在各 `@KafkaListener` | 忘绑 factory 的 listener 静默丢消息，或失败消息进错 DLT |
 | Jackson JSON | `IntegrationEventReader` | 统一解析 envelope、校验 headers/payload | 每个 listener 重复解析且失败行为不一致 |
 | Caffeine + Redis | `StatementReadService` | L1 降本机热点，L2 跨实例共享 | Redis 故障或热点 miss 容易放大成 API/DB 压力 |
 | Feign + Resilience4j | `ExternalRiskGatewayAdapter` | 外部 HTTP 调用声明式代理和断路器 | 慢外部服务拖住授权请求和线程 |
@@ -2151,7 +2151,7 @@ KafkaTemplate future ack
 @RestController / @RequestMapping 旁边解释 Spring MVC boundary
 @Valid / @NotNull / @Param 旁边解释参数绑定和 fail fast
 @ConfigurationProperties / @EnableConfigurationProperties 旁边解释配置绑定和 bean 注册
-@Scheduled / @KafkaListener 旁边解释线程池、groupId、containerFactory
+@Scheduled / @KafkaListener 旁边解释线程池、groupId、concurrency
 record compact constructor 旁边解释不可变输入和非 HTTP 路径防御
 repository/port 方法旁边解释 Optional、insert-first claim、DuplicateKeyException
 ObjectNode / ProducerRecord / KafkaTemplate.send().get(...) 旁边解释第三方库契约

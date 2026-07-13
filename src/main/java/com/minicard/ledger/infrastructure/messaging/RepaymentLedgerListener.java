@@ -25,12 +25,14 @@ public class RepaymentLedgerListener {
     private final IntegrationEventReader eventReader;
     private final RecordLedgerEntryService service;
 
-    // containerFactory 绑定 ledger 的 retry/DLT 策略。
-    // 如果直接用默认 Kafka listener factory，反序列化或业务异常可能没有进入预期 dead-letter topic。
+    // retry/DLT 不再按 listener 手工绑定 factory：默认 factory 上的全局 error handler
+    // 按失败 groupId 把本组失败路由到 ledger DLT（KafkaConsumerConfiguration）。
+    // 反事实：过去每个 listener 手选 containerFactory，忘写属性会静默挂到无 DLT 的
+    // Boot 默认 handler，重试耗尽后记日志、提交 offset、消息丢弃。
     @KafkaListener(
             topics = "${messaging.topics.repayment-events}",
             groupId = "${messaging.consumers.ledger.group-id}",
-            containerFactory = "ledgerKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.ledger.concurrency}"
     )
     public void onRepaymentEvent(ConsumerRecord<String, String> record) {
         // consumer correctness 只依赖 self-describing envelope：永远解析 body，

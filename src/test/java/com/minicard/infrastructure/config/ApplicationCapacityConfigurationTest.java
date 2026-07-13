@@ -3,6 +3,7 @@ package com.minicard.infrastructure.config;
 import java.time.Duration;
 
 import com.minicard.delayjob.DelayJobProperties;
+import com.minicard.messaging.kafka.KafkaConsumersProperties;
 import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
 import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.Test;
@@ -51,6 +52,20 @@ class ApplicationCapacityConfigurationTest {
                     NotificationDeliveryProperties.class
             );
             assertThat(notification.batchSize()).isEqualTo(40);
+
+            // group-id 是 DLT 路由表的 key（KafkaConsumerConfiguration）；这里钉住 relaxed binding
+            // （group-id -> groupId）没被路径改名破坏，否则路由表在启动期就缺 key。
+            KafkaConsumersProperties consumers = bind(
+                    binder,
+                    "messaging.consumers",
+                    KafkaConsumersProperties.class
+            );
+            assertThat(consumers.notification().groupId()).isEqualTo("mini-card-notification-v1");
+            assertThat(consumers.riskFeature().groupId()).isEqualTo("mini-card-risk-feature-v1");
+            assertThat(consumers.ledger().groupId()).isEqualTo("mini-card-ledger-v1");
+            assertThat(consumers.notification().concurrency()).isEqualTo(2);
+            assertThat(consumers.riskFeature().concurrency()).isEqualTo(3);
+            assertThat(consumers.ledger().concurrency()).isEqualTo(2);
         });
     }
 

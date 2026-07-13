@@ -201,8 +201,11 @@ messaging:
   consumers:
     # group-id 表示同一个 bounded context 的一组实例共同消费。
     # 同一 topic 可以被 notification/risk/ledger 多个 group 独立消费，互不抢 offset。
-    # concurrency 是各 context listener container 的并发线程数（对应代码：KafkaConsumerConfiguration，
-    # 绑定类 KafkaConsumersProperties）。它和 worker pool size 一样是"处理并行度"，所以统一放 YAML。
+    # group-id 有两个读者：各 @KafkaListener 的 groupId 占位符（消费进度归属），以及绑定类
+    # KafkaConsumersProperties——KafkaConsumerConfiguration 用它构建"失败 group -> DLT"路由表，
+    # 失败消息按失败的消费组进自己的 DLT（同一 topic 多 group 消费，不能按 topic 推导）。
+    # concurrency 由各 @KafkaListener 的 concurrency 占位符消费，是该 container 的并发线程数。
+    # 它和 worker pool size 一样是"处理并行度"，所以统一放 YAML。
     # 有效上限是 topic partition 数（当前 3）：配得更大只会产生分不到 partition 的空闲线程。
     notification:
       group-id: mini-card-notification-v1

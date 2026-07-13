@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>账单生成通知从 statement.closed 触发，而不是由 StatementGenerationService 直接调用通知服务。
  * 这样账单生成主事务只依赖本地 MySQL，通知失败由 Kafka retry/DLT 处理。
  * 它和 Authorization/CardTransaction/Repayment 三个 listener 完全同构：同一个 notification 消费组、
- * 同一个 containerFactory、同一套 Inbox 幂等。</p>
+ * 同一套按 groupId 路由的 retry/DLT、同一套 Inbox 幂等。</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -29,13 +29,13 @@ public class StatementNotificationListener {
     private final IntegrationEventReader eventReader;
     private final RequestNotificationService service;
 
-    // topics/groupId/containerFactory 都用配置占位符，而不是硬编码字符串。
+    // topics/groupId/concurrency 都用配置占位符，而不是硬编码字符串。
     // groupId 复用 notification 组，表示所有通知 listener 共享“通知上下文”的消费进度；
-    // containerFactory 指向 notification 专用 retry/DLT，如果误用 ledger/risk factory，失败消息会进错 DLT。
+    // 失败消息按这个 groupId 路由到 notification DLT（KafkaConsumerConfiguration），路由跟随失败的消费组。
     @KafkaListener(
             topics = "${messaging.topics.statement-events}",
             groupId = "${messaging.consumers.notification.group-id}",
-            containerFactory = "notificationKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.notification.concurrency}"
     )
     public void onStatementEvent(ConsumerRecord<String, String> record) {
         IntegrationEvent event = eventReader.read(record);

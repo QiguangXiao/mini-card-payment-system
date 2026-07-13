@@ -44,13 +44,14 @@ public class AuthorizationRiskFeatureListener {
     private final IntegrationEventReader eventReader;
     private final RiskFeatureProjectionService projectionService;
 
-    // @KafkaListener 声明 topic/group/containerFactory 三件事：
-    // topic 决定读哪里，groupId 决定消费进度归属，containerFactory 决定 retry/DLT/反序列化策略。
-    // 如果多个 listener 复用错误的 groupId，可能互相抢同一组消费进度。
+    // @KafkaListener 声明 topic/group/concurrency 三件事：
+    // topic 决定读哪里，groupId 决定消费进度归属（也是失败消息路由到 risk DLT 的 key，
+    // 见 KafkaConsumerConfiguration），concurrency 决定本 container 的并行线程数。
+    // 如果多个 listener 复用错误的 groupId，不仅互相抢消费进度，失败消息还会进错 DLT。
     @KafkaListener(
             topics = "${messaging.topics.authorization-events}",
             groupId = "${messaging.consumers.risk-feature.group-id}",
-            containerFactory = "riskFeatureKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.risk-feature.concurrency}"
     )
     public void onAuthorizationDecision(ConsumerRecord<String, String> record) {
         // Listener 显式处理自己关心的事件类型；authorization.posted 等合法但无关的事件

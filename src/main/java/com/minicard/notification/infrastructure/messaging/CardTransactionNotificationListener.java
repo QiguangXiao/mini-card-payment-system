@@ -28,11 +28,12 @@ public class CardTransactionNotificationListener {
     private final RequestNotificationService service;
 
     // @KafkaListener 的 groupId 复用 notification 组，表示所有通知 listener 共享“通知上下文”的消费进度。
-    // containerFactory 指向 notification 专用 retry/DLT；如果误用 ledger/risk factory，失败消息会进错 DLT。
+    // 失败消息按本 listener 的 groupId 路由到 notification DLT（KafkaConsumerConfiguration）：
+    // 路由跟随失败的消费组，不存在过去"绑错 containerFactory 进错 DLT"的配置空间。
     @KafkaListener(
             topics = "${messaging.topics.transaction-events}",
             groupId = "${messaging.consumers.notification.group-id}",
-            containerFactory = "notificationKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.notification.concurrency}"
     )
     public void onCardTransactionEvent(ConsumerRecord<String, String> record) {
         // 只处理用户可见交易入账事件；未来 refunded/disputed 可以在这里继续显式增加分支。

@@ -27,10 +27,12 @@ public class CardTransactionLedgerListener {
 
     // ledger consumer 用独立 groupId，保证它和 notification/risk 各自消费同一事件。
     // 如果多个 bounded context 共用一个 groupId，Kafka 会把事件分给其中一个，而不是广播给所有下游。
+    // 这个 groupId 同时是失败路由键：本 listener 的失败进 ledger DLT，即使同一条 record
+    // 在 notification group 消费成功（KafkaConsumerConfiguration 按失败 group 查表）。
     @KafkaListener(
             topics = "${messaging.topics.transaction-events}",
             groupId = "${messaging.consumers.ledger.group-id}",
-            containerFactory = "ledgerKafkaListenerContainerFactory"
+            concurrency = "${messaging.consumers.ledger.concurrency}"
     )
     public void onCardTransactionEvent(ConsumerRecord<String, String> record) {
         // consumer correctness 只依赖 self-describing envelope：永远解析 body，

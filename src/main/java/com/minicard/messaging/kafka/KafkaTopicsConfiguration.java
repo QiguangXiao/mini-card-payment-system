@@ -13,7 +13,7 @@ import org.springframework.kafka.config.TopicBuilder;
  * トピック定義(トピックていぎ)。</p>
  *
  * <p>本类只回答"集群上应该存在哪些 topic、几个 partition"，属于资源供给；
- * 消费行为（retry/DLT 路由/并发）在 {@link KafkaConsumerConfiguration}。
+ * 消费行为（retry/DLT 路由）在 {@link KafkaConsumerConfiguration}，并发在各 {@code @KafkaListener}。
  * 拆开的原因：生产环境 topic 通常由运维/IaC 管理，consumer 行为才随应用发布——
  * 两者的变更节奏和责任人不同，混在一个类里会让"改消费重试策略"看起来像在动集群资源。</p>
  *
