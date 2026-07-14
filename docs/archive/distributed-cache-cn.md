@@ -1,5 +1,7 @@
 # 分布式缓存、限流、Lua 与缓存设计通用规则
 
+> **归档对齐说明（2026-07）**：文中的 `card_risk_features` 历史画像 projection 现已移除；现行 Risk 只有实时 Redis velocity 与外部 risk 服务两层。其余缓存内容仍与现行实现对应。文中相关段落已按现行架构清理，其余内容保持原样；现行缓存设计以 [caching-and-rate-limiting-cn.md](../caching-and-rate-limiting-cn.md) 为准。
+
 > 关键词：distributed cache, Redis, rate limiting, sliding window, token bucket,
 > Lua atomicity, cache-aside, 缓存穿透/击穿/雪崩, fail-open, Redisson,
 > 分散キャッシュ(ぶんさんキャッシュ), レート制限(せいげん)。
@@ -100,10 +102,6 @@ return count
 让 `RiskAssessmentService` 不知道底层是哪种,用 `@ConditionalOnProperty(risk.velocity.store)`
 切换；但 port 返回 `VelocityCheckResult`,所以 service 仍能知道这次结果是否 `degraded`。
 
-注意：`card_risk_features` 是另一层 long-window profile。它由 Kafka event 异步 upsert,
-现在也会被 `RiskAssessmentService` 读回决策；它解决的是历史画像,不是 60 秒短窗口 velocity。
-这能补齐 CQRS projection 的读侧,但会让通过 cheap rules 的授权多一次 DB read,所以生产要监控
-projection read latency / Hikari pending,必要时走 read replica 或 profile cache。
 
 ---
 

@@ -1,5 +1,7 @@
 # Event / Outbox / Messaging 设计、评价与面试备战（Claude）
 
+> **归档对齐说明（2026-07）**：文中的 ledger / risk feature 两类 projection consumer、`repayment-events` topic 及"跨 topic 消费"的例子现已移除；Outbox/Inbox/DLT 主干机制不变。文中相关段落已按现行架构清理，其余内容保持原样；现行事件设计以 [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) 为准。
+
 > 关键词：领域事件, 事务性发件箱, 至少一次, 幂等消费者, 死信, 分区有序,
 > domain event, transactional outbox, at-least-once, idempotent consumer,
 > dead letter, partition ordering, ドメインイベント, アウトボックス,
@@ -41,17 +43,17 @@
 
 ### 1.2 Producer side：领域事件如何变成 outbox 行
 
-- **领域事件在 aggregate 内缓冲**。`Repayment` 持有 `List<RepaymentDomainEvent> domainEvents`，
-  `markReceived(...)` 时 `add(new RepaymentReceivedDomainEvent(...))`；`pullDomainEvents()`
+- **领域事件在 aggregate 内缓冲**。`Authorization` 持有 `List<AuthorizationDomainEvent> domainEvents`，
+  `approve(...)` 时 `add(new AuthorizationApprovedDomainEvent(...))`；`pullDomainEvents()`
   返回拷贝并清空。事件是“业务事实”的产物，不是 service 临时拼出来的。
-- **同事务写 outbox**。`RepaymentService.receive(...)`（`@Transactional`）在更新
-  account/statement/repayment 之后，`publishDomainEvents()` 调
-  `RepaymentDomainEventPublisher.append(event)`，由 `RepaymentOutboxAdapter` 落 `outbox_events`。
+- **同事务写 outbox**。`AuthorizationService.authorize(...)`（`@Transactional`）在更新
+  authorization/credit account 之后，把 `pullDomainEvents()` 的事件逐个交给
+  `AuthorizationDomainEventPublisher.append(event)`，由 `AuthorizationOutboxAdapter` 落 `outbox_events`。
   **业务行与 outbox 行在同一个 MySQL commit**——这就是 transactional outbox 的全部要点。
-- **幂等重放不重复发事件**。同 `Idempotency-Key` 的重复请求走 `claimed=false && RECEIVED`
-  分支**提前 return，不 append**。所以一个业务事实只产生一个 `eventId`。
-- **adapter 手工拼 payload**。`RepaymentOutboxAdapter` 用 `objectMapper.createObjectNode()`
-  逐字段写 `repaymentId/statementId/creditAccountId/amount/...`，**不直接序列化 domain record**。
+- **幂等重放不重复发事件**。同 `Idempotency-Key` 的重复请求走 idempotency claim 失败分支
+  **提前返回 winner 状态，不 append**。所以一个业务事实只产生一个 `eventId`。
+- **adapter 手工拼 payload**。`AuthorizationOutboxAdapter` 用 `objectMapper.createObjectNode()`
+  逐字段写 `authorizationId/cardId/amount/approvedAt/expiresAt/...`，**不直接序列化 domain record**。
   domain 字段改名不会无意改动 Kafka contract（这是 anti-corruption 的体现）。
 - **OutboxEvent 是状态机**（`messaging/outbox/OutboxEvent.java`）：
   - 状态 `PENDING / PROCESSING / PUBLISHED / DEAD`，只读 getter，状态只能经
@@ -102,9 +104,9 @@
 
 ### 1.5 Consumer side：契约校验 + 双层幂等
 
-- **每个 bounded context 一个 listener + 独立 consumer group + 独立 DLT**：
-  `RepaymentLedgerListener`、`RepaymentNotificationListener`（以及 risk feature、
-  card transaction 等）。互不影响、可独立扩缩和重放。
+- **每个 bounded context 独立 consumer group + 独立 DLT**：当前是 Notification 一个
+  group（`AuthorizationNotificationListener`、`CardTransactionNotificationListener`）。
+  未来新增下游时互不影响、可独立扩缩和重放。
 - `IntegrationEventReader.read(...)`：反序列化 + 集中校验 transport contract
   （`eventId/payload` 必填、`eventType` 必填、`eventVersion>=1`、
   **header 的 eventId 必须等于 payload 的 eventId**、eventType header 一致）。
@@ -114,9 +116,9 @@
   1. **Inbox claim**（第一道）：`ConsumerInboxRepository.claim(consumerName, eventId)`，
      底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)`
      判定“第一次消费”，`DuplicateKeyException -> false`。
-  2. **业务唯一键**（第二道）：`ledger_entries` 对 source event 唯一、notification 唯一。
+  2. **业务唯一键**（第二道）：`notifications.source_event_id` 唯一。
      挡住“绕过 inbox 的手工 replay / 补偿脚本”。
-  - **inbox claim 与业务写在同一个 `@Transactional`**（见 `RecordLedgerEntryService.record`）。
+  - **inbox claim 与业务写在同一个 `@Transactional`**（见 `RequestNotificationService.requestNotification`）。
     否则 claim 成功但业务写失败会“假装消费过”，造成丢消费。
 - **错误处理与 DLT**（`KafkaMessagingConfiguration.listenerFactory`）：
   `DeadLetterPublishingRecoverer`（保留原 partition 便于排查/重放）+
@@ -284,10 +286,10 @@ Java `Instant` vs MySQL `TIMESTAMP(6)` 精度边界。
   不会。concurrency 只是同 group 内多线程**各吃不同 partition**，单 partition 仍单线程有序。
 - **硬核追问：那 DLT 呢？**
   会**局部乱序**：某条重试耗尽进 DLT 后，同 key 的后续消息继续处理（跳过了失败那条）。
-  本项目 ledger 是 append-only 独立分录，不依赖顺序，所以无害；若是“按序推导余额”的有状态投影，
+  本项目 notification 按事实独立创建，不依赖顺序，所以无害；若是“按序推导余额”的有状态投影，
   就要靠 DLT 重放补偿或暂停该 key。
-- **强补充**：跨 topic（ledger 同时消费 transaction-events 和 repayment-events）**无全局有序**，
-  这是有意接受的取舍——投影按事实独立记账即可。
+- **强补充**：跨 topic（notification 同时消费 authorization-events 和 transaction-events）**无全局有序**，
+  这是有意接受的取舍——按事实独立创建通知即可。
 
 ### Q7. outbox 表越来越大，poller 会不会变慢？
 **答**：`idx_outbox_publishable(status, next_attempt_at, created_at)`，`status` 前导让

@@ -3040,7 +3040,7 @@ Redis hit ratio、GC pause 和业务 decline reason 分布。
 > 我的项目是一个 credit card issuer backend，核心是 authorization、posting、statement、repayment。
 > 我用 Spring Boot 和 MySQL/MyBatis 实现主交易链路，用 domain object 管状态机和金额 invariant。
 > 对重复请求，API 层用 `Idempotency-Key` 和数据库 unique constraint；对同账户并发额度，使用
-> `SELECT ... FOR UPDATE` 锁 `credit_accounts` 行；对异步通知、风控投影，使用
+> `SELECT ... FOR UPDATE` 锁 `credit_accounts` 行；对异步通知，使用
 > Transactional Outbox + Kafka + Consumer Inbox，承认 at-least-once 并让 consumer 幂等。
 > 对读扩展，我实现了 Caffeine L1 + Redis L2 的 statement GET cache，只缓存 statement read model；
 > 旧版 card snapshot cache 已删除，因为 stale card status 会影响 authorization。生产上我会用 Actuator/CloudWatch 观测 API latency、DB lock wait、

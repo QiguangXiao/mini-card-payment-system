@@ -401,7 +401,7 @@ Outbox 保护 producer side，Inbox 保护 consumer side。
 - `enable.idempotence=true`：减少 producer retry 在 Kafka 内部产生重复。
 - `enable-auto-commit=false`：listener 成功处理后再提交 offset。
 - `ack-mode=record`：按 record 处理成功后提交。
-- 每个 bounded context 使用独立 consumer group。
+- consumer group 按 bounded context 划分（当前只有 Notification 一个消费方；DLT 按失败消费组路由）。
 - DLT 保留 original partition，方便排查和 replay。
 
 interview回答：

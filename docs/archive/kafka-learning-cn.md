@@ -1,5 +1,7 @@
 # Kafka 配置与interview学习笔记
 
+> **归档对齐说明（2026-07）**：文中的 `statement-events` / `repayment-events` topic 及 `statement.closed` / `repayment.received` 事件现已移除；现行仅 `authorization-events` 与 `transaction-events` 两个 topic。Kafka 机制讲解（consumer group、retry/DLT、Inbox）仍与现行实现一致。文中相关段落已按现行架构清理，其余内容保持原样；现行事件文档以 [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) 为准。
+
 这份文档专门解释本项目里的 Kafka 配置、它们解决什么问题，以及 PayPay Card / 信用卡发卡后台interview里可能被追问的点。
 
 当前项目使用 Kafka 的方式是：
@@ -7,7 +9,7 @@
 ```text
 业务事务写 MySQL + Outbox row
 OutboxWorker 稍后发布 Kafka
-Notification / Risk / Ledger consumer 异步消费
+Notification consumer 异步消费
 consumer 用 Inbox / unique key 做幂等
 ```
 
@@ -279,7 +281,7 @@ spring:
 
 本项目为什么适合：
 
-- Notification / Risk / Ledger consumer 都有数据库 side effect。
+- Notification consumer 有数据库 side effect。
 - 每条事件独立幂等处理，record-level ack 更容易解释。
 
 interview回答：
@@ -321,8 +323,6 @@ messaging:
   topics:
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
-    statement-events: mini-card.statement-events.v1
-    repayment-events: mini-card.repayment-events.v1
 ```
 
 作用：
@@ -334,17 +334,11 @@ messaging:
   - `authorization.expired`
 - 用户可见交易流水事件放在 transaction topic：
   - `card_transaction.posted`
-- 账单事件放在 statement topic：
-  - `statement.closed`
-- 还款事件放在 repayment topic：
-  - `repayment.received`
 
 为什么按业务事实拆 topic：
 
 - `authorization.posted` 表达授权 hold 被 presentment 消耗。
 - `card_transaction.posted` 表达用户可见交易已经入账，Notification 更应该消费这个事实。
-- `statement.closed` 表达账单已生成，适合账单通知、PDF 生成、还款提醒订阅。
-- `repayment.received` 表达还款已入账，不应该混在 statement topic 里。
 - 生产中 Notification 很可能是独立微服务；它可以订阅需要的 business facts，
   而不依赖本工程里的 domain class。
 
@@ -421,15 +415,12 @@ messaging:
   consumers:
     notification:
       group-id: mini-card-notification-v1
-    risk-feature:
-      group-id: mini-card-risk-feature-v1
 ```
 
 代码：
 
 ```java
 factory.setConcurrency(2); // notification
-factory.setConcurrency(3); // risk feature
 ```
 
 Consumer group 语义：
@@ -442,7 +433,7 @@ Consumer group 语义：
 ```text
 authorization event
 -> notification group 收到一份
--> risk-feature group 也收到一份
+（未来若增加第二个 consumer group，会各自再收到同一条消息）
 ```
 
 这正是 event-driven 架构的价值：不同 bounded context 可以独立处理同一业务事实。
@@ -484,13 +475,11 @@ DLT topic：
 
 ```yaml
 mini-card.notification.dlt.v1
-mini-card.authorization-risk-feature.dlt.v1
-mini-card.ledger.dlt.v1
 ```
 
-为什么每个 consumer 一个 DLT：
+为什么每个 consumer group 一个 DLT：
 
-- 同一条消息可能对 Risk 成功、对 Notification 失败。
+- 同一条消息可能对一个 consumer group 成功、对另一个失败。
 - 分开 DLT 后，可以只修复和 replay 失败的 consumer，不影响其他 bounded context。
 
 代码里保留 original partition：
@@ -640,11 +629,11 @@ Kafka 有 producer idempotence 和 transaction API，但本项目涉及 MySQL si
 
 所以从业务视角仍然按 at-least-once 设计，consumer 幂等。
 
-### 为什么不用同步调用 Notification / Risk / Ledger？
+### 为什么不用同步调用 Notification？
 
 授权请求是金融实时路径，应该尽快返回。
 
-Notification、Risk projection 和当前最小 Ledger projection 都是 follow-up side effects，适合异步处理。Kafka 让这些 bounded context 独立扩缩、独立失败。
+Notification 是 follow-up side effect，适合异步处理。Kafka 让这类 bounded context 独立扩缩、独立失败。
 
 ### 如果 Kafka 挂了，授权还能成功吗？
 

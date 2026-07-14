@@ -77,7 +77,7 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 - producer 侧：`acks=all` + `enable.idempotence=true`；publish 等 broker ack 后才 markPublished。
 - "ack 后、markPublished 前崩溃" → 事件重发 → **consumer 端双重去重**：
   Inbox claim（`consumer_inbox` 复合主键）+ 业务唯一键（如 `notifications.source_event_id`）。
-- 每个 bounded context 独立 consumer group + 独立 DLT，一个下游故障不影响其他投影。
+- DLT 按失败的 consumer group 路由（当前仅 Notification 一个消费方）；未来新下游用自己的 group + DLT，互不影响。
 
 ### 1.5 Schema 与领域不变量互为防线
 

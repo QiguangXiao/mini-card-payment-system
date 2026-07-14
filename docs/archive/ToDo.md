@@ -1,5 +1,7 @@
 # 剩余领域学习路线图
 
+> **归档对齐说明（2026-07）**：本文成文于收缩重构之前。文中提到的 `ledger_entries` 复式记账表与 `repayment.received` Kafka 通知路径现已移除。文中相关段落已按现行架构清理，其余内容保持原样；现行领域路线以 [credit-card-domain-cn.md](../credit-card-domain-cn.md) 为准。
+
 这份文档不是普通 TODO 清单，而是服务 PayPay Card / 金融后端 interview 准备的
 remaining domain roadmap。
 
@@ -74,23 +76,14 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 ## 2. 最值得补的领域排名
 
-### Done: 最小 Ledger
+### 最小 Ledger（曾实现，2026-07 收缩中移除）
 
-已经实现为最小 learning projection。
+曾实现为最小 learning projection（`ledger_entries` 表 + Kafka 消费两类事件记 DEBIT/CREDIT 分录），后为聚焦主线整体移除；概念仍值得口头掌握。
 
-当前范围：
-
-- 已新增 `ledger_entries` 表。
-- `card_transaction.posted` 后记录 `CARD_TRANSACTION_POSTED/DEBIT` entry。
-- `repayment.received` 后记录 `REPAYMENT_RECEIVED/CREDIT` entry。
-- 每条 entry 关联 `source_event_id + entry_type`，并使用 `consumer_inbox` 做第一道幂等。
-- 不做完整会计科目、不做复式借贷平衡、不做结算。
-
-为什么值得做：
+为什么值得懂：
 
 - 帮你区分交易流水、账单、还款、余额和会计账本。
 - interview 里可以解释为什么 `CardTransaction` 不等于 ledger。
-- 可以复用 Outbox/Inbox 思路，学习 downstream projection。
 
 注意：
 

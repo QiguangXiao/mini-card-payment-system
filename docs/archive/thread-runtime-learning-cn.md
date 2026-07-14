@@ -1,5 +1,7 @@
 # 本工程线程运行模型与生产排查学习笔记
 
+> **归档对齐说明（2026-07）**：文中的 `StatementNotificationListener` / `RepaymentNotificationListener`、risk-feature 与 ledger consumer 线程现已移除；现行 Kafka 消费线程只有 notification 组消费 `authorization-events` 与 `transaction-events`。其余线程模型仍与现行实现对应。文中相关段落已按现行架构清理，其余内容保持原样；现行线程文档以 [jvm-threads-runtime-cn.md](../jvm-threads-runtime-cn.md) 为准。
+
 这份文档只讲本工程启动后的线程结构、线程池、生命周期、常见状态和生产排查。通用 Java 并发基础，例如 `volatile`、CAS、AQS、`synchronized`、`ReentrantLock`、`ThreadPoolExecutor` 原理，建议单独放到另一份文档。
 
 当前工程背景：
@@ -59,7 +61,7 @@ Thread dump 线程类别：
 - 使用新的 `Idempotency-Key` 发起 `POST /api/authorizations`，HTTP 200，curl 端到端耗时约 229ms。
 - Actuator `http.server.requests` 记录 `/api/authorizations` 为 228ms，`/external-risk/assess` 为 105ms；Resilience4j `externalRisk` successful call 为 122ms。
 - 请求返回 `APPROVED` 后，Outbox event `authorization.approved` 变为 `PUBLISHED`，Kafka listener 写入 `consumer_inbox`。
-- `notification-v1` consumer 创建 `AUTHORIZATION_APPROVED` notification，`risk-feature-v1` consumer 更新 `card_risk_features`。
+- `notification-v1` consumer 创建 `AUTHORIZATION_APPROVED` notification。
 - 因此一次成功授权会横跨 Tomcat worker、scheduler、Outbox worker、Kafka listener、Hikari/MySQL connection，但金融状态一致性仍然靠 DB transaction 和 row lock，而不是 JVM monitor lock。
 
 采样限制：
@@ -154,19 +156,15 @@ Actuator、thread dump 和压测结果一起确认。
 | Statement scheduler | `statement-batch-scheduler-*` | pool size 1 | `statementBatchTaskScheduler` | 每 60s 检查是否到关账批处理日 | 空闲 `TIMED_WAITING`；批处理中 `RUNNABLE` / DB I/O |
 | Outbox worker | `outbox-worker-*` | pool size 4, queue 100 | `outboxWorkerExecutor` | 发布 Kafka，等待 broker ack，finalize Outbox 状态 | 空闲 `WAITING`；等待 ack 常见 `TIMED_WAITING`；DB/Kafka I/O 可能 `RUNNABLE` |
 | DelayJob worker | `delay-job-worker-*` | pool size 4, queue 100 | `delayJobWorkerExecutor` | 执行授权过期、自动还款等业务 job，finalize job 状态 | 空闲 `WAITING`；执行业务时 `RUNNABLE`；DB row lock 等待常见 JDBC I/O 栈 |
-| Notification Kafka listener | Spring Kafka consumer thread | 每个 listener container concurrency 2；当前 4 个 listener | `notificationKafkaListenerContainerFactory` | 消费 authorization / transaction / statement / repayment events 并创建 notification | poll 时等待；处理 record 时 `RUNNABLE`；retry backoff 时 `TIMED_WAITING` |
-| Risk Kafka listener | Spring Kafka consumer thread | concurrency 3 | `riskFeatureKafkaListenerContainerFactory` | 消费 authorization decision events，更新风控特征投影 | 同上 |
-| Ledger Kafka listener | Spring Kafka consumer thread | 每个 listener container concurrency 2；当前 2 个 listener | `ledgerKafkaListenerContainerFactory` | 消费 transaction / repayment events，记录 ledger projection | 同上 |
+| Notification Kafka listener | Spring Kafka consumer thread | 每个 listener container concurrency 2；当前 2 个 listener | `notificationKafkaListenerContainerFactory` | 消费 authorization / transaction events 并创建 notification | poll 时等待；处理 record 时 `RUNNABLE`；retry backoff 时 `TIMED_WAITING` |
 | Hikari helper | `HikariPool-* housekeeper` | 连接池内部 | HikariCP | 连接池维护 | 多数时间 `TIMED_WAITING` |
 | Kafka producer/network | `kafka-producer-network-thread` 等 | Kafka client 内部 | Spring Kafka / Kafka client | 网络发送、metadata、broker ack | 网络 I/O 等待常见 `RUNNABLE` |
 
 注意 Kafka listener 的数量：
 
 - `notificationKafkaListenerContainerFactory` 设置 `concurrency=2`。
-- 当前有 4 个 notification listener：authorization、card transaction、statement、repayment。
+- 当前有 2 个 notification listener：authorization、card transaction。
 - 因此它不是“整个 Notification bounded context 总共 2 个线程”，而是每个 listener container 最多 2 个 consumer thread。
-- `riskFeatureKafkaListenerContainerFactory` 是 1 个 listener，`concurrency=3`，对齐 source topic 的 3 个 partitions。
-- `ledgerKafkaListenerContainerFactory` 设置 `concurrency=2`，当前有 card transaction 和 repayment 2 个 listener。
 
 ## 3. Java 线程状态在本工程里怎么理解
 
@@ -589,11 +587,6 @@ spring.kafka.listener.ack-mode: record
 | --- | --- | --- | --- | --- | --- |
 | Notification | `AuthorizationNotificationListener` | authorization events | `mini-card-notification-v1` | 2 | 授权批准/拒绝通知 |
 | Notification | `CardTransactionNotificationListener` | transaction events | `mini-card-notification-v1` | 2 | 交易入账通知 |
-| Notification | `StatementNotificationListener` | statement events | `mini-card-notification-v1` | 2 | 账单生成通知 |
-| Notification | `RepaymentNotificationListener` | repayment events | `mini-card-notification-v1` | 2 | 还款成功通知 |
-| Risk | `AuthorizationRiskFeatureListener` | authorization events | `mini-card-risk-feature-v1` | 3 | 更新 card risk feature projection |
-| Ledger | `CardTransactionLedgerListener` | transaction events | `mini-card-ledger-v1` | 2 | 记录 purchase posted ledger entry |
-| Ledger | `RepaymentLedgerListener` | repayment events | `mini-card-ledger-v1` | 2 | 记录 repayment received ledger entry |
 
 ### 8.2 Kafka listener 生命周期
 
@@ -615,7 +608,7 @@ spring.kafka.listener.ack-mode: record
 | poll broker 等消息 | `RUNNABLE` / `TIMED_WAITING` | Kafka native/network poll 栈，不一定吃 CPU |
 | 反序列化/读 event contract | `RUNNABLE` | `IntegrationEventReader` 解析 header/payload |
 | 写 Consumer Inbox | `RUNNABLE` / JDBC I/O | 幂等 claim |
-| 写 notification/risk/ledger 表 | `RUNNABLE` / JDBC I/O | 本地事务 |
+| 写 notification 表 | `RUNNABLE` / JDBC I/O | 本地事务 |
 | listener 失败 backoff | `TIMED_WAITING` | `FixedBackOff(1000ms, 2)` |
 | 发送 DLT | Kafka producer/network I/O | 保留 original partition |
 
@@ -789,7 +782,7 @@ Kafka consumer thread
 -> event type/version check
 -> application service @Transactional
    -> Consumer Inbox claim
-   -> write notification/risk/ledger projection
+   -> write notification
 -> listener returns
 -> commit/ack record
 ```
@@ -993,7 +986,7 @@ jcmd <pid> Thread.print -l
 
 回答：
 
-> 同步入口是 Tomcat request threads，处理 controller/service/MyBatis。异步机制有三类 scheduler：Outbox、DelayJob、Statement batch。Outbox 和 DelayJob 又各自有 worker pool，scheduler 只做短事务 claim，worker 做 Kafka publish 或业务 job。Kafka listener container 还有 consumer threads，负责消费事件并在本地事务里写 Inbox 和 projection。除此之外还有 Hikari、Kafka client 和 JVM internal threads。
+> 同步入口是 Tomcat request threads，处理 controller/service/MyBatis。异步机制有三类 scheduler：Outbox、DelayJob、Statement batch。Outbox 和 DelayJob 又各自有 worker pool，scheduler 只做短事务 claim，worker 做 Kafka publish 或业务 job。Kafka listener container 还有 consumer threads，负责消费事件并在本地事务里写 Inbox 和 notification。除此之外还有 Hikari、Kafka client 和 JVM internal threads。
 
 ### Q2：Tomcat request thread 和 OS thread 什么关系？
 

@@ -797,10 +797,10 @@ mini-card.transaction-events.v1
 消费者组：
 
 ```text
-notification-service-group
+mini-card-notification-v1
 ```
 
-即使现在代码还是单体部署在一个 ECS service 里，Kafka 的 consumer group 语义仍然存在。将来拆服务时，这些 group 可以自然迁移到独立 ECS service。
+即使现在代码还是单体部署在一个 ECS service 里，Kafka 的 consumer group 语义仍然存在。将来拆服务时，这个 group（以及新下游各自的 group）可以自然迁移到独立 ECS service。
 
 ## 10. Redis/ElastiCache：缓存加速，不承担资金真相
 

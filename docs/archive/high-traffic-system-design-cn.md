@@ -1,5 +1,7 @@
 # High Traffic System Design 高流量系统设计手册
 
+> **归档对齐说明（2026-07）**：文中提到的 `card_risk_features` 历史画像现已移除，授权热路径不再读取它。文中相关段落已按现行架构清理，其余内容保持原样；现行容量与限流设计以 [traffic-rate-limiting-and-capacity-cn.md](../traffic-rate-limiting-and-capacity-cn.md) 为准。
+
 这份文档专门回答 PayPay Card Backend Engineer interview 里很容易被深挖的主题：
 
 ```text
@@ -1065,8 +1067,6 @@ queue 满时：
 - 用 Lua 原子完成“记录本次尝试 + 裁剪窗口 + 计数 + TTL”。
 - Redis 不可用时显式 fail-open：`VelocityCheckResult.degraded=true`，
   `risk.velocity.redis.unavailable` 和 `risk.velocity.fallback.allow` 会增长，而不是静默把降级当成真正 0 次。
-- `card_risk_features` 不再只是写侧 demo：授权热路径会按 `card_id` 读一行 long-window profile。
-  这补齐 CQRS projection 读侧，但会重新引入一次 DB read，不能和 Redis short-window velocity 混为一谈。
 - statement read model GET。
 - Caffeine L1 降低同 JVM 热点读取延迟，Redis L2 跨实例共享 statement read model。
 - repayment commit 后 after-commit evict statement read cache。

@@ -1,5 +1,7 @@
 # JVM 核心概念、GC 与线上排查学习笔记
 
+> **归档对齐说明（2026-07）**：文中以 `card_risk_features` 演示的数据流现已移除，相关段落仅作排查方法示例。文中相关段落已按现行架构清理，其余内容保持原样；现行 JVM/监控文档以 [jvm-threads-runtime-cn.md](../jvm-threads-runtime-cn.md) 为准。
+
 这份文档把 JVM 基础、GC、内存增长模拟、线上排查和interview回答放在一起讲，并尽量绑定到本工程的真实类、请求路径、线程池和 Actuator 配置。
 
 当前工程背景：
@@ -46,9 +48,8 @@
 - 内部模拟风控 `/external-risk/assess` 由同一应用处理，Actuator 记录该 URI 为 105ms；Resilience4j `externalRisk` successful call 为 122ms。
 - 响应状态是 `APPROVED`，`postedAt = null`，因为 authorization 还没有进入 presentment posting。
 - Outbox event `16b91248-a13d-492e-8cd1-973620f24f5a` 随后变为 `PUBLISHED`，`attempts = 0`。
-- Kafka consumer 通过 Consumer Inbox 记录 `notification-v1` 和 `risk-feature-v1`，说明 notification consumer 和 risk projection consumer 都成功处理了同一个 event。
+- Kafka consumer 通过 Consumer Inbox 记录 `notification-v1`，说明 notification consumer 成功处理了该 event。
 - `notifications` 写入 `AUTHORIZATION_APPROVED`，状态是 `PENDING`；这里的成功指“通知请求已创建”，不是已经发短信/邮件。
-- `card_risk_features` 中 `card-usd` 更新为 `authorization_count = 1`、`approved_count = 1`、`declined_count = 0`。
 
 请求导致的 JVM 变化：
 

@@ -1,5 +1,7 @@
 # 信用卡刷卡到还款全流程学习笔记
 
+> **归档对齐说明（2026-07）**：文中的 `statement.closed` / `repayment.received` Kafka 通知与 `ledger_entries` 复式记账 projection 现已移除；信用卡业务生命周期本身（授权 → 入账 → 账单 → 还款）不受影响。文中相关段落已按现行架构清理，其余内容保持原样；现行领域文档以 [credit-card-domain-cn.md](../credit-card-domain-cn.md) 为准。
+
 这份文档用最基础、最典型的信用卡消费例子，解释从刷卡、授权、入账、账单、还款到退款/冲正分支的完整链路。
 
 它分成两部分：
@@ -325,7 +327,6 @@ dueDate = 7 月 27 日
 - `statements` 保存账单汇总，`statement_items` 保存交易快照。
 - `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
 - `StatementService` 在同一事务里写 `AUTO_REPAYMENT` DelayJob，计划 dueDate 自动扣款。
-- `statement.closed` 通过 Outbox 发布；当前 Notification 已消费它创建 `STATEMENT_CLOSED` 通知，未来 PDF 生成、还款提醒也可以消费。
 
 账单生成只固定金额，不恢复信用额度；当前项目已经通过简化的 `Repayment` 领域处理还款入账。
 
@@ -390,7 +391,6 @@ statement 标记为 paid
 - `POST /api/repayments` 通过 `Idempotency-Key` 防止重复还款。
 - `RepaymentService.receive(...)` 在同一 transaction boundary 内更新 `repayments`、`credit_accounts.posted_balance` 和 `statements.paid_amount/status`。
 - 锁顺序保持 `credit account row lock -> statement row lock`，避免和账单生成流程产生相反锁顺序。
-- `repayment.received` 通过 Outbox 发布，Notification 会创建 `REPAYMENT_RECEIVED` 通知，Ledger 会创建 `REPAYMENT_RECEIVED/CREDIT` 分录。
 - 当前不支持 overpayment、多账单自动分摊、真实银行资金清算和生产级 double-entry ledger。
 
 ## 7. 正向流程总图
@@ -624,14 +624,8 @@ Credit Network Settlement Payable   1,000
 
 Ledger 更偏财务一致性，通常要求 double-entry 和 append-only。
 
-当前项目已经加入最小 Ledger projection：
-
-```text
-card_transaction.posted -> ledger_entries/CARD_TRANSACTION_POSTED/DEBIT
-repayment.received -> ledger_entries/REPAYMENT_RECEIVED/CREDIT
-```
-
-这能帮助理解 ledger 概念，但它不是生产级总账；生产级 Ledger 通常还需要 accounting account、
+当前项目不实现 Ledger（曾经的最小 learning projection 已在收缩中移除）。
+理解概念即可；生产级 Ledger 通常还需要 accounting account、
 journal balance、fee/interest/refund adjustment 和更严格的审计控制。
 
 ### Reconciliation 对账

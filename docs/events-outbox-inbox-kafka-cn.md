@@ -277,12 +277,12 @@ consumer_inbox(consumer_name, event_id, processed_at, PRIMARY KEY (consumer_name
 
 ## 11. 评价：优点与真实 gap（已对齐代码核对）
 
-**优点（可照着讲一轮系统设计面）**：Transactional Outbox 落地正确（aggregate 缓冲 → 同事务写 outbox → 幂等重放不重复 append）；投递复用 claim/publish/finalize/recover 四段、等 ack 不持锁、lease+token 重校验+recoverer 兜底、指数退避+DEAD；显式 at-least-once + 双层消费者幂等且同事务；self-describing body envelope 与 typed contract reader 边界清楚；Kafka 层职责干净（同步等 ack、按聚合 partition、per-context topic/group/DLT、可重试 vs 不可重试分类）；schema 配套索引/约束到位。
+**优点（可照着讲一轮系统设计面）**：Transactional Outbox 落地正确（aggregate 缓冲 → 同事务写 outbox → 幂等重放不重复 append）；投递复用 claim/publish/finalize/recover 四段、等 ack 不持锁、lease+token 重校验+recoverer 兜底、指数退避+DEAD；显式 at-least-once + 双层消费者幂等且同事务；self-describing body envelope 与 typed contract reader 边界清楚；Kafka 层职责干净（同步等 ack、按聚合 partition、按业务事实拆 topic、DLT 按失败消费组路由、可重试 vs 不可重试分类）；schema 配套索引/约束到位。
 
 **真实 gap（都不是 bug，是"上生产还差的工程化"，本次已核对仍存在）**：
 
 1. **数据保留 / 清理缺失（最该补）**。`outbox_events` 的 PUBLISHED 行、`consumer_inbox` 的所有行**永不删除**（已核对 `messaging` 下无 retention/cleanup job）。索引保证热路径快，但**存储无界增长**。生产需按 `published_at`/`processed_at` 滚动归档或时间分区 `DROP PARTITION`。*面试几乎必问"outbox 表会不会爆"。*
-2. **producer 侧 DEAD 和 consumer 侧 DLT 都缺完整运维闭环**。消费失败会被写入三个 per-context DLT，但当前没有 listener/monitor group 消费，因而没有 DLT metric、告警或 replay 工具；outbox 事件转 `DEAD` 后也只是躺在表里。生产补齐时，consumer 侧应由独立 monitor group 订阅三个 DLT并告警，修复代码或数据后再受控 replay；producer 侧至少应有 `DEAD` 计数指标 + 把 DEAD 改回 PENDING 的运维路径。
+2. **producer 侧 DEAD 和 consumer 侧 DLT 都缺完整运维闭环**。消费失败会被写入按失败消费组路由的 DLT（当前只有 notification 一个），但没有 listener/monitor group 消费它，因而没有 DLT metric、告警或 replay 工具；outbox 事件转 `DEAD` 后也只是躺在表里。生产补齐时，consumer 侧应由独立 monitor group 订阅 DLT 并告警，修复代码或数据后再受控 replay；producer 侧至少应有 `DEAD` 计数指标 + 把 DEAD 改回 PENDING 的运维路径。
 3. **`eventVersion` 有字段但无消费侧版本协商**。`IntegrationEventReader` 只校验 `eventVersion >= 1`（已核对），**consumer 不按版本分支也不拒绝未知版本**。schema evolution 目前是"约定"不是"强制"：发不兼容的 v2 且字段恰好重叠时会被**静默误读**。要补：consumer 按 `(eventType, eventVersion)` 路由 / 拒绝，或上 schema registry。
 
 > 跨 topic 无全局有序、polling 的秒级延迟，是**有意取舍**而非 gap。

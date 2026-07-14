@@ -1,5 +1,7 @@
 # MyBatis 与 SQL 后端interview学习笔记
 
+> **归档对齐说明（2026-07）**：`card_risk_features` 表已随 historical risk projection 删除（Liquibase 0004），文中原以该表演示的批量写入示例已改用现行 `statement_lines` 表；其余内容保持原样。现行 MyBatis/SQL 文档以 [mybatis-sql-and-migration-cn.md](../mybatis-sql-and-migration-cn.md) 为准。
+
 这份文档整理后端工程师interview里需要掌握的 MyBatis 核心使用、SQL 基础与进阶、事务、锁、索引、批处理和金融后端常见追问点。
 
 它不只局限于本项目已经写过的代码，但会尽量用本项目的信用卡授权、额度冻结、Outbox、DelayJob 等例子来解释。
@@ -393,15 +395,15 @@ MyBatis 动态 SQL 使用 OGNL 表达式，常见标签如下。
 
 ```xml
 <insert id="insertBatch">
-    INSERT INTO card_risk_features (
-        card_id, window_start, authorization_count, updated_at
+    INSERT INTO statement_lines (
+        statement_id, card_transaction_id, amount, created_at
     ) VALUES
     <foreach collection="rows" item="row" separator=",">
         (
-            #{row.cardId},
-            #{row.windowStart},
-            #{row.authorizationCount},
-            #{row.updatedAt}
+            #{row.statementId},
+            #{row.cardTransactionId},
+            #{row.amount},
+            #{row.createdAt}
         )
     </foreach>
 </insert>

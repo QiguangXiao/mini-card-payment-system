@@ -39,7 +39,6 @@
 | [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐当前 Authorization/CardTransaction 两条事件路径与 Notification consumer，保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
 | [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
 | [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、`lease_token` 模型）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
-| [`notification-mechanism-review-cn.md`](notification-mechanism-review-cn.md) | ✅ | 当前 Notification 分层梳理与类缩减评估：事件入口、Inbox 幂等、intent/delivery 拆分、delivery worker 状态机、provider 幂等、哪些类可缩减以及取舍 |
 
 ### 4. 数据（Data：MyBatis / SQL / Migration）
 
@@ -86,7 +85,10 @@
 
 ## 归档（Archive）
 
-[`docs/archive/`](archive/) 保存被合并掉的原文档，内容保持原样，仅供回溯。当前已归档：
+[`docs/archive/`](archive/) 保存被合并掉的原文档，仅供回溯。
+2026-07 收缩重构删除了部分文中描述的组件（ledger / historical risk projection、
+`statement.closed` 与 `repayment.received` Kafka 路径等）；受影响的归档文档已清理
+对应段落，并在 H1 下方加"归档对齐说明"指向现行文档，其余内容保持原样。当前已归档：
 
 - `cache-snapshot-design-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `cache-invalidation-broadcast-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`

@@ -1,5 +1,7 @@
 # Kafka and Transactional Outbox Design
 
+> **Archive note (2026-07)**: this document has been aligned with the slimmed architecture — sections describing the removed ledger projection, historical risk projection, and `statement.closed` / `repayment.received` event paths were taken out. The current Kafka surface is `authorization-events` + `transaction-events`, consumed by the single notification group. See [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) for the current design.
+
 ## Purpose
 
 Authorization is a synchronous financial decision, but several follow-up
@@ -11,8 +13,9 @@ the main money-changing transaction:
 - Statement-ready and repayment notifications
 - Operations, audit, and reporting projections
 
-The current implementation includes Notification, Risk Feature, and Ledger
-consumers with deliberately different side-effect and idempotency strategies.
+The current implementation includes the Notification consumer; the other
+activities above remain motivation for the event contract rather than
+implemented consumers.
 
 ## Why Transactional Outbox
 
@@ -71,8 +74,6 @@ Topics:
 ```text
 mini-card.authorization-events.v1
 mini-card.transaction-events.v1
-mini-card.statement-events.v1
-mini-card.repayment-events.v1
 ```
 
 Event types:
@@ -83,8 +84,6 @@ authorization.declined
 authorization.expired
 authorization.posted
 card_transaction.posted
-statement.closed
-repayment.received
 ```
 
 The envelope contains:
@@ -149,8 +148,8 @@ messaging
 └── outbox/mybatis
 ```
 
-Notification, Risk, and Ledger Kafka listeners remain inside their own bounded
-contexts. This makes Kafka an adapter for business capabilities instead of
+Notification Kafka listeners remain inside their own bounded
+context. This makes Kafka an adapter for business capabilities instead of
 making `messaging` a catch-all pseudo-domain.
 
 `event`, `kafka`, `inbox`, and `outbox` could become separate Gradle modules if
@@ -158,14 +157,13 @@ the code base or team ownership grows. Keeping them as packages is currently
 easier to explain and avoids premature module boundaries.
 
 Business-specific event translation lives in each bounded context, such as
-`authorization.infrastructure.messaging`,
-`transaction.infrastructure.messaging`, `statement.infrastructure.messaging`,
-and `repayment.infrastructure.messaging`. The shared Outbox mechanism therefore
+`authorization.infrastructure.messaging` and
+`transaction.infrastructure.messaging`. The shared Outbox mechanism therefore
 does not depend on business aggregates or absorb bounded-context knowledge.
 
 Consumers use the shared `IntegrationEventReader` only for transport concerns:
-JSON parsing and header validation. Notification, Risk, and Ledger still choose
-their own handlers and commands inside their bounded contexts. This is the
+JSON parsing and header validation. Notification still chooses
+its own handlers and commands inside its bounded context. This is the
 intended microservice-compatible boundary: a consumer depends on the JSON event
 contract, not on the producer service's internal infrastructure package.
 
@@ -193,78 +191,25 @@ delivery-attempt count, and transition rules. Kafka is only an inbound adapter:
 the listener translates the integration event into an application command and
 does not appear in the domain model.
 
-The current use case creates durable `notifications` rows for authorization,
-card transaction, statement, and repayment events. The `source_event_id` unique
+The current use case creates durable `notifications` rows for authorization
+and card transaction events. The `source_event_id` unique
 constraint prevents duplicate aggregate creation when Kafka redelivers an event.
 
 A future notification sender can independently retry provider calls and track
 delivery status without blocking Kafka partitions or replaying the original
 authorization event.
 
-### Ledger Projection
-
-Consumer group:
-
-```text
-mini-card-ledger-v1
-```
-
-Ledger is modeled as an independent bounded context for learning. Its inbound
-adapters consume `card_transaction.posted` and `repayment.received`, then call
-`RecordLedgerEntryService`.
-
-The service first claims the event in `consumer_inbox`, then appends a
-`ledger_entries` row in the same local transaction. The table also has a
-`source_event_id + entry_type` unique constraint, so duplicate Kafka delivery or
-manual replay cannot create duplicate accounting entries.
-
-The current entries are intentionally minimal:
-
-```text
-CARD_TRANSACTION_POSTED -> DEBIT
-REPAYMENT_RECEIVED -> CREDIT
-```
-
-Authorization events do not create Ledger entries because authorization is a
-credit hold, not a posted receivable.
-
-### Risk Feature Projection
-
-Consumer group:
-
-```text
-mini-card-risk-feature-v1
-```
-
-Risk features belong to the existing Risk bounded context because they are
-historical inputs for risk assessment. They are explicitly modeled as a
-projection, not an aggregate root: the counters are derived from events,
-eventually consistent, and can be rebuilt.
-
-The projection service first claims the event in `consumer_inbox`, then updates
-`card_risk_features` in the same MySQL transaction. If projection persistence
-fails, both changes roll back and Kafka can safely redeliver.
-
-This projection is intentionally simple. A larger production system could move
-the feature computation to Kafka Streams, Redis, or a dedicated feature store.
-The current hard velocity rule still queries authorization records because an
-eventually consistent projection should not silently enforce a strong real-time
-limit.
-
-Notification subscribes to authorization, transaction, statement, and repayment
-topics. Risk feature projection currently subscribes only to authorization
-events. Kafka delivers each event once per consumer group, allowing notification
-and risk processing to scale and fail independently where they share a source
-topic.
+Notification subscribes to the authorization and transaction topics. Kafka
+delivers each event once per consumer group, so an additional consumer group
+added later would scale and fail independently while sharing the same source
+topics.
 
 ## Retry and Dead Letter Topics
 
-Each consumer has its own listener container factory and DLT:
+Each consumer group has its own DLT:
 
 ```text
 mini-card.notification.dlt.v1
-mini-card.authorization-risk-feature.dlt.v1
-mini-card.ledger.dlt.v1
 ```
 
 Transient exceptions are retried twice with a one-second fixed backoff. Contract
@@ -280,21 +225,10 @@ Spring Kafka exception headers. Production operations should alert on DLT
 growth, inspect the root cause, deploy a fix, and replay messages deliberately
 rather than automatically looping DLT messages back into the source topic.
 
-### Ledger and Reconciliation Projections
+### Future Projections
 
-Ledger is now implemented as a minimal learning projection. It consumes
-`card_transaction.posted` and `repayment.received`, claims the event through
-`consumer_inbox`, and writes append-only `ledger_entries`:
-
-```text
-card_transaction.posted -> CARD_TRANSACTION_POSTED / DEBIT
-repayment.received -> REPAYMENT_RECEIVED / CREDIT
-```
-
-This is intentionally not a production double-entry general ledger. It teaches
-that CardTransaction, Statement, Repayment, and Ledger answer different
-questions. Reconciliation remains a likely future module that would compare
-internal records against external network or bank statements.
+Reconciliation remains a likely future module that would compare internal
+records against external network or bank statements.
 
 Reversal, refund, dispute, and chargeback should produce their own versioned
 event types when those domains are implemented. They should not be inferred

@@ -41,7 +41,7 @@ Feign/Resilience4j, and Java language habits used in this project.
 See [Events, Outbox, Inbox & Kafka](docs/events-outbox-inbox-kafka-cn.md) for the
 transactional outbox (dual-write, claim/publish/finalize/recover), at-least-once
 delivery, consumer double-idempotency (Inbox + business key), the Kafka config
-reference, partition ordering, per-context DLTs, the real gaps (retention, DEAD
+reference, partition ordering, the group-routed DLT, the real gaps (retention, DEAD
 observability, version negotiation), and hardcore interview Q&A. (Merged from the
 former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
 notes, now archived under docs/archive/.)

@@ -35,7 +35,7 @@ thread dump（1914 行）的线程类别（已对齐当前结构）：
 | --- | ---: | --- |
 | Tomcat request worker `http-nio-8080-exec-*` | 10 | 空闲等 Tomcat task queue |
 | Tomcat acceptor/poller | 2 | `http-nio-8080-Acceptor` / `-Poller` |
-| Spring Kafka listener / heartbeat / metrics / 内部 scheduler | ~60 | 多个 listener container × concurrency + 各 consumer 的 heartbeat/metrics 叠加 |
+| Spring Kafka listener / heartbeat / metrics / 内部 scheduler | ~60 | 多个 listener container × concurrency + 各 consumer 的 heartbeat/metrics 叠加（采集时 listener container 多于现在的 2 个，收缩后此项会更小） |
 | 本工程 scheduler | 多个 | `outbox-scheduler-*`、`delay-job-scheduler-*`、`billing-cycle-scheduler-*`、`statement-job-scheduler-*`、`notif-delivery-scheduler-*`（采集当时 statement 调度尚为单一 `statement-batch-scheduler`，现已拆为 billing-cycle + statement-job 两个池） |
 | Outbox worker | 1 | 请求触发 publish 后 lazy 创建 |
 | DelayJob worker | 0 | 采样期间无 due job，pool 未创建实际线程 |

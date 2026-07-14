@@ -358,11 +358,11 @@ docker compose exec mysql mysql -uroot -prootpassword mini_card \
   -e "SELECT ID, AUTHOR, FILENAME, DATEEXECUTED, ORDEREXECUTED FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED"
 ```
 
-新增一次 schema 变化（如给 `repayments` 加 `failure_reason`）时，从新编号继续追加，例如 `0003-add-repayment-failure-reason.sql`：
+新增一次 schema 变化（如给 `repayments` 加 `failure_reason`）时，从新编号继续追加，例如 `0007-add-repayment-failure-reason.sql`：
 
 ```sql
 --liquibase formatted sql
---changeset mini-card:0003-add-repayment-failure-reason dbms:mysql
+--changeset mini-card:0007-add-repayment-failure-reason dbms:mysql
 --comment: Store bank debit failure reason for retry and support investigation.
 --preconditions onFail:MARK_RAN onError:HALT
 --precondition-sql-check expectedResult:0 SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'repayments' AND column_name = 'failure_reason'
