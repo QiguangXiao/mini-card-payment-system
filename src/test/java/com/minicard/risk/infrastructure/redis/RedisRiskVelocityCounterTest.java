@@ -84,9 +84,6 @@ class RedisRiskVelocityCounterTest {
                 new RiskProperties.Local(
                         60,
                         3,
-                        5,
-                        new BigDecimal("0.80"),
-                        60,
                         Map.of("JPY", new BigDecimal("50000.00")),
                         Set.of("merchant-blocked")
                 ),

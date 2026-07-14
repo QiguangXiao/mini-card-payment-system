@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Currency;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -46,14 +45,14 @@ import static org.mockito.Mockito.when;
  * <p>这把整条异步链路从“口头声明”变成可运行证据：</p>
  * <ol>
  *   <li><b>往返</b>：{@code authorize()} 在业务事务内写一条 outbox_events，后台 OutboxPoller
- *       claim 后发到真 Kafka，risk-feature consumer 消费并把 card_risk_features 投影出来。</li>
+ *       claim 后发到真 Kafka，Notification consumer 消费并创建通知意图与投递记录。</li>
  *   <li><b>重复投递幂等</b>：手工把同一个 envelope（同 eventId）再投一次模拟 broker at-least-once，
- *       consumer 靠 consumer_inbox 唯一键去重，投影计数不会被重复推进。</li>
+ *       consumer 靠 consumer_inbox 唯一键去重，不会重复创建通知和 delivery。</li>
  * </ol>
  *
  * <p>去重断言不靠 sleep：在重复消息后面，紧跟一条同 partition key、新 eventId 的 marker 事件。
- * 同 producer + 同 partition 保证 FIFO——当 marker 被消费（计数推进到 2）时，前面的重复消息一定已被处理过。
- * 若去重失效，重复消息会让计数变成 3，断言立刻失败。</p>
+ * 同 producer + 同 partition 保证 FIFO——当 marker 的 notification 出现时，前面的重复消息一定已处理。
+ * 若去重失效，原 eventId 会创建重复通知或投递记录，唯一约束/断言会立即暴露问题。</p>
  */
 @TestPropertySource(properties = "outbox.publisher.enabled=true")
 // 本类启用了 outbox publisher（后台轮询线程）。跑完后关闭整个 context，避免缓存上下文里的 poller
@@ -68,7 +67,7 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
             new KafkaContainer(DockerImageName.parse("apache/kafka:4.1.1"));
 
     private static final Currency JPY = Currency.getInstance("JPY");
-    private static final String RISK_FEATURE_CONSUMER = "risk-feature-v1";
+    private static final String NOTIFICATION_CONSUMER = "notification-v1";
     private static final String APPROVED_EVENT_TYPE = "authorization.approved";
 
     @Autowired
@@ -96,9 +95,8 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
     @BeforeEach
     void setUp() {
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(10));
-        // 共享容器里可能残留其它测试类的投影/消息行，先清空与本测试断言相关的投影与消息表，保证计数干净。
+        // 共享容器里可能残留其它测试类的消息行，先清空与本测试断言相关的表。
         jdbc.update("DELETE FROM consumer_inbox");
-        jdbc.update("DELETE FROM card_risk_features");
         // notification_deliveries 有外键指向 notifications，必须先删子表再删父表。
         jdbc.update("DELETE FROM notification_deliveries");
         jdbc.update("DELETE FROM notifications");
@@ -129,12 +127,12 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
         String partitionKey = (String) outbox.get("partition_key");
         String envelopeJson = (String) outbox.get("payload");
 
-        // --- 2) 往返：OutboxPoller 发到真 Kafka，consumer 消费并投影 + 写 inbox，outbox 标 PUBLISHED ---
+        // --- 2) 往返：OutboxPoller 发到真 Kafka，consumer 写 Inbox + Notification，outbox 标 PUBLISHED ---
         await().atMost(Duration.ofSeconds(40)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
             assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
             assertThat(inboxCount(eventId)).isEqualTo(1);
-            assertThat(authorizationCount(cardId)).isEqualTo(1);
-            assertThat(approvedCount(cardId)).isEqualTo(1);
+            assertThat(notificationCount(eventId)).isEqualTo(1);
+            assertThat(deliveryCount(eventId)).isEqualTo(2);
         });
 
         // --- 3) 重复投递 + ordering barrier ---
@@ -146,15 +144,17 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
         markerEnvelope.put("eventId", markerEventId.toString());
         sendRaw(partitionKey, markerEventId, objectMapper.writeValueAsString(markerEnvelope));
 
-        // marker 被消费意味着前面的重复消息一定已处理过（同 partition FIFO）。计数应推进到 2 而非 3。
+        // marker 被消费意味着前面的重复消息一定已处理过（同 partition FIFO）。
         await().atMost(Duration.ofSeconds(40)).pollInterval(Duration.ofMillis(200)).untilAsserted(() ->
-                assertThat(authorizationCount(cardId)).isEqualTo(2));
+                assertThat(notificationCount(markerEventId)).isEqualTo(1));
 
-        // 去重证据：重复的原 eventId 在 inbox 里仍只有一行；投影没有被重复推进。
+        // 去重证据：重复的原 eventId 在 Inbox/通知意图中仍只有一行，每个渠道各一条 delivery。
         assertThat(inboxCount(eventId)).as("duplicate of the original event was deduplicated by the inbox").isEqualTo(1);
         assertThat(inboxCount(markerEventId)).isEqualTo(1);
-        assertThat(authorizationCount(cardId)).as("two distinct events counted once each, duplicate not double-counted").isEqualTo(2);
-        assertThat(approvedCount(cardId)).isEqualTo(2);
+        assertThat(notificationCount(eventId)).isEqualTo(1);
+        assertThat(deliveryCount(eventId)).isEqualTo(2);
+        assertThat(notificationCount(markerEventId)).isEqualTo(1);
+        assertThat(deliveryCount(markerEventId)).isEqualTo(2);
     }
 
     /** 按 publisher 完全一致的方式重投：topic + partition key + payload + eventId/eventType header。 */
@@ -181,22 +181,23 @@ class OutboxKafkaInboxRoundtripIT extends MySqlIntegrationTestBase {
     private int inboxCount(UUID eventId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM consumer_inbox WHERE consumer_name = ? AND event_id = ?",
-                Integer.class, RISK_FEATURE_CONSUMER, eventId.toString());
+                Integer.class, NOTIFICATION_CONSUMER, eventId.toString());
         return count == null ? 0 : count;
     }
 
-    private int authorizationCount(String card) {
-        return firstIntOrZero(
-                "SELECT authorization_count FROM card_risk_features WHERE card_id = ?", card);
+    private int notificationCount(UUID eventId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM notifications WHERE source_event_id = ?",
+                Integer.class, eventId.toString());
+        return count == null ? 0 : count;
     }
 
-    private int approvedCount(String card) {
-        return firstIntOrZero(
-                "SELECT approved_count FROM card_risk_features WHERE card_id = ?", card);
-    }
-
-    private int firstIntOrZero(String sql, Object arg) {
-        List<Integer> rows = jdbc.queryForList(sql, Integer.class, arg);
-        return rows.isEmpty() ? 0 : rows.get(0);
+    private int deliveryCount(UUID eventId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM notification_deliveries d "
+                        + "JOIN notifications n ON n.id = d.notification_id "
+                        + "WHERE n.source_event_id = ?",
+                Integer.class, eventId.toString());
+        return count == null ? 0 : count;
     }
 }

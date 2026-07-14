@@ -20,7 +20,11 @@ public enum AuthorizationDeclineReason {
     CARD_EXPIRED,
     /** 本地 velocity 风控拒绝。 */
     RISK_VELOCITY_EXCEEDED,
-    /** 长期风险画像拒绝。 */
+    /**
+     * 仅用于读取 historical risk projection 删除前已持久化的授权审计记录。
+     * 新风控决策已无此分支，不得再产生该值；若直接删除，repository 读取旧行时会在 enum 解析处失败。
+     */
+    @Deprecated
     RISK_HISTORICAL_PROFILE,
     /** 金额过高触发风控。 */
     RISK_HIGH_AMOUNT,

@@ -142,9 +142,11 @@ mini-card.repayment-events.v1       repayment.received
 
 ### 5.4 Consumer group 与 concurrency
 
-每个 bounded context 一个独立 group（`mini-card-notification-v1` / `-risk-feature-v1`）。同 group 内一条消息只被一个实例处理；不同 group 各收一份——这正是 event-driven 的价值：一条 authorization event，notification 和 risk-feature 各收到一份独立处理。
+当前只保留 `mini-card-notification-v1` consumer group。同 group 内一条消息只被一个实例处理；
+未来增加新 bounded context 时应使用新 group，让各下游独立保存进度。
 
-`concurrency`（如 risk feature = 3）只提高同 group 内并行度，**有效并行度受 partition 数限制**（3 partitions → 最多 3 个有效线程，再大只是空闲）。数值配置在 `messaging.consumers.*.concurrency`，由各 `@KafkaListener(concurrency)` 占位符消费——它和 worker pool size 一样是"处理并行度"，统一放 YAML 而不是硬编码在注解里。`group-id` 同一个 YAML key 有两个读者：listener 的 `groupId` 占位符（消费进度归属）和 `KafkaConsumersProperties` 绑定（`KafkaConsumerConfiguration` 的失败 group → DLT 路由表）。
+`concurrency` 只提高同 group 内并行度，**有效并行度受 partition 数限制**。数值配置在
+`messaging.consumers.notification.concurrency`，由 `@KafkaListener(concurrency)` 占位符消费。
 
 ### 5.5 消费速率与 poll 循环：本项目刻意走默认值的参数（以及生产什么时候要拧）
 
@@ -220,27 +222,23 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
 
 ## 7. Consumer side：契约校验 + 双层幂等
 
-- **每个 context 使用独立 group + 独立 DLT**：四个 Notification listeners 共用 notification group，`AuthorizationRiskFeatureListener` 使用 risk group。两组互不影响，可独立扩缩与重放。
+- **Notification 共用一个 group + 一个 DLT**：四个 Notification listeners 共用 notification group，按各自 topic 消费。
 - `IntegrationEventReader.read(...)`：反序列化 + 集中校验 self-describing body envelope（`eventId/payload` 必填、`eventType` 必填、`eventVersion >= 1`）；header 只用于 observability，不参与 correctness。无效 integration event 抛 `InvalidIntegrationEventException`（永久失败）。`requiredText/requiredUuid/requiredDecimal/requiredCurrency/requiredInstant` 统一读取 payload 的通用数据类型，具体 eventType 需要哪些字段仍由 listener 声明。
 - **双层幂等（消费侧最关键）**：
   1. **Inbox claim（第一道）**：`ConsumerInboxRepository.claim(consumerName, eventId)`，底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)` 判定"第一次消费"，`DuplicateKeyException → false`。
   2. **业务唯一键（第二道）**：`notifications.source_event_id` 唯一。挡住"绕过 inbox 的手工 replay / 补偿脚本"。
   - **inbox claim 与业务写在同一个 `@Transactional`**。**反向事实**：否则 claim 成功但业务写失败会"假装消费过"，造成**丢消费**。
-- **错误处理与 DLT**（`KafkaConsumerConfiguration`）：Boot 默认 listener factory + **全局唯一** `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；`DeadLetterPublishingRecoverer` **按失败的 consumer group 路由**到对应 DLT——authorization-events 同时被 Notification 和 Risk 消费，按 `record.topic()` 无法判断哪个 consumer 失败，正确路由键是 `ListenerExecutionFailedException` 携带的失败 groupId（`KafkaConsumerConfigurationTest` 钉住）。保留原 partition 便于关联排查；**DLT 内顺序不等于源顺序**，replay 的正确性仍靠幂等，不能依赖 DLT 顺序恢复业务顺序。**`addNotRetryableExceptions(InvalidIntegrationEventException.class)`**——永久契约错误直进 DLT不空转，瞬时错误才退避重试。DLT topic：`mini-card.notification.dlt.v1` / `mini-card.authorization-risk-feature.dlt.v1`。
-  - **为什么每个 consumer 一个 DLT**：同一条消息可能对 Risk 成功、对 Notification 失败；分开后可只修复/replay 失败的 consumer，不影响其他 context。
+- **错误处理与 DLT**（`KafkaConsumerConfiguration`）：Boot 默认 listener factory + **全局唯一** `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；`DeadLetterPublishingRecoverer` 按 Notification consumer group 路由到 `mini-card.notification.dlt.v1`。保留原 partition 便于关联排查；**DLT 内顺序不等于源顺序**，replay 的正确性仍靠幂等。**`addNotRetryableExceptions(InvalidIntegrationEventException.class)`** 让永久契约错误直进 DLT，瞬时错误才退避重试。
   - **为什么不再是三个 per-context factory**：曾为"不同 DLT 名 + 不同 concurrency"建三个几乎相同的 factory。收敛为单 handler 消灭了两个坑：Boot 默认 factory 只按 bean 名让位，忘写 `containerFactory` 的新 listener 会静默挂上无 DLT 的默认 handler（重试后记日志、提交 offset、**消息丢弃**）；DLT 正确性曾依赖每个 listener 手选 factory。现在默认 factory 自带 DLT handler，路由跟随失败的消费组，无可绑错的配置点。只有 ack/批量/serde/事务/集群真正不同时才值得回到多 factory。
-  - **当前运维边界**：系统只负责把失败 record 发进三个 DLT，尚无 listener/monitor group 消费它们，也没有 DLT metric、告警或 replay 工具。生产应增加独立 monitor group 同时订阅三个 DLT，记录原 topic/partition/offset、异常 headers 与 `eventId` 并告警；修复根因后再受控 replay，不能自动回投造成无限循环。
+  - **当前运维边界**：系统只负责把失败 record 发进 Notification DLT，尚无 listener/monitor group、DLT metric、告警或 replay 工具。
 
 ---
 
-## 8. 已实现的三个 consumer + 数据模型
+## 8. 已实现的 consumer + 数据模型
 
 | Consumer | 建模 | 消费 | 副作用 / 幂等 |
 | --- | --- | --- | --- |
 | **Notification** | **独立 aggregate**（`PENDING→SENT/FAILED` 生命周期），Kafka 仅入站 adapter | authorization / card_transaction / statement / repayment | 创建 `notifications` 行；`source_event_id` 唯一防重复创建 |
-| **Risk feature** | **投影非 aggregate**（事件派生、最终一致、可重建） | `authorization` events | upsert `card_risk_features`；Inbox 同事务 |
-
-- Risk 投影刻意简单；硬 velocity 规则仍走 Redis/DB（见 `caching-and-rate-limiting`），因为**最终一致的投影不应静默地强制实时硬限额**。
 
 ```sql
 outbox_events(

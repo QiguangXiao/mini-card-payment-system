@@ -128,8 +128,7 @@ class KafkaOutboxMessagePublisherTest {
                 "transaction-events",
                 "statement-events",
                 "repayment-events",
-                "notification-dlt",
-                "risk-feature-dlt"
+                "notification-dlt"
         );
     }
 }

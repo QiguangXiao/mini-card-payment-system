@@ -429,7 +429,7 @@ authorization.approved / PENDING
 - `CardTransaction` 还不存在。
 - `Statement` 还不存在。
 - `Repayment` 还不存在。
-- Notification 和 Risk 是异步消费 `authorization.approved`，不影响主事务。
+- Notification 异步消费 `authorization.approved`，不影响主事务；Risk 已在主事务前同步完成判定。
 
 ## 6. 请求二：Presentment Posting 入账
 
@@ -1394,7 +1394,7 @@ repayments
 
 | 触发点 | Domain event | Outbox event_type | 下游影响 |
 | --- | --- | --- | --- |
-| `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification、Risk projection |
+| `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification |
 | `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 当前无消费者（notification/risk listener 刻意跳过 posted：它是发卡方内部 hold 生命周期，用户可见入账通知走 `card_transaction.posted`） |
 | `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification |
 | `Statement.close(...)` | `StatementClosedDomainEvent` | `statement.closed` | Notification |

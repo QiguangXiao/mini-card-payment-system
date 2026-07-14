@@ -60,7 +60,7 @@ interview时的推荐回答结构：
 
 interview中如果对方问“介绍一下你做的项目”，可以这样讲：
 
-> 我做的是一个 mini credit card issuer backend，用 Spring Boot、MySQL、MyBatis 和 Kafka 模拟发卡方核心链路。它覆盖 Authorization 授权占额度、Presentment Posting 入账、Statement 出账、Repayment 还款，以及 Notification 和 Risk 这类异步下游。
+> 我做的是一个 mini credit card issuer backend，用 Spring Boot、MySQL、MyBatis 和 Kafka 模拟发卡方核心链路。它覆盖 Authorization 授权占额度、Presentment Posting 入账、Statement 出账、Repayment 还款，以及异步 Notification 下游；Risk 保持在授权实时决策链。
 >
 > 我重点不是做一个 demo API，而是练金融后端最核心的可靠性设计。比如授权接口用 `Idempotency-Key` 和唯一索引防重复占额度；额度变化用 MySQL `SELECT ... FOR UPDATE` 做 row-level locking；业务状态和 Outbox event 在同一个 transaction boundary 内提交；Kafka 只负责异步传递，consumer 侧仍然用 Inbox 或业务唯一键做幂等。
 >
@@ -387,7 +387,7 @@ publish 成功后 mark PUBLISHED
 | --- | --- | --- |
 | Outbox | 本服务状态变化后可靠发布事件 | `outbox_events`, `OutboxPoller`, `OutboxClaimer`, `OutboxWorker` |
 | Inbox | 本服务消费外部事件时防重复 side effect | `consumer_inbox` |
-| DLT | 消息无法处理时隔离坏消息 | `mini-card.notification.dlt.v1`, `mini-card.authorization-risk-feature.dlt.v1` |
+| DLT | 消息无法处理时隔离坏消息 | `mini-card.notification.dlt.v1` |
 
 一句话：
 

@@ -195,7 +195,7 @@ outbox 把问题收敛为"单库事务 + 可重放"。
 ### Q4. "同一聚合的两个事件会乱序吗？"
 
 要点：**会**——claim 按 created_at 排序，但 4 线程 worker 池并发 publish，同 partition key
-只保证分区内按发送序。当前 Notification/Risk consumer 都必须以幂等和显式状态处理重复或乱序，不能依赖跨 topic 顺序。
+只保证分区内按发送序。当前 Notification consumer 必须以幂等和显式状态处理重复或乱序，不能依赖跨 topic 顺序。
 若需要严格 per-key 有序：按 partition_key 哈希到单线程 worker，或单 publisher 串行发送，
 代价是吞吐。**主动说出这一点**，别等面试官发现。
 
@@ -644,10 +644,9 @@ runbook 精确补跑入口。
 > duplicate writes within Kafka — though the end-to-end contract stays at-least-once because
 > of the outbox, which is why consumer-side dedup still matters. On the consumer side,
 > auto-commit is off and the ack mode is per-record: the offset commits only after the listener
-> returns successfully, so a crash means redelivery, never silent loss. Each bounded context —
-> notification and risk — subscribes with its own consumer group, because they're
-> independent projections of the same facts: with separate groups every context receives every
-> event; sharing a group would randomly split events between them. Poison messages go to a
+> returns successfully, so a crash means redelivery, never silent loss. The Notification bounded
+> context subscribes with its own durable consumer group; future contexts would use separate groups
+> so they receive their own copy instead of competing for Notification's offsets. Poison messages go to a
 > per-consumer dead-letter topic so one bad payload doesn't block a partition. The current
 > project still needs DLT metrics, alerting, and controlled replay. Partition keys are the aggregate ID, which gives per-partition
 > ordering — and I'll be upfront that with a parallel publisher pool, strict per-aggregate

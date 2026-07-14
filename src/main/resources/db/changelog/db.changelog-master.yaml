@@ -5,3 +5,5 @@ databaseChangeLog:
       file: db/changelog/changes/0002-seed-local-sample-data.sql
   - include:
       file: db/changelog/changes/0003-remove-ledger-projection.sql
+  - include:
+      file: db/changelog/changes/0004-remove-historical-risk-projection.sql

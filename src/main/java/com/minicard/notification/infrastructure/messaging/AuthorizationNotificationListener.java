@@ -40,7 +40,7 @@ public class AuthorizationNotificationListener {
     public void onAuthorizationEvent(ConsumerRecord<String, String> record) {
         // 阶段 1：@KafkaListener 的 topics 决定从哪里读，groupId 决定和谁共享消费进度，
         // concurrency 决定本 container 的并行线程数（有效上限是 topic partition 数）。
-        // 如果所有 bounded context 共用一个 group，Notification 可能抢走 Risk 应该处理的消息。
+        // group 是 Notification bounded context 的持久消费身份，多实例共享它才会竞争同一份进度。
         // Authorization listener 只处理授权决策通知。authorization.posted 属于授权生命周期，
         // 不代表“用户可见交易已入账”，所以不会在这里创建 posted 通知。
         // offset commit 也不是这里手写的：application.yml 关闭 Kafka 原生 auto commit，

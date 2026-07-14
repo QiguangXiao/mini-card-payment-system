@@ -69,14 +69,7 @@ public class KafkaTopicsConfiguration {
     @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         // Notification consumer 失败只进 notification DLT。
-        // 如果所有 consumer 共用一个 DLT，排查时很难判断是通知还是风控投影坏了。
         return deadLetterTopic(properties.notificationDeadLetter());
-    }
-
-    @Bean
-    public NewTopic riskFeatureDeadLetterTopic(KafkaTopicsProperties properties) {
-        // Risk projection 的坏消息单独进 risk DLT，避免风控画像投影问题污染通知侧告警。
-        return deadLetterTopic(properties.riskFeatureDeadLetter());
     }
 
     private NewTopic deadLetterTopic(String topicName) {

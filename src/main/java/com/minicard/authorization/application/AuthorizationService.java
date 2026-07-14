@@ -206,7 +206,7 @@ public class AuthorizationService {
             return;
         }
 
-        // 决策阶段 3：执行风控。它可能访问 projection/Redis/外部风控，所以必须放在账户锁之前。
+        // 决策阶段 3：执行风控。它可能访问 Redis velocity/外部风控，所以必须放在账户锁之前。
         // riskAssessmentService.assess() 放在账户锁之前：风控可能有计算/外部调用成本，
         // 不应该让同账户的其他 authorization 在锁上白等。
         // 如果先拿 account row lock 再等外部风控，慢调用会放大锁等待，热点账户容易排队超时。
@@ -297,7 +297,6 @@ public class AuthorizationService {
     private AuthorizationDeclineReason mapRiskFailure(RiskDeclineReason failure) {
         return switch (failure) {
             case VELOCITY_EXCEEDED -> AuthorizationDeclineReason.RISK_VELOCITY_EXCEEDED;
-            case HISTORICAL_RISK_PROFILE -> AuthorizationDeclineReason.RISK_HISTORICAL_PROFILE;
             case HIGH_RISK_AMOUNT -> AuthorizationDeclineReason.RISK_HIGH_AMOUNT;
             case GEOLOCATION_MISMATCH -> AuthorizationDeclineReason.RISK_GEOLOCATION_MISMATCH;
             case BLOCKED_MERCHANT -> AuthorizationDeclineReason.RISK_BLOCKED_MERCHANT;

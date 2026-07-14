@@ -53,11 +53,11 @@ Inbox、unique fallback。它们不是装饰，而是在防具体事故。
 | `network_transaction_id` 作为 presentment 幂等键 | 卡组织或测试脚本重放同一 presentment 时，同一笔消费可能被入账两次 |
 | Statement cycle natural key：`creditAccountId + periodStart + periodEnd` | batch retry 可能给同一账户同一期生成多张账单 |
 | `StatementBillingRepository.markCardTransactionsBilled(...)` | 同一笔 posted transaction 下轮 batch 还会被当成未出账交易，再次进入账单 |
-| Outbox row 和业务状态同事务提交 | 业务状态成功但消息意图丢失，下游 Notification/Risk 永远不知道这件事 |
+| Outbox row 和业务状态同事务提交 | 业务状态成功但消息意图丢失，下游 Notification 永远不知道这件事 |
 | Kafka publish 放在 worker，且等待 broker ack 后再 finalize | 如果主事务里等待 Kafka，会拉长 money-changing lock；如果不等 ack 就标成功，消息可能丢失 |
 | Outbox / DelayJob 的 `PROCESSING lease` 和 recoverer | pod 在领取后宕机时，row 会永久卡在 PROCESSING，消息或未来业务动作不再执行 |
 | Worker finalize 前重新 `FOR UPDATE` 并比较 lease token | 旧 worker 迟到返回时，可能覆盖新 worker/recoverer 已经写好的失败、重试或成功状态 |
-| Consumer Inbox + 业务唯一键 | Kafka/Outbox at-least-once 重投会重复创建通知、重复推进 Risk feature |
+| Consumer Inbox + 业务唯一键 | Kafka/Outbox at-least-once 重投会重复创建通知和每渠道 delivery |
 | cache after-commit evict | 事务提交前删缓存时，另一个 GET 可能读旧 DB 值并重新写回 Redis，造成 stale read model |
 | 自动扣款 deterministic key：`auto-debit:{statementId}` | DelayJob retry 每次都像一笔新还款，同一张账单可能被自动扣款多次 |
 
@@ -390,33 +390,16 @@ curl -X POST http://localhost:8080/api/authorizations \
    本地 velocity 查询通过 `RiskVelocityCounter` port 进入 Redis sliding-window adapter
    （`JdbcRiskVelocityCounter` 保留为对照实现）。port 返回 `VelocityCheckResult(count, degraded, source)`，
    所以 service 能区分“窗口内确实 0 次”和“Redis 不可用，按 fail-open policy 降级放行”；
-   长期画像通过 `RiskFeatureReader` 读取 `card_risk_features` projection：
-   `AuthorizationRiskFeatureListener` 消费 authorization decision event，`RiskFeatureProjectionService`
-   用 Inbox 幂等后 upsert 这张表；下一笔授权再把它作为 long-window risk profile 使用。
    外部评分通过 `ExternalRiskGateway` port 进入 Feign adapter。
    它放在 credit account row lock 之前，是为了避免外部调用或复杂计算占着账户锁。
 
-   当前同步风控形成两层特征 + 一个外部判定：
+   当前同步风控只保留实时信号 + 外部判定：
 
    - Redis short-window velocity：实时近似，适合防 card-testing 突刺，主库零读压。
-   - MySQL projection long-window profile：`card_risk_features` 按 `card_id` 读一行，
-     当历史样本量达到 `min-historical-authorizations` 且 decline ratio 达到
-     `max-historical-decline-rate` 时，把这张卡置于 **elevated scrutiny**。
-   - 历史画像是 **soft signal**：它本身从不单独拒绝，只在外部风控 approve 但分数偏高
-     （≥ `elevated-scrutiny-max-approved-score`）时，才把判定收紧为拒绝。
+   - External risk：本地规则通过后调用，由 timeout、bulkhead 和 circuit breaker 保护。
 
-   为什么不让历史画像直接硬拒绝（重要 counterfactual）：早期实现让它在 external 之前单独拒绝，
-   暴露出一个**自我强化反馈环**——画像拒绝 → `authorization.declined` 回灌 projection → decline ratio
-   抬高 → 更容易拒绝；叠加终身累计不衰减与 `(d+1)/(t+1) ≥ d/t`，一张卡越线后会每笔必拒、
-   `approved_count` 再也无法增长、被**永久 brick**。修复分两步：
-   1. 降级为 soft signal：历史再差，只要本次外部判定干净仍放行，`approved_count` 得以增长、ratio 自愈；
-   2. 断开反馈：`AuthorizationRiskFeatureListener` 只统计真正的风险拒绝（如 `RISK_VELOCITY_EXCEEDED`），
-      排除画像自身的 `RISK_HISTORICAL_PROFILE`、外部宕机的 `RISK_EXTERNAL_UNAVAILABLE`、以及额度/卡
-      生命周期等运营类拒绝，避免信号污染与自激。
-
-   trade-off 也要讲清楚：projection 补齐了 CQRS 读侧，但每笔通过 cheap rules 的授权会多一次 DB read。
-   生产上可以让它走 read replica、加本地/Redis profile cache，或只对高风险候选请求启用；
-   本项目先保留最直观的一行主键读取，方便看懂“实时 Redis + 历史 DB 特征”的分层。
+   项目不再维护 historical risk projection：它需要额外 Kafka consumer、Inbox、DLT、投影表和每笔 DB read，
+   但对当前 interview 学习主线的增量低，而且累计拒绝率容易引入过期信号与自我强化反馈。
 
    这里故意让两类风控依赖的失败策略不同：
 
@@ -541,7 +524,6 @@ curl -X POST http://localhost:8080/api/authorizations \
   - `CardTransactionNotificationListener` 处理 `card_transaction.posted`。
   - `StatementNotificationListener` 处理 `statement.closed`。
   - `RepaymentNotificationListener` 处理 `repayment.received`。
-- Risk listener 仍只处理 `authorization.approved` 和 `authorization.declined`，因为风控投影只关心授权决策历史。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
 为什么按上游领域拆 listener：
@@ -1381,14 +1363,13 @@ credit account row lock -> statement row lock
   - `notification/infrastructure/messaging/CardTransactionNotificationListener`
   - `notification/infrastructure/messaging/StatementNotificationListener`
   - `notification/infrastructure/messaging/RepaymentNotificationListener`
-  - `risk/infrastructure/messaging/AuthorizationRiskFeatureListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
 
 - Outbox 是 messaging 的 reliable delivery 机制，不是业务 aggregate。
 - `OutboxEvent` 表达的是一条待发布消息的 delivery state，不需要伪装成业务 domain。
 - 现在的结构更清楚：共享消息机制放在 `messaging/*`，业务发送/消费入口放回各自 bounded context。
-- interview 中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification/Risk 是业务上下文。
+- interview 中可以这样解释：Outbox/Inbox 是可靠性 pattern，Notification 是消费这些事件的业务上下文。
 
 PayPay Card interview提示：
 

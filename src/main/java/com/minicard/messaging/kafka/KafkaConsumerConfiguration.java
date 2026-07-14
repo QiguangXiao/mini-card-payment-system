@@ -42,11 +42,8 @@ import org.springframework.util.backoff.FixedBackOff;
  * 新 listener 默认安全；DLT 跟随失败的消费组，没有可以绑错的配置点。只有当各 context 的
  * ack 模式、批量消费、serde、事务或目标集群真正不同时，才应该回到多 factory。</p>
  *
- * <h3>为什么按失败 group 路由 DLT，而不是按 source topic</h3>
- * <p>authorization topic 同时被 Notification 和 Risk group 消费：同一条 record 可能
- * 对 Risk 失败而对 Notification 成功。按 record.topic() 查表会把 Risk 的失败发进错误的
- * DLT。container 把 listener 异常包成携带失败 groupId 的 {@link ListenerExecutionFailedException}，
- * 这正是 per-consumer DLT 语义的路由键。路由行为由 KafkaConsumerConfigurationTest 钉住。</p>
+ * <p>DLT 按失败 consumer group 路由，避免将不同消费职责的失败混在一起。
+ * 当前只有 Notification consumer，但仍保留 group 路由，以便未来增加新的异步下游。</p>
  *
  * <h3>反序列化边界</h3>
  * <p>Kafka 层是 String 反序列化，poll 阶段基本不可能失败；malformed JSON 在
@@ -64,17 +61,16 @@ public class KafkaConsumerConfiguration {
     public DefaultErrorHandler kafkaListenerCommonErrorHandler(
             // KafkaTemplate 在这里不是发业务事件，而是给 recoverer 发布失败 record 到 DLT。
             KafkaTemplate<Object, Object> kafkaTemplate,
-            // topics 提供两个 per-context DLT 名，避免在 Java 中写死环境相关字符串。
+            // topics 提供 per-context DLT 名，避免在 Java 中写死环境相关字符串。
             KafkaTopicsProperties topics,
             // consumers 提供各 context 的 group-id，作为 DLT 路由表的 key。
             KafkaConsumersProperties consumers
     ) {
         // 阶段 1：失败 group -> DLT 路由表。key 与各 @KafkaListener 的 groupId 占位符读同一个
         // YAML 值（messaging.consumers.*.group-id），来源唯一；Map.of 对重复 key fail-fast，
-        // 两个 context 误配同一个 group 会在启动期炸掉，而不是运行期串 DLT。
+        // 新增 context 时继续在这里显式声明路由，不根据 source topic 猜消费职责。
         Map<String, String> deadLetterTopicByGroupId = Map.of(
-                consumers.notification().groupId(), topics.notificationDeadLetter(),
-                consumers.riskFeature().groupId(), topics.riskFeatureDeadLetter()
+                consumers.notification().groupId(), topics.notificationDeadLetter()
         );
 
         // 阶段 2：定义"这条 record 最终处理不了时发到哪里"。DLT 不是自动修复机制，

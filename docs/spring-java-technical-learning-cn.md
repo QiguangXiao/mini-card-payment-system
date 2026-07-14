@@ -1343,7 +1343,7 @@ side effect may run again
 
 - `ConsumerInboxMapper.xml`
 - `MyBatisConsumerInboxRepository`
-- Notification/Risk consumer
+- Notification consumer
 
 Inbox claim 写法是直接 insert：
 
@@ -1560,7 +1560,7 @@ payload.put("currency", requestedAmount.currency().getCurrencyCode());
 
 位置：
 
-- Notification/Risk listeners
+- Notification listeners
 
 Listener 从 `JsonNode` 读取 text，再转成业务类型：
 
@@ -1585,9 +1585,9 @@ Instant.parse(eventReader.requiredText(payload, "postedAt"))
 
 ### 14.11 先判断 `eventType`，再解析特定 payload
 
-位置：`AuthorizationRiskFeatureListener`
+位置：`AuthorizationNotificationListener`
 
-Risk feature listener 只关心：
+Authorization notification listener 只关心：
 
 ```text
 authorization.approved
@@ -2006,41 +2006,6 @@ MyBatis 在设置 null 参数时，有时需要知道 JDBC type：
 
 如果省掉，可能本地 MySQL 能跑，但换 driver 或迁移数据库时出现参数类型错误。
 
-### 14.25 `ON DUPLICATE KEY UPDATE` 是原子 upsert
-
-位置：`CardRiskFeatureProjectionMapper.xml`
-
-Risk feature projection 使用 MySQL upsert：
-
-```sql
-INSERT INTO card_risk_features (...)
-VALUES (...)
-ON DUPLICATE KEY UPDATE
-  authorization_count = authorization_count + 1,
-  approved_count = approved_count + CASE WHEN ... THEN 1 ELSE 0 END,
-  last_decision_at = GREATEST(last_decision_at, #{decidedAt})
-```
-
-它解决的是 insert-or-increment race。
-
-如果写成：
-
-```text
-SELECT existing row
-if exists UPDATE count = count + 1
-else INSERT row
-```
-
-并发 consumer 或 replay 可能出现：
-
-- 两个线程都看到不存在。
-- 一个 insert 成功，另一个 insert 冲突。
-- 或两个线程读到同一个旧 count，再覆盖写回，丢计数。
-
-`ON DUPLICATE KEY UPDATE` 把判断和更新交给数据库一条语句完成。
-
-`GREATEST(last_decision_at, #{decidedAt})` 也很关键：Kafka 可能有迟到事件，迟到事件不应该把“最后决策时间”倒退。
-
 ### 14.26 `IN ()` 空列表保护
 
 位置：`MyBatisCardTransactionRepository.assignStatement`
@@ -2242,7 +2207,7 @@ covered Java files: 136 / 226 = 60.2%
 | Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、Outbox adapter、repayment row/domain mapping |
 | Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、statement read cache、repository duplicate 粒度 |
 | Notification | 高覆盖 | stable consumer name、fluent getter、eventType-before-payload、generic subject type、notification row/domain mapping |
-| Risk | 已补强 | Feign port、JdbcTemplate adapter、typed config、projection consumer name、atomic upsert、simulated external API |
+| Risk | 已补强 | Feign port、Redis/JdbcTemplate velocity adapter、typed config、simulated external API |
 | Outbox | 完整覆盖 | properties/configuration/port/event/repository/mapper/claimer/worker/recoverer/XML、backoff、lease、ack/finalize |
 | Inbox | 完整覆盖 | consumer-level idempotency、insert-first claim、DuplicateKeyException -> false |
 | DelayJob | 高覆盖 | handler/repository/type/mapper/row/claim/recoverer/properties/domain/scheduler contract |
@@ -2284,10 +2249,10 @@ covered Java files: 136 / 226 = 60.2%
 6. 读 `KafkaTopicsConfiguration`、`KafkaConsumerConfiguration`、`KafkaOutboxMessagePublisher`、`IntegrationEventReader`，理解 Kafka container、DLT、ack、JSON contract。
 7. 读 `StatementReadService`、`StatementReadCacheProperties` 和 `docs/caching-and-rate-limiting-cn.md`，理解第三方 cache、TTL jitter、single-flight 和 transaction hook；再读 `RedisRiskVelocityCounter` 理解 Redis velocity 计数。
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
-9. 读 `RequestNotificationService`、`ProjectRiskFeatureCommand`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
+9. 读 `RequestNotificationService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
 10. 读 `OutboxEvent`、`DelayJob`、`OutboxEventMapper.xml`、`CardTransactionMapper.xml`，理解 backoff、XML escaping 和 MyBatis `<foreach>`。
 11. 读 `StatementCycleService`、`JapaneseBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
-12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Notification/Risk listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
+12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Notification listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
 
 每读一个点，都问一句：
 

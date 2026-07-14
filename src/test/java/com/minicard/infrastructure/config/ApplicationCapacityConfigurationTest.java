@@ -61,9 +61,7 @@ class ApplicationCapacityConfigurationTest {
                     KafkaConsumersProperties.class
             );
             assertThat(consumers.notification().groupId()).isEqualTo("mini-card-notification-v1");
-            assertThat(consumers.riskFeature().groupId()).isEqualTo("mini-card-risk-feature-v1");
             assertThat(consumers.notification().concurrency()).isEqualTo(2);
-            assertThat(consumers.riskFeature().concurrency()).isEqualTo(3);
         });
     }
 

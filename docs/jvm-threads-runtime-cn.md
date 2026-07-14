@@ -186,9 +186,8 @@ mini-card JVM
 | Context | Listener | Group | concurrency |
 | --- | --- | --- | --- |
 | Notification | Authorization/CardTransaction/Statement/Repayment（4 个） | `mini-card-notification-v1` | 2/容器 |
-| Risk | AuthorizationRiskFeature | `mini-card-risk-feature-v1` | 3（对齐 3 partitions） |
 
-> concurrency 是**每个 listener container** 的 consumer thread 数，不是"整个 context 总共 N 个线程"。concurrency 提高的是不同 partition 的并行；**同一 partition 内仍由一个 consumer 顺序处理**——保证同 aggregate 顺序靠稳定 partition key（authorizationId / creditAccountId），不是让所有 consumer 串行。listener 慢会让本 partition 后续 record 延迟、consumer lag 上升、甚至触发 rebalance；本项目 listener 只做本地 DB 投影、不调外部 provider（好边界）。
+> concurrency 是**每个 listener container** 的 consumer thread 数，不是"整个 context 总共 N 个线程"。concurrency 提高的是不同 partition 的并行；**同一 partition 内仍由一个 consumer 顺序处理**。listener 只写本地 Notification/Inbox，不调外部 provider。
 
 ### 4.8 MySQL connection、row lock 与线程状态
 

@@ -193,13 +193,10 @@ messaging:
     transaction-events: mini-card.transaction-events.v1
     statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
-    # DLT(dead-letter topic) 按 consumer 职责拆开。
-    # Notification 坏消息不应该阻塞 Risk projection 的排查/重放。
+    # DLT(dead-letter topic) 归属 Notification consumer 职责。
     notification-dead-letter: mini-card.notification.dlt.v1
-    risk-feature-dead-letter: mini-card.authorization-risk-feature.dlt.v1
   consumers:
     # group-id 表示同一个 bounded context 的一组实例共同消费。
-    # 同一 topic 可以被 notification/risk 多个 group 独立消费，互不抢 offset。
     # group-id 有两个读者：各 @KafkaListener 的 groupId 占位符（消费进度归属），以及绑定类
     # KafkaConsumersProperties——KafkaConsumerConfiguration 用它构建"失败 group -> DLT"路由表，
     # 失败消息按失败的消费组进自己的 DLT（同一 topic 多 group 消费，不能按 topic 推导）。
@@ -209,12 +206,8 @@ messaging:
     notification:
       group-id: mini-card-notification-v1
       concurrency: 2
-    risk-feature:
-      group-id: mini-card-risk-feature-v1
-      # 对齐 source topic 的 3 个 partitions：授权事件量最大，风控画像投影吃满并行度。
-      concurrency: 3
-    # 当前只由 error handler 把失败 record 写入上面的两个 DLT，没有 @KafkaListener 消费 DLT。
-    # 生产补齐时应增加独立 monitor group 订阅两个 DLT，记录 metric/告警，并在修复根因后受控 replay；
+    # 当前只由 error handler 把失败 record 写入 notification DLT，没有 @KafkaListener 消费 DLT。
+    # 生产补齐时应增加独立 monitor group 订阅 DLT，记录 metric/告警，并在修复根因后受控 replay；
     # 不要收到死信就自动回投 source topic，否则永久坏消息会形成 source -> DLT -> source 的无限循环。
 
 outbox:
@@ -438,14 +431,6 @@ risk:
     # 对应代码：RiskProperties -> RiskAssessmentService，在授权决策链里、账户加锁之前执行。
     velocity-window-seconds: 60
     max-authorizations-per-window: 3
-    # 长期画像来自 card_risk_features projection：样本太少时不参与判定，避免一两次失败就打标签。
-    # 对应字段：card_risk_features 表（RiskFeatureProjectionService 消费 authorization 事件异步累计）。
-    min-historical-authorizations: 5
-    # 0.80 表示历史拒绝率达到 80% 时把这张卡提高审查档位。它是长窗口 soft signal，不替代 Redis 短窗口 velocity。
-    max-historical-decline-rate: 0.80
-    # elevated scrutiny 下仍可接受的最高外部风险分：历史画像超阈值的卡，外部即使 approve，
-    # 分数 ≥ 60 也会被收紧为拒绝。只在外部参与后生效，所以历史画像永远不会单独把卡永久封死。
-    elevated-scrutiny-max-approved-score: 60
     high-risk-amount-thresholds:
       JPY: 50000.00
       USD: 500.00
