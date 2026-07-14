@@ -473,12 +473,8 @@ api:
     # 注意这是 per-instance 视角之外的**全局**值：桶在 Redis 里，多实例共享同一个调用方的桶。
     # 小项目推荐 10/s；生产大流量示例可按 authenticated client 从 50/s 起步，并在 gateway 再设全局保护。
     refill-per-second: 10
-    # 是否信任 X-Forwarded-For。默认 false（安全默认值）：该 header 可伪造，直连场景下
-    # 攻击者每个请求换一个首段 = 每个请求一个新桶，per-IP 限流被完全绕过。
-    # 部署在自家 LB（会重写该 header）后面时必须打开，否则所有流量共享 LB 的 IP，
-    # 限流退化成全局限流——这是按部署形态二选一的开关，不是可选优化。
-    # 更正统的生产做法：配 server.tomcat.remoteip.*（RemoteIpValve），应用只读 remoteAddr。
-    trust-forwarded-for: false
+    # 分桶 key 只读 request.remoteAddr；反向代理场景由网关或 Tomcat RemoteIpValve
+    # 按 trusted proxies 解析真实客户端 IP，应用不直接信任可伪造的 X-Forwarded-For。
 
 resilience4j:
   # Resilience4j 把“配置”与“有状态实例”分开：下面每个 instances.<name> 会进入对应 Registry。

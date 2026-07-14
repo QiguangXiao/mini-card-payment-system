@@ -50,9 +50,8 @@ public class RateLimitConfiguration {
     @Bean
     public AuthorizationRateLimitInterceptor authorizationRateLimitInterceptor(
             RedisTokenBucketRateLimiter apiRateLimiter,
-            RateLimitProperties properties,
             MeterRegistry meterRegistry
     ) {
-        return new AuthorizationRateLimitInterceptor(apiRateLimiter, properties, meterRegistry);
+        return new AuthorizationRateLimitInterceptor(apiRateLimiter, meterRegistry);
     }
 }

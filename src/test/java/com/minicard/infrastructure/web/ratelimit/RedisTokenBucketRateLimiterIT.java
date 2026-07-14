@@ -43,7 +43,7 @@ class RedisTokenBucketRateLimiterIT {
 
     private static final Instant T0 = Instant.parse("2026-07-08T00:00:00Z");
     /** capacity=5, refill=10/s（每 100ms 一个令牌），数值小便于逐次断言。 */
-    private static final RateLimitProperties PROPERTIES = new RateLimitProperties(true, 5, 10, false);
+    private static final RateLimitProperties PROPERTIES = new RateLimitProperties(true, 5, 10);
 
     static final GenericContainer<?> REDIS =
             new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine")).withExposedPorts(6379);
@@ -158,7 +158,7 @@ class RedisTokenBucketRateLimiterIT {
     void concurrentRequestsCannotConsumeMoreThanBucketCapacity() throws Exception {
         int capacity = 20;
         int requestCount = 100;
-        RateLimitProperties properties = new RateLimitProperties(true, capacity, 10, false);
+        RateLimitProperties properties = new RateLimitProperties(true, capacity, 10);
         RedisTokenBucketRateLimiter limiter = limiterAt(T0, properties);
         ExecutorService executor = Executors.newFixedThreadPool(16);
         CountDownLatch start = new CountDownLatch(1);

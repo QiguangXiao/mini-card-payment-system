@@ -1006,8 +1006,8 @@ SELECT ... FROM credit_accounts WHERE id = ? FOR UPDATE
   Redis Lua 令牌桶按调用方 IP 限 `POST /api/authorizations`，超限返回 `429 + Retry-After`。
   入口链路：请求先进 `HttpRequestLoggingFilter`（所有请求都留下 request log，包括被 429 拒绝的），
   再到 `AuthorizationRateLimitInterceptor`（preHandle 在 body 反序列化之前短路），
-  放行后才进入 `AuthorizationController`。默认不信任 `X-Forwarded-For`
-  （`api.rate-limit.trust-forwarded-for`，可伪造 header 不能当限流 key），Redis 不可用时 fail-open。
+  放行后才进入 `AuthorizationController`。应用只读容器解析后的 `remoteAddr`，
+  不直接信任可伪造的 `X-Forwarded-For`；Redis 不可用时 fail-open。
 - **cardId 维度（业务风控）**：risk 模块的 velocity 滑动窗口，超限走风控 decline 而不是 429。
 
 client id 维度需要认证层（限流 key 应来自 token 而不是 body），merchant/account 维度是下一步。

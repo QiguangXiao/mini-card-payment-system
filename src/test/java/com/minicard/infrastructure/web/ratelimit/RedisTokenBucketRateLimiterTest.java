@@ -35,7 +35,7 @@ class RedisTokenBucketRateLimiterTest {
         limiter = new RedisTokenBucketRateLimiter(
                 redisTemplate,
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                new RateLimitProperties(true, 20, 10, false),
+                new RateLimitProperties(true, 20, 10),
                 meterRegistry
         );
     }
@@ -85,10 +85,10 @@ class RedisTokenBucketRateLimiterTest {
     void rejectsNonPositiveConfiguration() {
         // record compact constructor 在绑定期 fail fast，坏配置应用启动即失败。
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> new RateLimitProperties(true, 0, 10, false))
+                        () -> new RateLimitProperties(true, 0, 10))
                 .isInstanceOf(IllegalArgumentException.class);
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> new RateLimitProperties(true, 20, 0, false))
+                        () -> new RateLimitProperties(true, 20, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

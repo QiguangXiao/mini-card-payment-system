@@ -283,7 +283,6 @@ POST /api/authorizations
 | refill | `10/s` | 单调用方长期持续 10 req/s |
 | Redis timeout | `1s` | Redis 调用等待上限 |
 | Redis 故障 | fail-open | 放行并计数，不让保护组件变成全站开关 |
-| trust XFF | `false` | 本地直连安全；LB 后若不调整会把所有用户看成 LB IP |
 
 这是主动限流，目标是保护应用和 DB，不是业务拒绝。超限返回 HTTP 429，尚未解析 body、
 开启授权事务或取得账户锁。
@@ -292,8 +291,8 @@ POST /api/authorizations
 
 - `20 burst + 10/s/IP` 适合学习和小流量演示，不能当生产统一阈值。
 - 生产更合理的 key 是认证后的 client/merchant identity；IP 可能 NAT 聚合，也可能被攻击者分散。
-- 在可信 LB 后必须正确处理 client IP。若 `trust-forwarded-for=false` 且应用只看到 LB IP，
-  所有客户会共享一个 10 req/s 的“全局桶”，这是部署错误，不是有意容量设计。
+- 在可信 LB 后必须由网关或 Tomcat RemoteIpValve 正确解析 client IP；否则应用只看到
+  LB IP，所有客户会共享一个 10 req/s 的“全局桶”。
 - fail-open 保可用性合理，但 Redis brownout 时系统会失去主动入口保护，必须依靠告警、网关和物理池边界。
 
 ### 3.2 业务风控 velocity：Redis sliding window

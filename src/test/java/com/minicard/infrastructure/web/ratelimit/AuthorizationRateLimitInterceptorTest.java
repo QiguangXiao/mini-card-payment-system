@@ -23,15 +23,7 @@ class AuthorizationRateLimitInterceptorTest {
     void setUp() {
         rateLimiter = mock(RedisTokenBucketRateLimiter.class);
         meterRegistry = new SimpleMeterRegistry();
-        interceptor = interceptor(false);
-    }
-
-    private AuthorizationRateLimitInterceptor interceptor(boolean trustForwardedFor) {
-        return new AuthorizationRateLimitInterceptor(
-                rateLimiter,
-                new RateLimitProperties(true, 20, 10, trustForwardedFor),
-                meterRegistry
-        );
+        interceptor = new AuthorizationRateLimitInterceptor(rateLimiter, meterRegistry);
     }
 
     @Test
@@ -73,8 +65,8 @@ class AuthorizationRateLimitInterceptorTest {
     }
 
     @Test
-    void ignoresForwardedForByDefault() {
-        // 安全默认值：XFF 可伪造，未显式信任反向代理时必须忽略——
+    void alwaysUsesRemoteAddress() {
+        // XFF 可伪造，应用只使用容器解析后的 remoteAddr——
         // 否则攻击者每个请求换一个首段就等于每个请求一个新桶，per-IP 限流被绕过。
         when(rateLimiter.tryConsume("10.0.0.1")).thenReturn(RateLimitDecision.allow());
         MockHttpServletRequest request = post();
@@ -84,19 +76,6 @@ class AuthorizationRateLimitInterceptorTest {
         interceptor.preHandle(request, new MockHttpServletResponse(), new Object());
 
         verify(rateLimiter).tryConsume("10.0.0.1");
-    }
-
-    @Test
-    void usesFirstForwardedForEntryWhenProxyIsTrusted() {
-        when(rateLimiter.tryConsume("203.0.113.7")).thenReturn(RateLimitDecision.allow());
-        MockHttpServletRequest request = post();
-        // XFF 是 "client, proxy1, proxy2" 链，第一个才是原始客户端。
-        request.addHeader("X-Forwarded-For", "203.0.113.7, 10.0.0.1");
-        request.setRemoteAddr("10.0.0.1");
-
-        interceptor(true).preHandle(request, new MockHttpServletResponse(), new Object());
-
-        verify(rateLimiter).tryConsume("203.0.113.7");
     }
 
     private MockHttpServletRequest post() {

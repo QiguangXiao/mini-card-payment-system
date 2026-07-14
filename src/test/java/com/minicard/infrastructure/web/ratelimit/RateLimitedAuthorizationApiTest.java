@@ -50,7 +50,6 @@ class RateLimitedAuthorizationApiTest {
                 .standaloneSetup(new AuthorizationController(authorizationService))
                 .addInterceptors(new AuthorizationRateLimitInterceptor(
                         rateLimiter,
-                        new RateLimitProperties(true, 20, 10, false),
                         new SimpleMeterRegistry()))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

@@ -162,9 +162,9 @@ GET /api/authorizations/{id}
 `POST /api/authorizations` is additionally protected by an API-level rate
 limiter: a Redis Lua token bucket keyed by client IP, registered as a Spring
 MVC `HandlerInterceptor` on the authorization hot path only. The key defaults
-to the remote address; the first `X-Forwarded-For` hop is used only when
-`api.rate-limit.trust-forwarded-for` is explicitly enabled behind a trusted
-reverse proxy, because that header is client-forgeable. Exceeding the
+to the container-resolved remote address. Behind a reverse proxy, configure the
+gateway or Tomcat RemoteIpValve to resolve trusted proxies instead of reading
+the client-forgeable `X-Forwarded-For` header in application code. Exceeding the
 configured burst capacity or sustained rate returns `429 Too Many Requests`
 with a `Retry-After` header. This system-protection limiter is a different
 layer from the per-card risk velocity sliding window, which declines with a
