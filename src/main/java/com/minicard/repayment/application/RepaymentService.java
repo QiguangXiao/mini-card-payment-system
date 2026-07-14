@@ -15,7 +15,7 @@ import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
-import com.minicard.statement.application.StatementReadService;
+import com.minicard.statement.application.read.StatementReadService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

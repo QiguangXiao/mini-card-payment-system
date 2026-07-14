@@ -1,4 +1,4 @@
-package com.minicard.statement.application;
+package com.minicard.statement.application.read;
 
 import java.time.Duration;
 import java.util.List;
@@ -13,6 +13,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.minicard.repayment.application.ReceiveRepaymentCommand;
 import com.minicard.repayment.application.RepaymentService;
 import com.minicard.shared.domain.Money;
+import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.statement.domain.Statement;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;

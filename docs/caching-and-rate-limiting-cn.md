@@ -13,8 +13,8 @@
 
 相关代码：
 
-- `statement/application/StatementReadService.java`（statement GET 两级缓存核心）
-- `statement/application/StatementReadCacheProperties.java`（缓存配置）
+- `statement/application/read/StatementReadService.java`（statement GET 两级缓存核心）
+- `statement/application/read/StatementReadCacheProperties.java`（缓存配置）
 - `statement/infrastructure/cache/RedisStatementReadCacheBroadcaster.java` / `StatementReadCacheEvictListener.java`（跨 pod L1 失效广播）
 - `risk/infrastructure/redis/RedisRiskVelocityCounter.java`（Redis 滑动窗口限流）
 - `risk/infrastructure/jdbc/JdbcRiskVelocityCounter.java`（SQL `COUNT(*)` 精确对照实现）

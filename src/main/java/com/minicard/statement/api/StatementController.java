@@ -3,7 +3,7 @@ package com.minicard.statement.api;
 import java.util.UUID;
 
 import com.minicard.statement.api.dto.StatementResponse;
-import com.minicard.statement.application.StatementReadService;
+import com.minicard.statement.application.read.StatementReadService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;

@@ -24,7 +24,7 @@ import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
 import com.minicard.statement.domain.StatementStatus;
-import com.minicard.statement.application.StatementReadService;
+import com.minicard.statement.application.read.StatementReadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

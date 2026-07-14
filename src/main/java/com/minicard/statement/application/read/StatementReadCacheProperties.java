@@ -1,4 +1,4 @@
-package com.minicard.statement.application;
+package com.minicard.statement.application.read;
 
 import java.time.Duration;
 

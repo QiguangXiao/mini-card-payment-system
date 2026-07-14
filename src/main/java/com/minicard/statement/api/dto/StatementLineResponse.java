@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
-import com.minicard.statement.application.StatementLineReadModel;
+import com.minicard.statement.application.read.StatementLineReadModel;
 import com.minicard.statement.domain.StatementLine;
 
 /**

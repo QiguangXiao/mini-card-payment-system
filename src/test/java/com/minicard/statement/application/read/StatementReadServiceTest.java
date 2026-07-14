@@ -1,4 +1,4 @@
-package com.minicard.statement.application;
+package com.minicard.statement.application.read;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;

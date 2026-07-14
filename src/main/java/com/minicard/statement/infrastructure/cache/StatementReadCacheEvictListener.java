@@ -3,7 +3,7 @@ package com.minicard.statement.infrastructure.cache;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
-import com.minicard.statement.application.StatementReadService;
+import com.minicard.statement.application.read.StatementReadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;

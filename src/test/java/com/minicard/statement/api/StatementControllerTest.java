@@ -10,8 +10,8 @@ import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
-import com.minicard.statement.application.StatementReadModel;
-import com.minicard.statement.application.StatementReadService;
+import com.minicard.statement.application.read.StatementReadModel;
+import com.minicard.statement.application.read.StatementReadService;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;
 import org.junit.jupiter.api.Test;

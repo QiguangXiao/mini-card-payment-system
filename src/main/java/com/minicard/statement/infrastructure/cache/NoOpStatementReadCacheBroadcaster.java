@@ -2,7 +2,7 @@ package com.minicard.statement.infrastructure.cache;
 
 import java.util.UUID;
 
-import com.minicard.statement.application.StatementReadCacheBroadcaster;
+import com.minicard.statement.application.read.StatementReadCacheBroadcaster;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
