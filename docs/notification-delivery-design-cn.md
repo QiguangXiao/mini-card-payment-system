@@ -18,7 +18,7 @@
 
 ## 1. 目标与范围
 
-**之前**：authorization / card_transaction / repayment 三类 Kafka 事件经 listener 进入
+**之前**：authorization / card_transaction 两类 Kafka 事件经 listener 进入
 `RequestNotificationService`，只写一行 `notifications`（状态恒为 PENDING），**没有任何东西真的把它发出去**。
 `Notification` 聚合上甚至有 `markSent` / `recordDeliveryFailure` 一整套生命周期方法，但**零调用者**——是
 “声称有、其实不跑”的死代码。
@@ -170,7 +170,7 @@ NotificationDelivery：
 ### 5.3 完整调用链（端到端）
 
 ```
-业务事务(authorization/posting/repayment) ─Outbox→Kafka─▶ XxxNotificationListener
+业务事务(authorization/posting) ─Outbox→Kafka─▶ Authorization/CardTransactionNotificationListener
   → RequestNotificationService.requestNotification(@Transactional):
        inbox.claim(notification-v1, eventId)             # 消费幂等第一道
        notifications.insertIfAbsent(intent)              # source_event_id 唯一键第二道

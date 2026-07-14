@@ -210,7 +210,7 @@ credit_account_id + period_start + period_end
 - `id`：event id，由 Outbox adapter 生成 UUID，下游用它做幂等去重。
 - `aggregate_type` / `aggregate_id`：事件属于哪个业务对象。
 - `event_type` / `event_version`：事件类型和版本。
-- `partition_key`：Kafka 分区 key，按事件所属 aggregate 选择；authorization/card transaction 事件用自身 id，statement/repayment 事件用 credit account id。
+- `partition_key`：Kafka 分区 key，按事件所属 aggregate 选择；authorization 与 card transaction 事件使用各自 aggregate id。
 - `payload`：JSON 字符串。
 - `status`：`PENDING`、`PROCESSING`、`PUBLISHED`、`DEAD`。
 - `next_attempt_at`：下一次可领取时间；`PROCESSING` 时也作为 publisher lease deadline。
@@ -397,9 +397,6 @@ curl -X POST http://localhost:8080/api/authorizations \
 
    - Redis short-window velocity：实时近似，适合防 card-testing 突刺，主库零读压。
    - External risk：本地规则通过后调用，由 timeout、bulkhead 和 circuit breaker 保护。
-
-   项目不再维护 historical risk projection：它需要额外 Kafka consumer、Inbox、DLT、投影表和每笔 DB read，
-   但对当前 interview 学习主线的增量低，而且累计拒绝率容易引入过期信号与自我强化反馈。
 
    这里故意让两类风控依赖的失败策略不同：
 

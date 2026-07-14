@@ -208,7 +208,7 @@ Outbox：outbox-scheduler-1 claim(FOR UPDATE SKIP LOCKED) → 提交 outbox-work
 
 DelayJob：delay-job-scheduler-N claim → delay-job-worker-N dispatch(jobType) → 业务 service → lock job row → markDone/retry/DEAD
 
-Kafka listener：consumer thread poll → IntegrationEventReader.read → @Transactional( Inbox claim → 写 notification/risk 投影 ) → ack record
+Kafka listener：consumer thread poll → IntegrationEventReader.read → @Transactional( Inbox claim → 写 Notification 意图与 delivery rows ) → ack record
   为何要 Inbox：Kafka+MySQL 非同一本地事务、at-least-once，listener 可能 DB 写成功后 offset commit 前崩溃 → 重投 → Inbox(consumerName,eventId) 防重复副作用。
 ```
 

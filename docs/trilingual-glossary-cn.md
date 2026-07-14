@@ -75,9 +75,10 @@
 | 风控拒绝 | risk decline | リスク拒否 | リスクきょひ | 非技术异常，是业务拒绝。 |
 | 外部风控审核 | external risk review | 外部審査 | がいぶしんさ | 模拟真实卡系统可扩展外部审核。 |
 | 跨境交易 | cross-border transaction | 越境取引 | えっきょうとりひき | 风控特征之一。 |
-| 通知 | notification | 通知 | つうち | 授权、账单、扣款结果都可能触发。 |
+| 通知 | notification | 通知 | つうち | 当前由授权决策或交易入账事件触发。 |
 | 通知请求 | notification request | 通知依頼 | つうちいらい | notification bounded context 的输入。 |
-| 通知状态 | notification status | 通知状態 | つうちじょうたい | PENDING、SENT、FAILED 等。 |
+| 通知意图 | notification intent | 通知意図 | つうちいと | 不可变的“通知谁、关于什么、为什么通知”。 |
+| 投递状态 | delivery status | 配信状態 | はいしんじょうたい | PENDING、PROCESSING、SENT、DEAD。 |
 | 配信/发送 | delivery | 配信 | はいしん | 邮件、Push、站内信都可抽象为 delivery。 |
 | 配信失败 | delivery failure | 配信失敗 | はいしんしっぱい | 后续可进入 retry 或 dead letter。 |
 | 收件人 | recipient | 宛先 | あてさき | notification recipient key。 |

@@ -237,7 +237,7 @@ evict 只清了本 pod 的 L1，其他 pod 的 Caffeine 仍留旧值最长 `loca
 
 **为什么失效广播用 Pub/Sub 而不是 Kafka（重要选型题）：**
 
-| 维度 | Statement L1 失效广播 | CardTransaction / Repayment Notification |
+| 维度 | Statement L1 失效广播 | Authorization / CardTransaction Notification |
 | --- | --- | --- |
 | 扇出 | **广播**：每个 pod 都要收到清自己 L1 | **竞争消费**：N 个 pod 只 1 个发通知 |
 | 可靠性 | **best-effort 即可**（L1 有 TTL 兜底，丢一条最多 stale 一个 TTL） | **at-least-once + 幂等**（不能丢/不能重复） |

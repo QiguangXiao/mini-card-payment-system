@@ -121,7 +121,7 @@ JD 明确提到：
 | 能力 | 项目锚点 | 怎么讲 |
 | --- | --- | --- |
 | REST adapter | `AuthorizationController`, `RepaymentController`, `StatementController` | Controller 只处理 HTTP、validation、DTO/command mapping |
-| Use case orchestration | `AuthorizationService`, `PostingService`, `StatementService`, `RepaymentService` | Service 负责 `transaction boundary` 和多 aggregate 协作 |
+| Use case orchestration | `AuthorizationService`, `PostingService`, `StatementGenerationService`, `RepaymentService` | Service 负责 `transaction boundary` 和多 aggregate 协作 |
 | Domain modeling | `Authorization`, `CreditAccount`, `CardTransaction`, `Statement`, `Repayment`, `Money` | 状态转换和金额规则放在 domain object |
 | Infrastructure adapter | `MyBatisAuthorizationRepository`, `KafkaOutboxMessagePublisher`, `RedisRiskVelocityCounter` | 技术细节不泄露到 domain |
 | Testing | `AuthorizationServiceTest`, `PostingServiceTest`, `OutboxWorkerTest`, `DelayJobWorkerTest` | Mockito 隔离 collaborator，测试 use case 行为 |
@@ -1194,7 +1194,7 @@ NoSQL 会放在 read model/projection，不会替代核心 MySQL transaction。
 项目锚点：
 
 - `PostingService`
-- `StatementService`
+- `StatementGenerationService`
 - `RepaymentService`
 - mapper XML 中的 `FOR UPDATE`
 
@@ -2634,7 +2634,7 @@ Kafka 不可用时还能授权吗？
 1. 查 repayment row。
 2. 查 statement paid/status。
 3. 查 cache key 是否存在。
-4. 看 `StatementReadService.evictAfterCommit(statementId)` 是否在还款提交路径注册。
+4. 看 `StatementReadService.evictAfterCommit(statement)` 是否在还款提交路径注册。
 5. 看 after-commit evict 日志。
 6. 看 L1 TTL 和 Redis TTL。
 

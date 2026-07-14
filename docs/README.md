@@ -45,7 +45,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`mybatis-sql-and-migration-cn.md`](mybatis-sql-and-migration-cn.md) | ✅ | **已合并** `mybatis-sql-learning` + `database-migration-liquibase`；对齐当前 active changelog `0001–0005`，保留 SQL 例子与 interview 话术 |
+| [`mybatis-sql-and-migration-cn.md`](mybatis-sql-and-migration-cn.md) | ✅ | **已合并** `mybatis-sql-learning` + `database-migration-liquibase`；对齐当前 active changelog `0001–0006`，保留 SQL 例子与 interview 话术 |
 | `db-schema-sync-2026-06-21-cn.md` | ✅ 归档 | 一次性本地 schema drift 修复日志，**直接归档**不并入 |
 
 ### 5. 缓存与限流（Caching & Rate Limiting）

@@ -209,7 +209,7 @@ PENDING 行，需要额外的回收 job；mini 项目里单事务 + 并发上限
 ### Q6. "这个单体怎么拆成微服务？拆完 PostingService 的跨聚合事务怎么办？"
 
 要点：先按 bounded context 拆（authorization+credit account 是一个一致性核心，
-statement/repayment 一组，notification/risk 天然已是事件消费者）。
+statement/repayment 一组，notification 是事件消费者；risk 保留在授权同步决策链）。
 拆开 authorization 与 account 后，posting 的"授权转 POSTED + 余额迁移"从本地事务变成
 **saga**：预占确认 → 入账 → 失败补偿（重新释放 hold），幂等键贯穿每步。
 诚实立场："现在是 modular monolith，事件边界已按拆分设计，但我没有伪装它是微服务。"

@@ -45,7 +45,7 @@ interview时的推荐回答结构：
 
 | 优先级 | 重点 | 你必须能回答什么 | 项目锚点 |
 | --- | --- | --- | --- |
-| P0 | 信用卡主链路 | 授权、请款入账、出账、还款分别改变什么状态 | `AuthorizationService`, `PostingService`, `StatementService`, `RepaymentService` |
+| P0 | 信用卡主链路 | 授权、请款入账、出账、还款分别改变什么状态 | `AuthorizationService`, `PostingService`, `StatementGenerationService`, `RepaymentService` |
 | P0 | `idempotency` | 重试、并发重复请求、重复消息分别怎么防 | `idempotency_key`, `network_transaction_id`, `source_event_id`, `consumer_inbox` |
 | P0 | `transaction boundary` | 哪些状态必须同事务提交，哪些不能放进主事务 | Spring `@Transactional`, MySQL rows, Outbox rows |
 | P0 | `row lock` | 为什么用 `SELECT ... FOR UPDATE`，为什么不用 Java lock | mapper XML, `findByIdForUpdate(...)` |
@@ -419,7 +419,6 @@ interview回答：
 项目例子：
 
 - Authorization event 用 authorization id。
-- Statement / Repayment event 用 credit account id。
 - CardTransaction event 用 card transaction id。
 
 追问回答：

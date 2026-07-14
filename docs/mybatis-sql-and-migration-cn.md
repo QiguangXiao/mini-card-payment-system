@@ -3,7 +3,7 @@
 > 本文合并自两份旧文档：`mybatis-sql-learning-cn.md`（MyBatis + SQL 后端 interview 笔记）与
 > `database-migration-liquibase-cn.md`（Liquibase 迁移说明）。合并时去掉两者关于"唯一约束/
 > check 是业务 invariant 的数据库防线"等重叠表述，并**把迁移文件列表对齐到 baseline reset 后的代码现状**
-> （active changelog 只保留 current schema + seed）。一次性的 `db-schema-sync-2026-06-21-cn.md`（本地 schema drift 修复日志）
+> （active changelog 保留 baseline、seed 与 forward-only cleanup migrations）。一次性的 `db-schema-sync-2026-06-21-cn.md`（本地 schema drift 修复日志）
 > 已单独归档到 `docs/archive/`，不并入本文。
 
 > 关键词：MyBatis, 显式 SQL, resultMap, 动态 SQL, FOR UPDATE, SKIP LOCKED, 悲观/乐观锁,
@@ -332,10 +332,11 @@ src/main/resources/db/changelog/changes/
   0003-remove-ledger-projection.sql        删除可选 Ledger projection
   0004-remove-historical-risk-projection.sql 删除历史 Risk projection
   0005-remove-statement-notification-event.sql 清理已移除的 statement notification 数据
+  0006-remove-repayment-notification-event.sql 清理已移除的 repayment notification / Outbox / Inbox 数据
 ```
 
 - `build.gradle` 引入 `org.liquibase:liquibase-core`；`application.yml` 关闭 Spring SQL init（`spring.sql.init.mode: never`），指向 master changelog。
-- `0001` 是 baseline，但已执行 changeset 不再回写；当前 schema 真相是 `0001 + 0003 + 0004`，`0005` 则是删除事件支线后的数据清理。
+- `0001` 是 baseline，但已执行 changeset 不再回写；当前 schema 真相是按顺序应用 `0001–0006`：`0003/0004` 删除投影表，`0005/0006` 清理已删除事件支线的历史工作数据。
 - 这正是 forward-only migration：即使学习项目已收窄边界，也不修改本机可能已执行的 `0001/0002` 破坏 Liquibase checksum。
 - 有价值的历史迁移案例保留在 `docs/archive/database-migration-liquibase-cn.md`，用于学习 schema evolution；active changelog 则专注当前 source of truth。
 

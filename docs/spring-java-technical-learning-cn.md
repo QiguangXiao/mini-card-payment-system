@@ -652,6 +652,12 @@ public StatementReadCacheProperties {
     localMaximumSize = localMaximumSize == null ? 1000L : localMaximumSize;
     remoteTtl = remoteTtl == null ? Duration.ofMinutes(5) : remoteTtl;
     remoteTtlJitter = remoteTtlJitter == null ? Duration.ofSeconds(30) : remoteTtlJitter;
+    tombstoneTtl = tombstoneTtl == null ? Duration.ofSeconds(10) : tombstoneTtl;
+    rebuildLockEnabled = rebuildLockEnabled == null ? Boolean.TRUE : rebuildLockEnabled;
+    rebuildLockTtl = rebuildLockTtl == null ? Duration.ofSeconds(2) : rebuildLockTtl;
+    rebuildLockWaitAttempts = rebuildLockWaitAttempts == null ? 5 : rebuildLockWaitAttempts;
+    rebuildLockWaitInterval = rebuildLockWaitInterval == null
+            ? Duration.ofMillis(20) : rebuildLockWaitInterval;
 }
 ```
 
@@ -1804,7 +1810,7 @@ from(Object source)
 
 ### 14.19 `getFirst()` 是 Java 21 API，但前提是非空保护
 
-位置：`StatementService.totalAmount`
+位置：`StatementGenerationService.totalAmount`
 
 ```java
 Currency currency = transactions.getFirst().amount().currency();
@@ -1830,7 +1836,7 @@ if (transactions.isEmpty()) {
 
 ### 14.20 `RoundingMode.CEILING` 是产品语义，不只是数学参数
 
-位置：`StatementService.minimumPayment`
+位置：`StatementGenerationService.minimumPayment`
 
 ```java
 setScale(2, RoundingMode.CEILING)
@@ -1896,6 +1902,7 @@ or a future refactor may inject the wrong cache
 - `CardTransaction`
 - `Repayment`
 - `Notification`
+- `NotificationDelivery`
 - `OutboxEvent`
 - `DelayJob`
 
@@ -1905,7 +1912,8 @@ or a future refactor may inject the wrong cache
 CreditAccount.reserve/release/postAuthorized/applyRepayment
 CardTransaction.markPosted/assignToStatement
 Repayment.markReceived
-Notification.markSent/recordDeliveryFailure
+Notification.requestFromEvent（创建后保持 immutable）
+NotificationDelivery.markProcessing/markSent/markFailed
 OutboxEvent.markProcessing/markPublished/markFailed
 DelayJob.markProcessing/markDone/markFailed
 ```

@@ -236,7 +236,7 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
 
 | Consumer | 建模 | 消费 | 副作用 / 幂等 |
 | --- | --- | --- | --- |
-| **Notification** | **独立 aggregate**（`PENDING→SENT/FAILED` 生命周期），Kafka 仅入站 adapter | authorization / card_transaction / repayment | 创建 `notifications` 行；`source_event_id` 唯一防重复创建 |
+| **Notification** | **不可变通知意图 + per-channel delivery 状态机**，Kafka 仅入站 adapter | authorization / card_transaction | 创建 `notifications` 与 `notification_deliveries`；Inbox + `source_event_id` 唯一键双层去重 |
 
 ```sql
 outbox_events(
