@@ -17,7 +17,6 @@ import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
-import com.minicard.statement.domain.event.StatementDomainEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,8 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
  *    3.2 计算 totalAmount + minimumPayment（CEILING，按币种最小单位）
  *    3.3 INSERT statements/statement_lines（自然唯一键兜底幂等）
  *    3.4 交易标记 BILLED（防下一轮重复归账）
- *    3.5 schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务）
- *    3.6 append Outbox event statement.closed，随后 COMMIT
+ *    3.5 schedule AUTO_REPAYMENT DelayJob（due date 扣款计划，同事务），随后 COMMIT
  * </pre>
  */
 @Service
@@ -56,7 +54,6 @@ public class StatementGenerationService {
     private final StatementBillingRepository billingRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final StatementDueJobScheduler dueJobScheduler;
-    private final StatementDomainEventPublisher eventPublisher;
     private final StatementProperties properties;
     private final Clock clock;
 
@@ -102,10 +99,10 @@ public class StatementGenerationService {
     }
 
     /**
-     * 创建新 statement、冻结明细快照、标记交易已出账，并安排自动扣款和通知事件。
+     * 创建新 statement、冻结明细快照、标记交易已出账，并安排自动扣款。
      *
      * <p>事务归属：只由 {@link #generate(GenerateStatementCommand)} 调用，加入同一个
-     * {@code @Transactional} 边界；statement、line、BILLED 标记、DelayJob 和 Outbox
+     * {@code @Transactional} 边界；statement、line、BILLED 标记和 DelayJob
      * 必须一起 commit/rollback。</p>
      */
     private Statement createStatement(
@@ -168,24 +165,7 @@ public class StatementGenerationService {
         // 它和 statement/items/transaction assignment 同事务提交，防止账单生成后漏掉 due-date 扣款。
         // 如果这一步不和 statement 同事务提交，就可能出现账单已生成但没有任何到期扣款计划。
         dueJobScheduler.scheduleAutoRepayment(statement);
-        // 创建阶段 7：追加 statement.closed Outbox event。Kafka publish 仍由后台 Outbox worker 完成。
-        // statement.closed 的 Outbox row 和账单/明细/BILLED 标记/扣款计划在同一事务内提交，
-        // 避免“账单已生成但通知消息丢失”或“消息已发但账单回滚”的不一致。Kafka 发布由后台 worker 处理，
-        // 所以账单生成批处理不等待 broker。只有这条新插入成功的路径才发事件；幂等命中已有账单的分支不会到这里。
-        publishDomainEvents(statement);
         return statement;
-    }
-
-    /**
-     * 把 statement.closed 领域事件追加到 Outbox。
-     *
-     * <p>事务归属：只由 {@link #createStatement(GenerateStatementCommand, CreditAccount, Instant)}
-     * 调用，因此属于 {@link #generate(GenerateStatementCommand)} 的写事务；幂等命中已有账单时不会调用。</p>
-     */
-    private void publishDomainEvents(Statement statement) {
-        for (StatementDomainEvent event : statement.pullDomainEvents()) {
-            eventPublisher.append(event);
-        }
     }
 
     /**

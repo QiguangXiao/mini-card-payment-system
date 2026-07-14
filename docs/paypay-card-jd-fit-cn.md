@@ -297,7 +297,6 @@ Experience designing high traffic systems.
 | `POST /api/authorizations` | `AuthorizationController` | 授权占额度 |
 | `GET /api/authorizations/{id}` | `AuthorizationController` | 查询授权状态 |
 | `POST /api/presentments` | `PresentmentController` | 商户请款入账 |
-| `POST /api/statements/generate` | `StatementController` | 手动/运营 backfill 出账 |
 | `GET /api/statements/{id}` | `StatementController` | 查询账单 read model |
 | `POST /api/repayments` | `RepaymentController` | 手动还款 |
 | `GET /api/repayments/{id}` | `RepaymentController` | 查询还款状态 |
@@ -313,7 +312,6 @@ Controller 的设计口径：
 
 - `AuthorizationOutboxAdapter`
 - `CardTransactionOutboxAdapter`
-- `StatementOutboxAdapter`
 - `RepaymentOutboxAdapter`
 - `KafkaOutboxMessagePublisher`
 - `IntegrationEventReader`
@@ -1009,7 +1007,6 @@ NoSQL 会放在 read model/projection，不会替代核心 MySQL transaction。
 
 - `AuthorizationNotificationListener`
 - `CardTransactionNotificationListener`
-- `StatementNotificationListener`
 - `RequestNotificationService`
 - `ConsumerInboxRepository`
 

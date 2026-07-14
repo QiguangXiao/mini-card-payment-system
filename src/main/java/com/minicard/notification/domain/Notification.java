@@ -28,7 +28,7 @@ public final class Notification {
     private final UUID id;
     /** 来源 integration event id；repository 唯一键用它抵御 Kafka duplicate delivery。 */
     private final UUID sourceEventId;
-    /** 通知围绕的业务对象类型，例如 AUTHORIZATION、CARD_TRANSACTION、STATEMENT。 */
+    /** 通知围绕的业务对象类型，例如 AUTHORIZATION、CARD_TRANSACTION、REPAYMENT。 */
     private final NotificationSubjectType subjectType;
     /** 业务对象 id；用于模板渲染、audit 和排查通知来自哪条业务事实。 */
     private final String subjectId;

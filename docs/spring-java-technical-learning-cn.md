@@ -224,7 +224,6 @@ interview 可以这样说：
 - `CreateAuthorizationRequest`
 - `CreatePresentmentRequest`
 - `ReceiveRepaymentRequest`
-- `GenerateStatementRequest`
 
 常见注解含义：
 
@@ -1523,7 +1522,6 @@ WHERE id IN
 位置：
 
 - `AuthorizationOutboxAdapter`
-- `StatementOutboxAdapter`
 - `RepaymentOutboxAdapter`
 - `CardTransactionOutboxAdapter`
 

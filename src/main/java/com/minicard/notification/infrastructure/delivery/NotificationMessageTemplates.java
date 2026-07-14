@@ -22,7 +22,6 @@ final class NotificationMessageTemplates {
             case AUTHORIZATION_APPROVED -> "Authorization approved";
             case AUTHORIZATION_DECLINED -> "Authorization declined";
             case CARD_TRANSACTION_POSTED -> "Transaction posted";
-            case STATEMENT_CLOSED -> "Statement ready";
             case REPAYMENT_RECEIVED -> "Repayment received";
         };
     }
@@ -35,8 +34,6 @@ final class NotificationMessageTemplates {
                     "Your card authorization " + subjectId + " was declined.";
             case CARD_TRANSACTION_POSTED ->
                     "Your card transaction " + subjectId + " has been posted to your account.";
-            case STATEMENT_CLOSED ->
-                    "Your statement " + subjectId + " is ready. Please review your amount due and due date.";
             case REPAYMENT_RECEIVED ->
                     "We received your repayment " + subjectId + ". Thank you.";
         };

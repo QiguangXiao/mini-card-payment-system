@@ -10,8 +10,6 @@ import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
 import com.minicard.infrastructure.web.error.GlobalExceptionHandler;
-import com.minicard.statement.application.StatementGenerationException;
-import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.statement.application.StatementReadModel;
 import com.minicard.statement.application.StatementReadService;
 import com.minicard.statement.domain.Statement;
@@ -20,11 +18,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -39,52 +35,13 @@ class StatementControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private StatementGenerationService statementGenerationService;
-
-    @MockitoBean
     private StatementReadService statementReadService;
 
     @Test
-    void generatesStatement() throws Exception {
-        Statement statement = statement();
-        when(statementGenerationService.generate(any())).thenReturn(statement);
-
-        mockMvc.perform(post("/api/statements/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "creditAccountId": "11111111-1111-1111-1111-111111111111",
-                                  "periodStart": "2026-06-01",
-                                  "periodEnd": "2026-06-30",
-                                  "dueDate": "2026-07-25"
-                                }
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.creditAccountId")
-                        .value("11111111-1111-1111-1111-111111111111"))
-                .andExpect(jsonPath("$.status").value("CLOSED"))
-                .andExpect(jsonPath("$.totalAmount").value(1500.00))
-                .andExpect(jsonPath("$.minimumPaymentAmount").value(1000.00))
-                .andExpect(jsonPath("$.items[0].networkTransactionId").value("ntx-001"));
-    }
-
-    @Test
-    void returnsConflictWhenNoTransactionsCanBeBilled() throws Exception {
-        when(statementGenerationService.generate(any()))
-                .thenThrow(StatementGenerationException.rejected("no unbilled posted transactions"));
-
-        mockMvc.perform(post("/api/statements/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "creditAccountId": "11111111-1111-1111-1111-111111111111",
-                                  "periodStart": "2026-06-01",
-                                  "periodEnd": "2026-06-30",
-                                  "dueDate": "2026-07-25"
-                                }
-                                """))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("STATEMENT_GENERATION_REJECTED"));
+    void doesNotExposeManualStatementGeneration() throws Exception {
+        // 出账只能由 billing-cycle jobs 触发；防止以后又无意把普通 HTTP backfill 入口加回来。
+        mockMvc.perform(post("/api/statements/generate"))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test

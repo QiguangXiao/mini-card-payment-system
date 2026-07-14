@@ -242,7 +242,6 @@ Local Kafka is available at `localhost:9092`. Current event topics are:
 ```text
 mini-card.authorization-events.v1
 mini-card.transaction-events.v1
-mini-card.statement-events.v1
 mini-card.repayment-events.v1
 ```
 

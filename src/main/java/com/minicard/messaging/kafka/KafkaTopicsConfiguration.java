@@ -47,16 +47,6 @@ public class KafkaTopicsConfiguration {
     }
 
     @Bean
-    public NewTopic statementEventsTopic(KafkaTopicsProperties properties) {
-        // Statement events 单独 topic，未来账单通知、PDF 生成、还款提醒可以独立订阅。
-        // event key 使用 creditAccountId，保证同一账户账单顺序。
-        return TopicBuilder.name(properties.statementEvents()) // statement.* 事件 topic。
-                .partitions(3)  // key 相同的 record 会稳定落到同一 partition。
-                .replicas(1)    // 单 broker 环境只能配置 1。
-                .build();       // topic 已存在时创建操作是幂等的。
-    }
-
-    @Bean
     public NewTopic repaymentEventsTopic(KafkaTopicsProperties properties) {
         // Repayment 是独立业务事实，不混入 statement topic。
         // event key 使用 creditAccountId，方便同一账户还款通知、对账投影按顺序处理。

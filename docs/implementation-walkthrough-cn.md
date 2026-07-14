@@ -226,9 +226,9 @@ credit_account_id + period_start + period_end
 
 - `id`：notification id，由 `Notification.requestFromEvent(...)` 内部 `UUID.randomUUID()` 生成。
 - `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等（`consumer_inbox` 之外的第二道保护）。
-- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`STATEMENT`、`REPAYMENT`。
+- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`REPAYMENT`。
 - `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
-- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`STATEMENT_CLOSED`、`REPAYMENT_RECEIVED`。
+- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`REPAYMENT_RECEIVED`。
 
 ### `notification_deliveries`
 
@@ -522,13 +522,12 @@ curl -X POST http://localhost:8080/api/authorizations \
 - Notification 侧按上游领域拆 listener：
   - `AuthorizationNotificationListener` 处理 `authorization.approved` 和 `authorization.declined`。
   - `CardTransactionNotificationListener` 处理 `card_transaction.posted`。
-  - `StatementNotificationListener` 处理 `statement.closed`。
   - `RepaymentNotificationListener` 处理 `repayment.received`。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
 为什么按上游领域拆 listener：
 
-- `authorization`、`CardTransaction`、`Statement`、`Repayment` 是不同上游领域，Notification 只是独立消费它们的 integration events。
+- `authorization`、`CardTransaction`、`Repayment` 是不同上游领域，Notification 只是独立消费它们的 integration events。
 - 按上游领域拆 inbound adapter，更接近未来 notification 微服务的真实形态。
 - 每个 listener 显式检查 `eventType`，新增事件时不会靠一个大而模糊的 boolean/status 字段让 consumer 猜。
 
@@ -773,18 +772,8 @@ dueDate     = 7 月 27 日
 - `JapaneseBusinessDayCalendar` 会把周末、日本法定节假日、振替休日和国民の休日视为非营业日。
 - 如果 27 日不是日本营业日，就顺延到之后第一个营业日。
 
-手动 backfill / 学习入口仍然保留：
-
-```bash
-curl -X POST http://localhost:8080/api/statements/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "creditAccountId": "11111111-1111-1111-1111-111111111111",
-    "periodStart": "2026-06-01",
-    "periodEnd": "2026-06-30",
-    "dueDate": "2026-07-27"
-  }'
-```
+当前不提供公开的手动 generate API。真实出账只由 billing-cycle reconciliation 规划 durable jobs；
+如果未来需要运营 backfill，应使用受保护的 runbook/admin 入口，不让普通 HTTP 请求绕过账期与分片控制。
 
 入口：
 
@@ -792,14 +781,12 @@ Batch path（claimable job，详见 `claimable-jobs-cn.md`）：
 - `BillingCycleScheduler`（每日 JST cron）-> `StatementCycleService.createDueJobs`（reconciliation 补建缺失分片 `statement_jobs`）
 - `StatementJobDispatcher`（claim 分片）-> `StatementJobHandler`（取本片账户）
 
-Backfill/API path + 单账户出账：
-- `StatementController.generate(...)`
+Worker 中的单账户出账：
 - `GenerateStatementCommand`
 - `StatementGenerationService.generate(command)`
 - `Statement.close(...)`
 - `StatementBillingRepository.markCardTransactionsBilled(statementId, lineSources, now)`
 - `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
-- `StatementOutboxAdapter.append(event)`
 
 ### 5.1 触发与分片（claimable job）+ Command 阶段
 
@@ -828,18 +815,13 @@ Backfill/API path + 单账户出账：
 `claim_token` 回答“这个迟到 finalize 是否仍属于本次 claim”。
 如果只用 timestamp 当 token，Java `Instant` 与 MySQL `TIMESTAMP(6)` 精度边界会让判断不够稳。
 
-`StatementController` 只负责 HTTP request/response mapping：
-
-- 从 body 读取 `creditAccountId`、`periodStart`、`periodEnd`、`dueDate`。
-- 创建 `GenerateStatementCommand`。
-- 调用 `StatementGenerationService.generate(command)`。
-
-`GenerateStatementCommand` 会校验：
+`StatementController` 只暴露 `GET /api/statements/{id}` 查询 read model。
+`GenerateStatementCommand` 由 `StatementJobHandler` 根据已规划的 cycle 构造，并校验：
 
 - `periodEnd` 不能早于 `periodStart`。
 - `dueDate` 必须晚于 `periodEnd`。
 
-HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 backfill 的辅助入口。
+这样普通 API 不能绕过 reconciliation、shard 和 job lifecycle 直接触发关账。
 
 ### 5.2 StatementGenerationService transaction boundary
 
@@ -959,27 +941,12 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
    - 这条 job 和 statement/lines/transaction billing mark 在同一个 MySQL transaction boundary 内提交，
      防止“账单生成了，但没有自动扣款计划”。
 
-9. `StatementClosedDomainEvent`
+9. 事务提交
 
-   `Statement.close(...)` 在 aggregate 内部记录 `StatementClosedDomainEvent`。
-   `StatementGenerationService` 保存账单和交易归属后，调用 `statement.pullDomainEvents()`，
-   再交给 `StatementOutboxAdapter` 写入 `outbox_events/PENDING`。
-
-10. Outbox 后续异步发布 `statement.closed`
-
-   - 主 statement transaction 不直接调用 Notification，也不等待短信/邮件/Push provider。
-   - Outbox worker 发布 Kafka 后，`StatementNotificationListener` 收到 `statement.closed`。
-   - Listener 把 `statement.closed` 映射成 `NotificationType.STATEMENT_CLOSED`（与事件同名，和其它三类通知 1:1 同构）。
-   - `RequestNotificationService` 先写 `consumer_inbox(notification-v1, eventId)` 做 Inbox claim。
-   - claim 成功后创建一条不可变 `notifications` 意图，并在同一事务内按渠道扇出
-     APP_PUSH/EMAIL 两条 `notification_deliveries/PENDING`，后台投递管线异步完成真正发送。
-   - duplicate delivery claim 失败后直接返回，避免重复提醒用户。
-
-   警示：
-
-   - 账单已经生成成功后，通知失败不能 rollback statement。
-   - 当前没有 Cardholder/User 表，所以 statement 通知暂时用 `creditAccountId` 做 `recipient_key`。
-   - 生产系统应在 Notification 侧查找用户和通知偏好，例如是否允许 push/email、是否静默时段。
+   Statement 当前不再发布 `statement.closed` Kafka 事件。Authorization、CardTransaction 和
+   Repayment 已经完整展示 Domain Event → Outbox → Kafka → Inbox → Notification；
+   在 Statement 里再复制一遍没有新的 correctness 语义。账单的主要异步边界收口为
+   `AUTO_REPAYMENT` DelayJob，账单查询缓存的跨 Pod 失效则用可丢的 Redis Pub/Sub。
 
 ### 5.3 本次事务提交后的数据变化
 
@@ -990,7 +957,6 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 - 被收录的 `card_transactions.statement_id` 指向该 statement。
 - 被收录的 `card_transactions.statement_assigned_at` 记录归账时间。
 - `delay_jobs` 新增 `AUTO_REPAYMENT/PENDING`，计划在 `dueDate` 自动扣款。
-- `outbox_events` 新增 `statement.closed/PENDING`。
 
 不会变化：
 
@@ -1006,12 +972,11 @@ HTTP 入口现在不是主业务入口，而是本地学习、测试和运营 ba
 ### 5.4 PayPay Card interview提示
 
 - Statement 是 posted transaction 的账单快照，不是实时查询结果。
-- 真实主路径是 billing batch，不是用户实时请求；HTTP generate 只是 backfill/学习入口。
+- 真实且唯一的出账主路径是 billing batch，普通 HTTP API 不能绕过 cycle/job 控制直接生成账单。
 - 账单周期用自然唯一键实现 idempotency：同一账户同一周期只能有一张账单。
 - 先锁 credit account，再锁待出账交易，是为了和 posting 保持统一锁顺序，避免死锁和漏账。
 - `statement_lines` 保存历史快照，方便解释 audit trail、客服查询和账单 PDF。
-- `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；`statement.closed` 使用 Outbox，因为它是 integration event。
-- `statement.closed` 通过 Outbox 异步发布，Notification 已消费它来创建 `STATEMENT_CLOSED` 通知；未来 PDF 生成、还款提醒也可以独立消费。
+- `AUTO_REPAYMENT` 使用 DelayJob，因为它是 future business action；Outbox/Kafka 可靠事实传播由其他领域主线展示。
 - 账单生成后 `paid_amount = 0` 且状态为 `CLOSED`；Repayment 会继续推进到 `PARTIALLY_PAID` 或 `PAID`。
 
 ## 6. 核心流程四：Repayment 还款入账
@@ -1361,7 +1326,6 @@ credit account row lock -> statement row lock
 - 业务 bounded context 的 listener，例如：
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
   - `notification/infrastructure/messaging/CardTransactionNotificationListener`
-  - `notification/infrastructure/messaging/StatementNotificationListener`
   - `notification/infrastructure/messaging/RepaymentNotificationListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
@@ -1765,38 +1729,15 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 - cardTransactionId：用户可见交易流水的 aggregate id。
 - authorizationId：这笔 posted transaction 消耗的是哪一笔授权。
 
-`statement.closed` 里还会有 statementId：
-
-- eventId：这条 integration event 的唯一 id。
-- statementId：账单 aggregate id。
-- creditAccountId：Kafka partition key，用来保证同一账户账单事件有序。
-
-### 为什么 statement.closed 映射成 STATEMENT_CLOSED？
-
-`statement.closed` 是系统内部业务事实，意思是 billing cycle 已关闭、账单金额固定。
-通知类型与事件类型保持 1:1 同名，和其它三类通知完全一致：
-
-```text
-authorization.approved   -> NotificationType.AUTHORIZATION_APPROVED
-card_transaction.posted  -> NotificationType.CARD_TRANSACTION_POSTED
-statement.closed         -> NotificationType.STATEMENT_CLOSED
-repayment.received       -> NotificationType.REPAYMENT_RECEIVED
-```
-
-这样四个 listener 的结构和命名完全同构，新增事件类型时不必再为“事件名 vs 通知名”单独做命名决策。
-面向用户的友好文案（例如“本期账单已生成，可查看并还款”）属于 delivery 阶段按 `NotificationType`
-选择渲染模板的事，不需要把内部 `NotificationType` 改名来表达。
-
 ### 为什么 notifications 不再只存 authorizationId？
 
-因为 Notification 现在同时消费四类事件：
+因为 Notification 现在同时消费三类事件：
 
 - `authorization.approved/declined`
 - `card_transaction.posted`
-- `statement.closed`
 - `repayment.received`
 
-Statement 和 Repayment 都没有 authorizationId，强行塞入旧列会让模型变形。
+交易和 Repayment 不能都用 authorizationId 表达，强行塞入旧列会让模型变形。
 所以现在用 `subject_type + subject_id` 表达“这条通知关联哪个业务对象”，
 再用 `recipient_key` 表达“目前怎样找到接收方”。
 

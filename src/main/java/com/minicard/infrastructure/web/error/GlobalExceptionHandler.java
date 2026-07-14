@@ -7,7 +7,6 @@ import com.minicard.authorization.application.IdempotencyConflictException;
 import com.minicard.infrastructure.web.ratelimit.RateLimitExceededException;
 import com.minicard.repayment.application.RepaymentConflictException;
 import com.minicard.repayment.application.RepaymentRejectedException;
-import com.minicard.statement.application.StatementGenerationException;
 import com.minicard.transaction.application.PresentmentConflictException;
 import com.minicard.transaction.application.PresentmentRejectedException;
 import jakarta.validation.ConstraintViolationException;
@@ -17,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -65,13 +65,6 @@ public class GlobalExceptionHandler {
             PresentmentRejectedException exception
     ) {
         return error(HttpStatus.CONFLICT, "PRESENTMENT_REJECTED", exception.getMessage());
-    }
-
-    @ExceptionHandler(StatementGenerationException.class)
-    public ResponseEntity<ErrorResponse> handleStatementGenerationRejected(
-            StatementGenerationException exception
-    ) {
-        return error(HttpStatus.CONFLICT, "STATEMENT_GENERATION_REJECTED", exception.getMessage());
     }
 
     @ExceptionHandler(RepaymentConflictException.class)
@@ -129,6 +122,17 @@ public class GlobalExceptionHandler {
                                 + "Idempotency-Key for state-changing requests",
                         Instant.now()
                 ));
+    }
+
+    /**
+     * URL 存在但 HTTP method 不受支持时返回 405。
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException exception
+    ) {
+        // 反向事实：如果落到 catch-all 500，客户端会把“入口不存在”误判为服务端故障。
+        return error(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", exception.getMessage());
     }
 
     @ExceptionHandler({

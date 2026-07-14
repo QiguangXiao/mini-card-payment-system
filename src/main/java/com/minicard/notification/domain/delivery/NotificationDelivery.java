@@ -58,7 +58,7 @@ public final class NotificationDelivery {
     private final NotificationChannel channel;
     /** 通知类型快照；即使原 Notification 未来扩展，也不影响这条 delivery 的渲染语义。 */
     private final NotificationType notificationType;
-    /** 业务主题 id，例如 authorizationId、cardTransactionId 或 statementId。 */
+    /** 业务主题 id，例如 authorizationId、cardTransactionId 或 repaymentId。 */
     private final String subjectId;
     /** 收件人解析 key；当前项目无 User 模型，所以暂用 cardId/creditAccountId 等业务线索。 */
     private final String recipientKey;

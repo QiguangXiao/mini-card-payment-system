@@ -758,18 +758,8 @@ dueDate     = 2026-08-27
 由于 2026-08-27 是日本营业日，本例 dueDate 不需要顺延。
 如果 27 日遇到周末、日本法定节假日、振替休日或国民の休日，当前代码会顺延到之后第一个营业日。
 
-HTTP API 仍保留为本地学习和运营 backfill 入口：
-
-```bash
-curl -X POST http://localhost:8080/api/statements/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "creditAccountId": "11111111-1111-1111-1111-111111111111",
-    "periodStart": "2026-07-01",
-    "periodEnd": "2026-07-31",
-    "dueDate": "2026-08-27"
-  }'
-```
+当前不暴露公开 statement generate API。出账只由 billing-cycle reconciliation 规划 durable jobs；
+需要运营 backfill 时应触发受保护的 runbook/admin 入口，不让普通 API 绕过账期和分片控制。
 
 时间：
 
@@ -785,11 +775,6 @@ BillingCycleScheduler.<daily cron>
 -> StatementCycleService.createDueJobs（回看 close cycles；缺失的 cycle 才按待出账账户数建 statement_jobs）
 -> StatementJobDispatcher claim 分片 -> StatementJobHandler 取本片账户
 -> StatementGenerationService.generate(...)（逐账户独立小事务）
-
-Backfill/API path:
-StatementController.generate(...)
--> GenerateStatementCommand
--> StatementGenerationService.generate(...)
 ```
 
 ### 7.2 执行过程
@@ -899,8 +884,6 @@ StatementController.generate(...)
    无 statement row -> CLOSED
    ```
 
-   同时生成 `StatementClosedDomainEvent`。
-
 5. `StatementLine.snapshot(...)` 创建账单 line。
 
    示例：
@@ -957,21 +940,11 @@ StatementController.generate(...)
    scheduled_at = 2026-08-27T00:00:00Z
    ```
 
-   这里用 DelayJob，因为自动扣款是 dueDate 未来业务动作；
-   `statement.closed` 才是要发布给下游的 integration event。
+   这里用 DelayJob，因为自动扣款是 dueDate 未来业务动作。
+   Statement 不再为账单通知重复实现一条 Outbox/Kafka 支线；该可靠消息模式已由
+   Authorization、CardTransaction 和 Repayment 主线展示。
 
-8. 同事务写 Outbox。
-
-   ```text
-   outbox_events.id = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee4
-   aggregate_type = Statement
-   aggregate_id = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
-   event_type = statement.closed
-   partition_key = 11111111-1111-1111-1111-111111111111
-   status = PENDING
-   ```
-
-9. 事务 commit。
+8. 事务 commit。
 
    释放锁：
 
@@ -1005,7 +978,6 @@ minimum_payment_amount = 1000.00
 - `CreditAccount.posted_balance` 不变，因为账单生成不是还款。
 - `CardTransaction` 不再是未出账候选。
 - `DelayJob` 后续到 `dueDate` 会触发 `AUTO_REPAYMENT`。
-- Notification 异步消费 `statement.closed` 创建 `STATEMENT_CLOSED` 通知。
 - 现在 `Repayment` 可以针对这张 statement 入账。
 
 ## 8. 请求四：客户提前主动部分还款 500 JPY
@@ -1397,7 +1369,6 @@ repayments
 | `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification |
 | `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 当前无消费者（notification/risk listener 刻意跳过 posted：它是发卡方内部 hold 生命周期，用户可见入账通知走 `card_transaction.posted`） |
 | `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification |
-| `Statement.close(...)` | `StatementClosedDomainEvent` | `statement.closed` | Notification |
 | `Repayment.markReceived(...)` | `RepaymentReceivedDomainEvent` | `repayment.received` | Notification |
 
 这些 Outbox row 和业务状态一起 commit。

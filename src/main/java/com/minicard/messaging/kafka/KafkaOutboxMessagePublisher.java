@@ -87,9 +87,6 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         if (eventType.startsWith("card_transaction.")) {
             return topics.transactionEvents();
         }
-        if (eventType.startsWith("statement.")) {
-            return topics.statementEvents();
-        }
         if (eventType.startsWith("repayment.")) {
             return topics.repaymentEvents();
         }

@@ -2,26 +2,20 @@ package com.minicard.statement.api;
 
 import java.util.UUID;
 
-import com.minicard.statement.api.dto.GenerateStatementRequest;
 import com.minicard.statement.api.dto.StatementResponse;
-import com.minicard.statement.application.GenerateStatementCommand;
-import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.statement.application.StatementReadService;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Statement API controller。
  *
- * <p>真实主路径是 BillingCycleScheduler 创建 statement_batch/jobs 后由 worker 处理。
- * 这个 HTTP 入口保留为学习/运营 backfill 用；账单生成的 idempotency、row lock、
- * transaction boundary、snapshot 和 due-date DelayJob 仍在 StatementGenerationService/domain 内。</p>
+ * <p>只暴露账单查询。真实出账入口是 BillingCycleScheduler 创建
+ * durable statement jobs 后由 worker 处理；不提供公开 generate API，避免请求绕过
+ * billing-cycle reconciliation 直接触发关账。</p>
  */
 @RestController
 @RequestMapping("/api/statements")
@@ -30,20 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class StatementController {
 
-    private final StatementGenerationService statementGenerationService;
     private final StatementReadService statementReadService;
-
-    @PostMapping("/generate")
-    // @Valid 校验手动入口的 body；真实 batch 路径不会经过 controller，所以 service/domain 仍要防御非法账期。
-    public StatementResponse generate(@Valid @RequestBody GenerateStatementRequest request) {
-        GenerateStatementCommand command = new GenerateStatementCommand(
-                request.creditAccountId(),
-                request.periodStart(),
-                request.periodEnd(),
-                request.dueDate()
-        );
-        return StatementResponse.from(statementGenerationService.generate(command));
-    }
 
     @GetMapping("/{id}")
     // @PathVariable 由 Spring MVC 把路径文本转换成 UUID；格式错误会在 HTTP boundary 变成 400。

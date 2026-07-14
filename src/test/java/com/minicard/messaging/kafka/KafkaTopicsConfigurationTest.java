@@ -32,7 +32,6 @@ class KafkaTopicsConfigurationTest {
             List<NewTopic> sourceTopics = List.of(
                     configuration.authorizationEventsTopic(properties),
                     configuration.transactionEventsTopic(properties),
-                    configuration.statementEventsTopic(properties),
                     configuration.repaymentEventsTopic(properties)
             );
             List<NewTopic> deadLetterTopics = List.of(

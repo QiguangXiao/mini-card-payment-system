@@ -12,13 +12,6 @@ public enum NotificationType {
     AUTHORIZATION_DECLINED,
     CARD_TRANSACTION_POSTED,
     /**
-     * 来自 statement.closed 事件，表达本期账单已生成、可查看应还金额与到期日。
-     */
-    // 命名与事件类型 statement.closed 保持同构（authorization.approved -> AUTHORIZATION_APPROVED）。
-    // 这条枚举值连同 StatementOutboxAdapter 生产者和 StatementNotificationListener 消费者一起落地，
-    // 不再是“没人发布的占位枚举值”。
-    STATEMENT_CLOSED,
-    /**
      * 来自 repayment.received 事件，表达用户还款已成功入账。
      */
     REPAYMENT_RECEIVED

@@ -20,7 +20,7 @@ public record NotificationDeliveryRow(
         String channel,
         /** NotificationType 字符串，作为渲染模板选择依据。 */
         String notificationType,
-        /** 业务主题 id，例如 authorizationId/cardTransactionId/statementId。 */
+        /** 业务主题 id，例如 authorizationId/cardTransactionId/repaymentId。 */
         String subjectId,
         /** 收件人解析 key，当前项目暂用 cardId/creditAccountId 等业务线索。 */
         String recipientKey,

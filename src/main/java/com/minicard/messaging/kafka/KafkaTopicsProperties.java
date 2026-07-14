@@ -17,8 +17,6 @@ public record KafkaTopicsProperties(
         String authorizationEvents,
         /** transaction/presentment integration events topic。 */
         String transactionEvents,
-        /** statement integration events topic。 */
-        String statementEvents,
         /** repayment integration events topic。 */
         String repaymentEvents,
         /** notification consumer 的 dead-letter topic。 */

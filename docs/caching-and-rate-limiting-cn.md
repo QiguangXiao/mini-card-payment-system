@@ -237,14 +237,14 @@ evict 只清了本 pod 的 L1，其他 pod 的 Caffeine 仍留旧值最长 `loca
 
 **为什么失效广播用 Pub/Sub 而不是 Kafka（重要选型题）：**
 
-| 维度 | L1 失效广播 | Statement Notification |
+| 维度 | Statement L1 失效广播 | CardTransaction / Repayment Notification |
 | --- | --- | --- |
 | 扇出 | **广播**：每个 pod 都要收到清自己 L1 | **竞争消费**：N 个 pod 只 1 个发通知 |
 | 可靠性 | **best-effort 即可**（L1 有 TTL 兜底，丢一条最多 stale 一个 TTL） | **at-least-once + 幂等**（不能丢/不能重复） |
 | 持久化/重放 | 不需要（pod 重启 L1 本来就空） | 需要 |
 | 天生匹配 | **Redis Pub/Sub** | **Kafka 消费者组** |
 
-> **同一个业务事实（还款/关账）≠ 同一个 transport**：L1 失效走 Redis Pub/Sub（天生广播、亚毫秒、fire-and-forget 配 TTL 兜底）；Notification 走 Outbox→Kafka→Inbox（事务保证 + at-least-once + 幂等 + 可重放）。用 Kafka 做广播会被迫给每个 pod 一个唯一 group（group 膨胀 + 重放历史失效消息 + 1~3s 延迟丢掉低延迟优势）；用 Pub/Sub 做 Notification 会丢消息（at-most-once）。
+> **“都是 publish/subscribe”≠ “要用同一 transport”**：Statement L1 失效走 Redis Pub/Sub（天生广播、亚毫秒、fire-and-forget 配 TTL 兜底）；`card_transaction.posted` / `repayment.received` 通知走 Outbox→Kafka→Inbox（事务保证 + at-least-once + 幂等 + 可重放）。用 Kafka 做广播会被迫给每个 pod 一个唯一 group（group 膨胀 + 重放历史失效消息 + 1~3s 延迟丢掉低延迟优势）；用 Pub/Sub 做业务通知会丢消息（at-most-once）。
 >
 > **为什么也不用 Redis Stream**：Stream 原生是 consumer group 竞争消费，方向和"fan-out 广播"相反；要广播得给每个 pod 独立 group，把 Kafka 那套 group 膨胀问题搬到 Redis，而它的持久化/重放成本只是为缩小一个 `local-ttl` 已兜住的窗口，不划算。
 

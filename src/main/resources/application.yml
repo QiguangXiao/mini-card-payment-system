@@ -191,7 +191,6 @@ messaging:
     # producer/consumer 可以按生命周期订阅，DLT 和 replay 范围也更小。
     authorization-events: mini-card.authorization-events.v1
     transaction-events: mini-card.transaction-events.v1
-    statement-events: mini-card.statement-events.v1
     repayment-events: mini-card.repayment-events.v1
     # DLT(dead-letter topic) 归属 Notification consumer 职责。
     notification-dead-letter: mini-card.notification.dlt.v1

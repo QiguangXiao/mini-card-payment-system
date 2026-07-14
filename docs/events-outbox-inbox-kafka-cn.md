@@ -132,13 +132,12 @@ OutboxWorker  ->  稍后发布 Kafka
 ```text
 mini-card.authorization-events.v1   authorization.approved/declined/expired/posted
 mini-card.transaction-events.v1     card_transaction.posted
-mini-card.statement-events.v1       statement.closed
 mini-card.repayment-events.v1       repayment.received
 ```
 
-**为什么按业务事实拆 topic**：`card_transaction.posted`（用户可见交易入账）该被 Notification 消费，而不是 `authorization.posted`（授权 hold 被消耗）；`statement.closed` 适合账单通知订阅；生产里 Notification 很可能是独立微服务，订阅它需要的 business facts，不依赖本工程 domain class。
+**为什么按业务事实拆 topic**：`card_transaction.posted`（用户可见交易入账）该被 Notification 消费，而不是 `authorization.posted`（授权 hold 被消耗）。生产里 Notification 很可能是独立微服务，订阅它需要的 business facts，不依赖本工程 domain class。Statement 当前不发 Kafka 事件；账单查询缓存的跨 Pod 失效是可丢的 performance hint，因此使用 Redis Pub/Sub 而不是 Kafka。
 
-**partition key = 聚合/账户范围**（Kafka 只保证 partition 内有序）：authorization→`authorizationId`，card_transaction→`cardTransactionId`，statement/repayment→`creditAccountId`。于是同一聚合/账户的事件进同一 partition 保持有序，不同聚合并行。
+**partition key = 聚合/账户范围**（Kafka 只保证 partition 内有序）：authorization→`authorizationId`，card_transaction→`cardTransactionId`，repayment→`creditAccountId`。于是同一聚合/账户的事件进同一 partition 保持有序，不同聚合并行。
 
 ### 5.4 Consumer group 与 concurrency
 
@@ -222,7 +221,7 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
 
 ## 7. Consumer side：契约校验 + 双层幂等
 
-- **Notification 共用一个 group + 一个 DLT**：四个 Notification listeners 共用 notification group，按各自 topic 消费。
+- **Notification 共用一个 group + 一个 DLT**：三个 Notification listeners 共用 notification group，按各自 topic 消费。
 - `IntegrationEventReader.read(...)`：反序列化 + 集中校验 self-describing body envelope（`eventId/payload` 必填、`eventType` 必填、`eventVersion >= 1`）；header 只用于 observability，不参与 correctness。无效 integration event 抛 `InvalidIntegrationEventException`（永久失败）。`requiredText/requiredUuid/requiredDecimal/requiredCurrency/requiredInstant` 统一读取 payload 的通用数据类型，具体 eventType 需要哪些字段仍由 listener 声明。
 - **双层幂等（消费侧最关键）**：
   1. **Inbox claim（第一道）**：`ConsumerInboxRepository.claim(consumerName, eventId)`，底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)` 判定"第一次消费"，`DuplicateKeyException → false`。
@@ -238,7 +237,7 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
 
 | Consumer | 建模 | 消费 | 副作用 / 幂等 |
 | --- | --- | --- | --- |
-| **Notification** | **独立 aggregate**（`PENDING→SENT/FAILED` 生命周期），Kafka 仅入站 adapter | authorization / card_transaction / statement / repayment | 创建 `notifications` 行；`source_event_id` 唯一防重复创建 |
+| **Notification** | **独立 aggregate**（`PENDING→SENT/FAILED` 生命周期），Kafka 仅入站 adapter | authorization / card_transaction / repayment | 创建 `notifications` 行；`source_event_id` 唯一防重复创建 |
 
 ```sql
 outbox_events(

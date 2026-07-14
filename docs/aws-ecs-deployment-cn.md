@@ -45,7 +45,6 @@ client
       -> Kafka topics
           - authorization-events
           - transaction-events
-          - statement-events
           - repayment-events
       -> simulated external risk service
 ```
@@ -794,7 +793,6 @@ MSK 暂时不可用
 ```text
 mini-card.authorization-events.v1
 mini-card.transaction-events.v1
-mini-card.statement-events.v1
 mini-card.repayment-events.v1
 ```
 

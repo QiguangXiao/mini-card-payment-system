@@ -126,7 +126,6 @@ class KafkaOutboxMessagePublisherTest {
         return new KafkaTopicsProperties(
                 "authorization-events",
                 "transaction-events",
-                "statement-events",
                 "repayment-events",
                 "notification-dlt"
         );
