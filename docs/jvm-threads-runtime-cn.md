@@ -185,7 +185,7 @@ mini-card JVM
 
 | Context | Listener | Group | concurrency |
 | --- | --- | --- | --- |
-| Notification | Authorization/CardTransaction/Repayment（3 个） | `mini-card-notification-v1` | 2/容器 |
+| Notification | Authorization/CardTransaction（2 个） | `mini-card-notification-v1` | 2/容器 |
 
 > concurrency 是**每个 listener container** 的 consumer thread 数，不是"整个 context 总共 N 个线程"。concurrency 提高的是不同 partition 的并行；**同一 partition 内仍由一个 consumer 顺序处理**。listener 只写本地 Notification/Inbox，不调外部 provider。
 

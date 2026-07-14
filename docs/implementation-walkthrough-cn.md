@@ -176,7 +176,7 @@ credit_account_id + period_start + period_end
 - `idempotency_key`：客户端传入的幂等键，有唯一索引。
 - `request_fingerprint`：由 `ReceiveRepaymentCommand.requestFingerprint()` 计算，防止同一个幂等键支付不同账单或金额。
 - `statement_id`：本次还款应用到哪张已生成 statement。
-- `credit_account_id`：还款成功后回填，用于查询账户还款历史和 Kafka partition key。
+- `credit_account_id`：还款成功后回填，用于查询账户还款历史。
 - `amount` / `currency`：还款金额。
 - `status`：`PENDING`、`RECEIVED`。
 - `received_at`：还款真正应用到账户和账单的时间。
@@ -226,9 +226,9 @@ credit_account_id + period_start + period_end
 
 - `id`：notification id，由 `Notification.requestFromEvent(...)` 内部 `UUID.randomUUID()` 生成。
 - `source_event_id`：来源 integration event id，有唯一索引，用于通知侧幂等（`consumer_inbox` 之外的第二道保护）。
-- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`、`REPAYMENT`。
-- `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 或 creditAccountId 作为通知路由线索。
-- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`、`REPAYMENT_RECEIVED`。
+- `subject_type` / `subject_id`：通知关联的业务对象，例如 `AUTHORIZATION`、`CARD_TRANSACTION`。
+- `recipient_key`：当前项目还没有用户/持卡人领域，所以暂时用 cardId 作为通知路由线索。
+- `notification_type`：通知类型，例如 `AUTHORIZATION_APPROVED`、`CARD_TRANSACTION_POSTED`。
 
 ### `notification_deliveries`
 
@@ -522,12 +522,11 @@ curl -X POST http://localhost:8080/api/authorizations \
 - Notification 侧按上游领域拆 listener：
   - `AuthorizationNotificationListener` 处理 `authorization.approved` 和 `authorization.declined`。
   - `CardTransactionNotificationListener` 处理 `card_transaction.posted`。
-  - `RepaymentNotificationListener` 处理 `repayment.received`。
 - “不感兴趣的合法事件”不应该被当成坏消息送进 DLT。
 
 为什么按上游领域拆 listener：
 
-- `authorization`、`CardTransaction`、`Repayment` 是不同上游领域，Notification 只是独立消费它们的 integration events。
+- `Authorization`、`CardTransaction` 是不同上游领域，Notification 只是独立消费它们的 integration events。
 - 按上游领域拆 inbound adapter，更接近未来 notification 微服务的真实形态。
 - 每个 listener 显式检查 `eventType`，新增事件时不会靠一个大而模糊的 boolean/status 字段让 consumer 猜。
 
@@ -943,8 +942,8 @@ Worker 中的单账户出账：
 
 9. 事务提交
 
-   Statement 当前不再发布 `statement.closed` Kafka 事件。Authorization、CardTransaction 和
-   Repayment 已经完整展示 Domain Event → Outbox → Kafka → Inbox → Notification；
+   Statement 当前不再发布 `statement.closed` Kafka 事件。Authorization 与 CardTransaction
+   已经用两个业务 topic 完整展示 Domain Event → Outbox → Kafka → Inbox → Notification；
    在 Statement 里再复制一遍没有新的 correctness 语义。账单的主要异步边界收口为
    `AUTO_REPAYMENT` DelayJob，账单查询缓存的跨 Pod 失效则用可丢的 Redis Pub/Sub。
 
@@ -988,7 +987,7 @@ Worker 中的单账户出账：
 - 银行扣款成功后，针对一张已生成 statement 入账。
 - 还款成功后减少 `credit_accounts.posted_balance`，恢复可用额度。
 - 同时推进 `statements.paid_amount/status/version`。
-- 发布 `repayment.received`，让 Notification 可以异步消费；未来 Reconciliation 也可以基于它对账。
+- commit 成功后失效 Statement 缓存，让后续查询重新读取最新账单状态。
 
 当前刻意不做：
 
@@ -1080,7 +1079,7 @@ curl -X POST http://localhost:8080/api/repayments \
    - credit account row lock
    - statement row lock
    - account/statement 状态更新
-   - `repayment.received` Outbox
+   - after-commit Statement cache invalidation
 
 这样做的重点是：自动扣款只是 repayment 的上游资金来源，真正“账单已还款”的一致性逻辑不复制一份。
 
@@ -1182,24 +1181,17 @@ credit account row lock -> statement row lock
 8. `Repayment.markReceived(...)`
 
    `Repayment` 从 `PENDING -> RECEIVED`。
-   domain 内部产生 `RepaymentReceivedDomainEvent`。
 
-9. 保存并写 Outbox
+9. 保存并提交事务
 
    - `creditAccountRepository.update(account)`
    - `statementRepository.updatePayment(statement)`
    - `repaymentRepository.update(repayment)`
-   - `repayment.pullDomainEvents()`
-   - `RepaymentOutboxAdapter.append(event)`
+   - `statementReadService.evictAfterCommit(statement)` 注册提交后缓存失效
 
-   `repayment.received` 的 Outbox row 和 account/statement/repayment 状态一起 commit。
-
-10. Outbox 后续异步发布 `repayment.received`
-
-   - `KafkaOutboxMessagePublisher` 看到 `eventType` 以 `repayment.` 开头，路由到 `mini-card.repayment-events.v1`。
-   - `RepaymentNotificationListener` 消费 `repayment.received`。
-   - Listener 把业务事实映射成 `NotificationType.REPAYMENT_RECEIVED`。
-   - `RequestNotificationService` 用 `consumer_inbox` 和 `notifications.source_event_id` 做 consumer-side idempotency。
+   account/statement/repayment 状态在同一个 transaction boundary 内 commit；如果事务 rollback，
+   缓存失效回调也不会执行。还款路径不发布 Kafka 通知事件，Outbox/Inbox 的学习点由
+   authorization 与 card transaction 两条不同 topic 的路径完整展示。
 
 ### 6.4 本次事务提交后的数据变化
 
@@ -1210,7 +1202,7 @@ credit account row lock -> statement row lock
 - `statements.paid_amount` 增加。
 - `statements.status` 变为 `PARTIALLY_PAID` 或 `PAID`。
 - `statements.version` 递增，作为 statement cache 的新版本地板。
-- `outbox_events` 新增 `repayment.received/PENDING`。
+- commit 后触发 Statement L1/L2 cache invalidation。
 
 不会变化：
 
@@ -1231,8 +1223,8 @@ credit account row lock -> statement row lock
 - 银行扣款成功/失败和 repayment 入账要分清：失败不能创建 `repayments/RECEIVED`。
 - 锁顺序保持 `credit account -> statement`，是为了和账单生成保持一致，避免死锁。
 - `Statement` 负责保护 `paidAmount/status/version`，`CreditAccount` 负责保护 `postedBalance`，service 负责 transaction boundary。
-- `repayment.received -> Outbox -> Kafka -> Notification Inbox -> notification 意图 + per-channel deliveries`
-  让通知失败不影响还款主事务；真正发送由投递管线异步完成。
+- Repayment 不为重复展示同一套 Outbox/Inbox 机制额外发通知事件；还款审计事实保留在
+  `repayments`、`statements`、`credit_accounts`，Kafka 机制由另外两个业务 topic 展示。
 
 ## 7. 核心流程五：Outbox 发布消息
 
@@ -1326,7 +1318,6 @@ credit account row lock -> statement row lock
 - 业务 bounded context 的 listener，例如：
   - `notification/infrastructure/messaging/AuthorizationNotificationListener`
   - `notification/infrastructure/messaging/CardTransactionNotificationListener`
-  - `notification/infrastructure/messaging/RepaymentNotificationListener`
 
 为什么不再把 Outbox 拆成 `domain/application/infrastructure`：
 
@@ -1731,13 +1722,12 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 ### 为什么 notifications 不再只存 authorizationId？
 
-因为 Notification 现在同时消费三类事件：
+因为 Notification 现在同时消费两类事件：
 
 - `authorization.approved/declined`
 - `card_transaction.posted`
-- `repayment.received`
 
-交易和 Repayment 不能都用 authorizationId 表达，强行塞入旧列会让模型变形。
+交易不能只用 authorizationId 表达，强行塞入旧列会让模型变形。
 所以现在用 `subject_type + subject_id` 表达“这条通知关联哪个业务对象”，
 再用 `recipient_key` 表达“目前怎样找到接收方”。
 

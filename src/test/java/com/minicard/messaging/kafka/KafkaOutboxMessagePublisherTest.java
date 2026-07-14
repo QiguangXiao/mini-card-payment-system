@@ -69,6 +69,19 @@ class KafkaOutboxMessagePublisherTest {
     }
 
     @Test
+    // 测试目的：删除 repayment topic 后，仍钉住第二条 card transaction 路由，避免收缩时误删。
+    // variant：card_transaction.* 必须进入 transaction topic，供 CardTransactionNotificationListener 消费。
+    void routesCardTransactionEventsToTransactionTopic() {
+        KafkaTemplate<String, String> kafkaTemplate = kafkaTemplate();
+        KafkaOutboxMessagePublisher publisher = new KafkaOutboxMessagePublisher(kafkaTemplate, topics());
+        OutboxEvent event = outboxEvent(UUID.randomUUID(), "card_transaction.posted");
+
+        publisher.publish(event, Duration.ofSeconds(5));
+
+        assertThat(capturedRecord(kafkaTemplate).topic()).isEqualTo("transaction-events");
+    }
+
+    @Test
     // 测试目的：验证未知 eventType 是开发/契约错误，不能猜 topic。
     // variant：unsupported prefix 直接抛异常，避免消息发到无人消费的错误 topic。
     void rejectsUnsupportedEventTypeInsteadOfGuessingTopic() {
@@ -126,7 +139,6 @@ class KafkaOutboxMessagePublisherTest {
         return new KafkaTopicsProperties(
                 "authorization-events",
                 "transaction-events",
-                "repayment-events",
                 "notification-dlt"
         );
     }

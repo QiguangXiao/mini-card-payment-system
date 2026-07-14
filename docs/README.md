@@ -36,7 +36,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐当前 Authorization/CardTransaction/Repayment 事件与 Notification consumer，保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
+| [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐当前 Authorization/CardTransaction 两条事件路径与 Notification consumer，保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
 | [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
 | [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、`lease_token` 模型）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
 | [`notification-mechanism-review-cn.md`](notification-mechanism-review-cn.md) | ✅ | 当前 Notification 分层梳理与类缩减评估：事件入口、Inbox 幂等、intent/delivery 拆分、delivery worker 状态机、provider 幂等、哪些类可缩减以及取舍 |

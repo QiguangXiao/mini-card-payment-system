@@ -1522,7 +1522,6 @@ WHERE id IN
 位置：
 
 - `AuthorizationOutboxAdapter`
-- `RepaymentOutboxAdapter`
 - `CardTransactionOutboxAdapter`
 
 Outbound adapter 没有直接：
@@ -2202,7 +2201,7 @@ covered Java files: 136 / 226 = 60.2%
 | Card | 高覆盖 | record snapshot（历史 cache 设计）、cache decorator（已删除）、`@Primary`、Bean name、mapper proxy、row/domain separation |
 | CreditAccount | 已补强 | aggregate 不用 `@Data`、row-lock mapper、repository port、derived available credit、Currency conversion |
 | Transaction / Presentment | 已补强 | `@Valid`、command compact constructor、`@Transactional`、CardTransaction 状态机、`<foreach>` batch update |
-| Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、Outbox adapter、repayment row/domain mapping |
+| Repayment | 已补强 | API validation、domain Optional、auto-debit config、DelayJob adapter、after-commit cache invalidation、repayment row/domain mapping |
 | Statement | 已补强 | controller/scheduler 双入口、`YearMonth`、private record、business calendar、statement read cache、repository duplicate 粒度 |
 | Notification | 高覆盖 | stable consumer name、fluent getter、eventType-before-payload、generic subject type、notification row/domain mapping |
 | Risk | 已补强 | Feign port、Redis/JdbcTemplate velocity adapter、typed config、simulated external API |

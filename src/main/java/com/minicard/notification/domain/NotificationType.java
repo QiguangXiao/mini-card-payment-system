@@ -10,9 +10,5 @@ package com.minicard.notification.domain;
 public enum NotificationType {
     AUTHORIZATION_APPROVED,
     AUTHORIZATION_DECLINED,
-    CARD_TRANSACTION_POSTED,
-    /**
-     * 来自 repayment.received 事件，表达用户还款已成功入账。
-     */
-    REPAYMENT_RECEIVED
+    CARD_TRANSACTION_POSTED
 }

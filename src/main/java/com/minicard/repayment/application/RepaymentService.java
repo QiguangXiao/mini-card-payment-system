@@ -11,7 +11,6 @@ import com.minicard.creditaccount.domain.CreditAccountRepository;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
-import com.minicard.repayment.domain.event.RepaymentDomainEvent;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
@@ -28,7 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 入金処理(にゅうきんしょり)。</p>
  *
  * <p>interview重点：Repayment 同时影响 repayment row、credit account postedBalance、
- * statement paidAmount/status/version 和 Outbox event。它们必须在同一个 transaction boundary 内提交。</p>
+ * statement paidAmount/status/version。它们必须在同一个 transaction boundary 内提交。</p>
  *
  * <p>流程总览（mini trace，全部在一个 DB transaction 内；编号对应方法内的"阶段 N"注释。
  * 锁顺序固定：credit account 先于 statement）：</p>
@@ -43,7 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
  *    3.3 account.applyRepayment 释放额度；statement.applyRepayment 推进 paidAmount/status/version
  *    3.4 注册 after-commit cache invalidation（不在事务内直接写缓存）
  * 4. update repayment RECEIVED
- * 5. append Outbox event repayment.received；COMMIT 后才触发 statement 读缓存失效
+ * 5. COMMIT 后才触发 statement 读缓存失效
  * </pre>
  */
 @Service
@@ -53,12 +52,11 @@ public class RepaymentService {
     private final RepaymentRepository repaymentRepository;
     private final StatementRepository statementRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final RepaymentDomainEventPublisher eventPublisher;
     private final StatementReadService statementReadService;
     private final Clock clock;
 
     /**
-     * 处理还款 API 写路径：幂等 claim、锁账户和账单、入账、失效账单读缓存、写 Outbox。
+     * 处理还款 API 写路径：幂等 claim、锁账户和账单、入账、失效账单读缓存。
      */
     @Transactional
     public Repayment receive(ReceiveRepaymentCommand command) {
@@ -101,8 +99,8 @@ public class RepaymentService {
         applyToStatementAndAccount(repayment, statementSnapshot, command.money(), now);
         // 阶段 4：保存 repayment RECEIVED 状态。它与 account/statement 更新处于同一 transaction boundary。
         repaymentRepository.update(repayment);
-        // 阶段 5：把 repayment.received 事实追加到 Outbox。Kafka 发布由后台 worker 做，API 不等待 broker。
-        publishDomainEvents(repayment);
+        // 阶段 5：方法返回后事务提交；只有 commit 成功，前面注册的 statement cache 失效才会执行。
+        // 如果在 commit 前直接删除缓存，另一个请求可能把旧 DB 快照重新写回，造成脏缓存。
         return repayment;
     }
 
@@ -151,12 +149,7 @@ public class RepaymentService {
         // account.postedBalance 释放额度，statement.paidAmount/status/version 推进账单生命周期。
         account.applyRepayment(amount);
         statement.applyRepayment(amount, now);
-        repayment.markReceived(
-                account.id(),
-                statement.paidAmount(),
-                statement.remainingAmount(),
-                now
-        );
+        repayment.markReceived(account.id(), now);
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
@@ -203,20 +196,6 @@ public class RepaymentService {
         }
         if (amount.isGreaterThan(account.postedBalance())) {
             throw new RepaymentRejectedException("repayment amount exceeds account posted balance");
-        }
-    }
-
-    /**
-     * 把 repayment.received 领域事件追加到 Outbox。
-     *
-     * <p>事务归属：只由 {@link #receive(ReceiveRepaymentCommand)} 调用，加入同一个
-     * {@code @Transactional} 边界；Outbox row 必须和 repayment/account/statement 状态一起提交。</p>
-     */
-    private void publishDomainEvents(Repayment repayment) {
-        for (RepaymentDomainEvent event : repayment.pullDomainEvents()) {
-            // Outbox row 和 repayment/account/statement 状态一起 commit。
-            // Kafka publish 由后台 worker 处理，所以还款 API 不等待 broker。
-            eventPublisher.append(event);
         }
     }
 

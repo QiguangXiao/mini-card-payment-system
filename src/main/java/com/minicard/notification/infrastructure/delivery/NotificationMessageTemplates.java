@@ -22,7 +22,6 @@ final class NotificationMessageTemplates {
             case AUTHORIZATION_APPROVED -> "Authorization approved";
             case AUTHORIZATION_DECLINED -> "Authorization declined";
             case CARD_TRANSACTION_POSTED -> "Transaction posted";
-            case REPAYMENT_RECEIVED -> "Repayment received";
         };
     }
 
@@ -34,8 +33,6 @@ final class NotificationMessageTemplates {
                     "Your card authorization " + subjectId + " was declined.";
             case CARD_TRANSACTION_POSTED ->
                     "Your card transaction " + subjectId + " has been posted to your account.";
-            case REPAYMENT_RECEIVED ->
-                    "We received your repayment " + subjectId + ". Thank you.";
         };
         if (channel == NotificationChannel.EMAIL) {
             // email 形态更正式，附落款；push 保持短。真实系统会用不同模板文件，而不是字符串拼接。

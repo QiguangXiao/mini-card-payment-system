@@ -65,10 +65,10 @@ OutboxWorker  ->  稍后发布 Kafka
 
 ## 3. Producer side：领域事件如何变成 outbox 行
 
-- **领域事件在 aggregate 内缓冲**。`Repayment` 持有 `List<RepaymentDomainEvent>`，`markReceived(...)` 时 `add(...)`；`pullDomainEvents()` 返回拷贝并清空。事件是"业务事实"的产物，不是 service 临时拼出来的。
-- **同事务写 outbox**。`RepaymentService.receive(...)`（`@Transactional`）更新 account/statement/repayment 后，`publishDomainEvents()` 经 `RepaymentOutboxAdapter` 落 `outbox_events`。业务行与 outbox 行在**同一个 commit**——这就是 transactional outbox 的全部要点。
-- **幂等重放不重复发事件**。同 `Idempotency-Key` 的重复请求走 `claimed=false && RECEIVED` 分支**提前 return，不 append**。一个业务事实只产生一个 `eventId`。
-- **adapter 手工拼 payload（Anti-Corruption Layer）**。`RepaymentOutboxAdapter` 用 `objectMapper.createObjectNode()` 逐字段写，**不直接序列化 domain record**。domain 字段改名不会无意改动 Kafka contract。
+- **领域事件在 aggregate 内缓冲**。`Authorization` 与 `CardTransaction` 在状态转换时记录事件；`pullDomainEvents()` 返回拷贝并清空。事件是"业务事实"的产物，不是 service 临时拼出来的。
+- **同事务写 outbox**。`AuthorizationService` / `PostingService` 在保存业务状态后，经对应 Outbox adapter 落 `outbox_events`。业务行与 outbox 行在**同一个 commit**——这就是 transactional outbox 的全部要点。
+- **幂等重放不重复发事件**。重复 authorization request 或 presentment 返回已有结果，不再 append；一个业务事实只产生一个 `eventId`。
+- **adapter 手工拼 payload（Anti-Corruption Layer）**。`AuthorizationOutboxAdapter` 与 `CardTransactionOutboxAdapter` 用 `ObjectNode` 逐字段写，**不直接序列化 domain record**。domain 字段改名不会无意改动 Kafka contract。
 - **`OutboxEvent` 是状态机**（`messaging/outbox/OutboxEvent.java`）：
   - 状态 `PENDING / PROCESSING / PUBLISHED / DEAD`，只读 getter，只能经 `markProcessing / markPublished / markFailed / markProcessingTimedOut` 推进。
   - `next_attempt_at` 只做时间语义：PENDING 时是下次可发布时间，PROCESSING 时是 lease deadline；
@@ -132,12 +132,11 @@ OutboxWorker  ->  稍后发布 Kafka
 ```text
 mini-card.authorization-events.v1   authorization.approved/declined/expired/posted
 mini-card.transaction-events.v1     card_transaction.posted
-mini-card.repayment-events.v1       repayment.received
 ```
 
 **为什么按业务事实拆 topic**：`card_transaction.posted`（用户可见交易入账）该被 Notification 消费，而不是 `authorization.posted`（授权 hold 被消耗）。生产里 Notification 很可能是独立微服务，订阅它需要的 business facts，不依赖本工程 domain class。Statement 当前不发 Kafka 事件；账单查询缓存的跨 Pod 失效是可丢的 performance hint，因此使用 Redis Pub/Sub 而不是 Kafka。
 
-**partition key = 聚合/账户范围**（Kafka 只保证 partition 内有序）：authorization→`authorizationId`，card_transaction→`cardTransactionId`，repayment→`creditAccountId`。于是同一聚合/账户的事件进同一 partition 保持有序，不同聚合并行。
+**partition key = 聚合范围**（Kafka 只保证 partition 内有序）：authorization→`authorizationId`，card_transaction→`cardTransactionId`。于是同一聚合的事件进同一 partition 保持有序，不同聚合并行。
 
 ### 5.4 Consumer group 与 concurrency
 
@@ -221,14 +220,14 @@ lag 会如实涨给你看；把扩容决策交给平台，比每台机器自己"
 
 ## 7. Consumer side：契约校验 + 双层幂等
 
-- **Notification 共用一个 group + 一个 DLT**：三个 Notification listeners 共用 notification group，按各自 topic 消费。
+- **Notification 共用一个 group + 一个 DLT**：两个 Notification listeners 共用 notification group，按各自 topic 消费。
 - `IntegrationEventReader.read(...)`：反序列化 + 集中校验 self-describing body envelope（`eventId/payload` 必填、`eventType` 必填、`eventVersion >= 1`）；header 只用于 observability，不参与 correctness。无效 integration event 抛 `InvalidIntegrationEventException`（永久失败）。`requiredText/requiredUuid/requiredDecimal/requiredCurrency/requiredInstant` 统一读取 payload 的通用数据类型，具体 eventType 需要哪些字段仍由 listener 声明。
 - **双层幂等（消费侧最关键）**：
   1. **Inbox claim（第一道）**：`ConsumerInboxRepository.claim(consumerName, eventId)`，底层 `INSERT INTO consumer_inbox`，靠 `PRIMARY KEY(consumer_name, event_id)` 判定"第一次消费"，`DuplicateKeyException → false`。
   2. **业务唯一键（第二道）**：`notifications.source_event_id` 唯一。挡住"绕过 inbox 的手工 replay / 补偿脚本"。
   - **inbox claim 与业务写在同一个 `@Transactional`**。**反向事实**：否则 claim 成功但业务写失败会"假装消费过"，造成**丢消费**。
 - **错误处理与 DLT**（`KafkaConsumerConfiguration`）：Boot 默认 listener factory + **全局唯一** `DefaultErrorHandler(FixedBackOff(1000ms, 2 次))`；`DeadLetterPublishingRecoverer` 按 Notification consumer group 路由到 `mini-card.notification.dlt.v1`。保留原 partition 便于关联排查；**DLT 内顺序不等于源顺序**，replay 的正确性仍靠幂等。**`addNotRetryableExceptions(InvalidIntegrationEventException.class)`** 让永久契约错误直进 DLT，瞬时错误才退避重试。
-  - **为什么不再是三个 per-context factory**：曾为"不同 DLT 名 + 不同 concurrency"建三个几乎相同的 factory。收敛为单 handler 消灭了两个坑：Boot 默认 factory 只按 bean 名让位，忘写 `containerFactory` 的新 listener 会静默挂上无 DLT 的默认 handler（重试后记日志、提交 offset、**消息丢弃**）；DLT 正确性曾依赖每个 listener 手选 factory。现在默认 factory 自带 DLT handler，路由跟随失败的消费组，无可绑错的配置点。只有 ack/批量/serde/事务/集群真正不同时才值得回到多 factory。
+  - **为什么不再是多个 per-context factory**：曾为"不同 DLT 名 + 不同 concurrency"建多套几乎相同的 factory。收敛为单 handler 消灭了两个坑：Boot 默认 factory 只按 bean 名让位，忘写 `containerFactory` 的新 listener 会静默挂上无 DLT 的默认 handler（重试后记日志、提交 offset、**消息丢弃**）；DLT 正确性曾依赖每个 listener 手选 factory。现在默认 factory 自带 DLT handler，路由跟随失败的消费组，无可绑错的配置点。只有 ack/批量/serde/事务/集群真正不同时才值得回到多 factory。
   - **当前运维边界**：系统只负责把失败 record 发进 Notification DLT，尚无 listener/monitor group、DLT metric、告警或 replay 工具。
 
 ---

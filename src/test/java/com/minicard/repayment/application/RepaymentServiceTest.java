@@ -18,8 +18,6 @@ import com.minicard.creditaccount.domain.CreditAccountStatus;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
-import com.minicard.repayment.domain.event.RepaymentDomainEvent;
-import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
@@ -27,7 +25,6 @@ import com.minicard.statement.domain.StatementStatus;
 import com.minicard.statement.application.read.StatementReadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,7 +45,6 @@ class RepaymentServiceTest {
     private RepaymentRepository repaymentRepository;
     private StatementRepository statementRepository;
     private CreditAccountRepository creditAccountRepository;
-    private RepaymentDomainEventPublisher eventPublisher;
     private StatementReadService statementReadService;
     private RepaymentService service;
 
@@ -57,13 +53,11 @@ class RepaymentServiceTest {
         repaymentRepository = mock(RepaymentRepository.class);
         statementRepository = mock(StatementRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
-        eventPublisher = mock(RepaymentDomainEventPublisher.class);
         statementReadService = mock(StatementReadService.class);
         service = new RepaymentService(
                 repaymentRepository,
                 statementRepository,
                 creditAccountRepository,
-                eventPublisher,
                 statementReadService,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
@@ -97,15 +91,11 @@ class RepaymentServiceTest {
         verify(statementRepository).updatePayment(statement);
         verify(statementReadService).evictAfterCommit(statement);
         verify(repaymentRepository).update(repayment);
-        ArgumentCaptor<RepaymentDomainEvent> event =
-                ArgumentCaptor.forClass(RepaymentDomainEvent.class);
-        verify(eventPublisher).append(event.capture());
-        assertThat(event.getValue()).isInstanceOf(RepaymentReceivedDomainEvent.class);
     }
 
     @Test
     // 测试目的：验证同 idempotency key 的还款重试返回第一次 RECEIVED 结果。
-    // variant：claim=false 代表 duplicate loser，不再锁 statement/account，也不重复发 event。
+    // variant：claim=false 代表 duplicate loser，不再锁 statement/account，也不重复执行入账。
     void returnsExistingRepaymentForIdempotentRetry() {
         ReceiveRepaymentCommand command = command("500.00");
         Repayment existing = receivedRepayment(command);
@@ -120,7 +110,6 @@ class RepaymentServiceTest {
         verify(statementRepository, never()).findByIdForUpdate(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(repaymentRepository, never()).update(any());
-        verify(eventPublisher, never()).append(any());
         verify(statementReadService, never()).evictAfterCommit(any());
     }
 
@@ -141,7 +130,6 @@ class RepaymentServiceTest {
                 .hasMessageContaining("exceeds statement remaining amount");
         verify(creditAccountRepository, never()).update(any());
         verify(statementRepository, never()).updatePayment(any());
-        verify(eventPublisher, never()).append(any());
     }
 
     private void arrangeNewRepayment() {
@@ -171,13 +159,7 @@ class RepaymentServiceTest {
                 command.money(),
                 NOW.minusSeconds(1)
         );
-        repayment.markReceived(
-                ACCOUNT_ID,
-                money("500.00"),
-                money("1000.00"),
-                NOW
-        );
-        repayment.pullDomainEvents();
+        repayment.markReceived(ACCOUNT_ID, NOW);
         return repayment;
     }
 

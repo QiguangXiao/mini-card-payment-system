@@ -312,7 +312,6 @@ Controller 的设计口径：
 
 - `AuthorizationOutboxAdapter`
 - `CardTransactionOutboxAdapter`
-- `RepaymentOutboxAdapter`
 - `KafkaOutboxMessagePublisher`
 - `IntegrationEventReader`
 - Notification listeners

@@ -942,7 +942,7 @@ BillingCycleScheduler.<daily cron>
 
    这里用 DelayJob，因为自动扣款是 dueDate 未来业务动作。
    Statement 不再为账单通知重复实现一条 Outbox/Kafka 支线；该可靠消息模式已由
-   Authorization、CardTransaction 和 Repayment 主线展示。
+   Authorization、CardTransaction 两条主线展示。
 
 8. 事务 commit。
 
@@ -1182,24 +1182,10 @@ RepaymentController.receive(...)
    received_at = 2026-08-10T09:00:00Z
    ```
 
-   同时产生：
+11. 注册 Statement cache after-commit 失效，然后事务 commit。
 
-   ```text
-   RepaymentReceivedDomainEvent
-   ```
-
-11. 同事务写 Outbox。
-
-   ```text
-   outbox_events.id = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee5
-   aggregate_type = Repayment
-   aggregate_id = 99999999-9999-9999-9999-999999999991
-   event_type = repayment.received
-   partition_key = 11111111-1111-1111-1111-111111111111
-   status = PENDING
-   ```
-
-12. 事务 commit。
+   还款路径不额外写 Outbox；`repayments`、`credit_accounts`、`statements` 是这次入账的
+   source of truth。只有 commit 成功才清缓存，rollback 时不会让旧事务结果污染缓存时序。
 
    释放锁：
 
@@ -1232,7 +1218,7 @@ availableCredit = 99000.00
 - `Authorization` 仍是 `POSTED`，不会因为还款变回 `APPROVED`。
 - `CardTransaction` 仍是 `POSTED`，历史消费流水不会被还款删除。
 - `StatementLine` 不变，账单明细快照不被还款改写。
-- Notification 异步消费 `repayment.received` 创建 `REPAYMENT_RECEIVED` 通知。
+- Statement cache 在 commit 后失效，下一次读取会回到最新 DB 状态。
 
 ## 9. 请求五：dueDate 自动扣款还清剩余 1000 JPY
 
@@ -1320,14 +1306,7 @@ status: PENDING -> RECEIVED
 amount = 1000.00
 ```
 
-同事务写：
-
-```text
-outbox_events
-id = eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee6
-event_type = repayment.received
-status = PENDING
-```
+事务 commit 后失效 Statement cache；自动扣款与主动还款共用同一条状态更新路径。
 
 ### 9.4 请求五结束后的最终状态
 
@@ -1369,7 +1348,6 @@ repayments
 | `Authorization.approve(...)` | `AuthorizationApprovedDomainEvent` | `authorization.approved` | Notification |
 | `Authorization.post(...)` | `AuthorizationPostedDomainEvent` | `authorization.posted` | 当前无消费者（notification/risk listener 刻意跳过 posted：它是发卡方内部 hold 生命周期，用户可见入账通知走 `card_transaction.posted`） |
 | `CardTransaction.markPosted(...)` | `CardTransactionPostedDomainEvent` | `card_transaction.posted` | Notification |
-| `Repayment.markReceived(...)` | `RepaymentReceivedDomainEvent` | `repayment.received` | Notification |
 
 这些 Outbox row 和业务状态一起 commit。
 
@@ -1395,16 +1373,16 @@ PENDING -> PROCESSING -> PUBLISHED
 - 不锁 `statements`。
 - 不锁 `repayments`。
 
-如果 Kafka 慢或挂了，只影响 Outbox 重试，不会延长授权/入账/还款的业务锁时间。
+如果 Kafka 慢或挂了，只影响 Outbox 重试，不会延长授权或交易入账的业务锁时间；还款路径本身不发布 Kafka 事件。
 
 ### 10.3 Notification 是消费结果，不影响主流程
 
-例如 `repayment.received`：
+例如 `card_transaction.posted`：
 
 ```text
-RepaymentService commit
+PostingService commit
 -> Outbox worker publish Kafka
--> RepaymentNotificationListener
+-> CardTransactionNotificationListener
 -> RequestNotificationService
 -> consumer_inbox claim
 -> notifications 意图 + APP_PUSH/EMAIL 两条 notification_deliveries/PENDING（同一事务）
@@ -1570,7 +1548,7 @@ statement remaining = 1000 JPY
 
 ## 12. 你可以这样在interview里讲
 
-> 这个项目把状态变化放在 aggregate 里：Authorization 负责 PENDING/APPROVED/POSTED/EXPIRED，CardTransaction 负责 PENDING/POSTED 和 statement assignment，Statement 负责 CLOSED/PARTIALLY_PAID/PAID，Repayment 负责 PENDING/RECEIVED。Application service 负责 transaction boundary 和跨 aggregate 编排。Statement batch 用固定关账日生成账单，并写 `AUTO_REPAYMENT` DelayJob 作为 due-date 未来业务动作。所有会改变额度的操作都要锁同一条 credit account row，用 MySQL `SELECT ... FOR UPDATE` 串行化，而不是用 JVM lock。Outbox row 和业务状态同事务提交，Kafka/Notification 在事务后异步处理，所以消息失败不会扩大主交易锁时间。
+> 这个项目把状态变化放在 aggregate 里：Authorization 负责 PENDING/APPROVED/POSTED/EXPIRED，CardTransaction 负责 PENDING/POSTED 和 statement assignment，Statement 负责 CLOSED/PARTIALLY_PAID/PAID，Repayment 负责 PENDING/RECEIVED。Application service 负责 transaction boundary 和跨 aggregate 编排。Statement batch 用固定关账日生成账单，并写 `AUTO_REPAYMENT` DelayJob 作为 due-date 未来业务动作。所有会改变额度的操作都要锁同一条 credit account row，用 MySQL `SELECT ... FOR UPDATE` 串行化，而不是用 JVM lock。需要对外发布的 Authorization/CardTransaction 事件会让 Outbox row 与业务状态同事务提交，Kafka/Notification 在事务后异步处理，所以消息失败不会扩大主交易锁时间；Repayment 则在 commit 后失效 Statement 缓存。
 
 更短一点：
 

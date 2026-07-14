@@ -21,7 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>关键词：通知请求, Inbox 幂等, 渠道扇出, notification request,
  * consumer idempotency, delivery fan-out, 通知依頼(つうちいらい)。</p>
  *
- * <p>类名按业务动作命名，不按 Kafka consumption 命名，让 authorization/transaction/repayment listener
+ * <p>类名按业务动作命名，不按 Kafka consumption 命名，让 authorization/transaction listener
  * 都复用同一 use case。方法名用 {@code requestNotification} 而不是裸 {@code request}：
  * listener 调用点会更清楚地表达"把上游事件转成通知请求"，而不是像 HTTP request 或风控 request。</p>
  *

@@ -87,9 +87,6 @@ public class KafkaOutboxMessagePublisher implements OutboxMessagePublisher {
         if (eventType.startsWith("card_transaction.")) {
             return topics.transactionEvents();
         }
-        if (eventType.startsWith("repayment.")) {
-            return topics.repaymentEvents();
-        }
         // 未知事件类型属于开发错误，不能静默发布到错误 topic。
         throw new IllegalArgumentException("unsupported integration event type " + eventType);
     }

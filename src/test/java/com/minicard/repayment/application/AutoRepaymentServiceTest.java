@@ -131,11 +131,8 @@ class AutoRepaymentServiceTest {
         );
         repayment.markReceived(
                 statement.creditAccountId(),
-                statement.totalAmount(),
-                money("0.00"),
                 Instant.parse("2026-07-27T00:00:01Z")
         );
-        repayment.pullDomainEvents();
         return repayment;
     }
 

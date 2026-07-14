@@ -28,13 +28,13 @@ public final class Notification {
     private final UUID id;
     /** 来源 integration event id；repository 唯一键用它抵御 Kafka duplicate delivery。 */
     private final UUID sourceEventId;
-    /** 通知围绕的业务对象类型，例如 AUTHORIZATION、CARD_TRANSACTION、REPAYMENT。 */
+    /** 通知围绕的业务对象类型，例如 AUTHORIZATION、CARD_TRANSACTION。 */
     private final NotificationSubjectType subjectType;
     /** 业务对象 id；用于模板渲染、audit 和排查通知来自哪条业务事实。 */
     private final String subjectId;
     /** 收件人解析 key；当前还没有 User/Cardholder 聚合，所以不是最终联系方式。 */
     private final String recipientKey;
-    /** 通知类型，表达为什么发通知，例如授权通过、还款入账、账单可用。 */
+    /** 通知类型，表达为什么发通知，例如授权通过、授权拒绝、交易入账。 */
     private final NotificationType type;
     /** 通知意图创建时间；投递时间由 NotificationDelivery.sentAt 表达。 */
     private final Instant createdAt;
@@ -69,7 +69,7 @@ public final class Notification {
      * 保证最终只落一条通知。投递记录在 application service 内、同一事务里随之创建。</p>
      *
      * <p>提醒：当前项目还没有 User/Cardholder 聚合，recipientKey 暂时是账户/卡线索
-     * (authorization/transaction 用 cardId，repayment 用 creditAccountId)。接真实用户模型时，
+     * (authorization/transaction 暂用 cardId)。接真实用户模型时，
      * 这里应改成 customerId，并由 sender/未来的 channel selector 去查联系方式与渠道偏好。</p>
      */
     public static Notification requestFromEvent(

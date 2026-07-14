@@ -47,16 +47,6 @@ public class KafkaTopicsConfiguration {
     }
 
     @Bean
-    public NewTopic repaymentEventsTopic(KafkaTopicsProperties properties) {
-        // Repayment 是独立业务事实，不混入 statement topic。
-        // event key 使用 creditAccountId，方便同一账户还款通知、对账投影按顺序处理。
-        return TopicBuilder.name(properties.repaymentEvents()) // repayment.* 事件 topic。
-                .partitions(3)  // 不代表启动三个 listener；实际并发还由 consumer factory 决定。
-                .replicas(1)    // replication factor，和 consumer concurrency 是两个完全不同的概念。
-                .build();       // 结束 builder，生成资源声明。
-    }
-
-    @Bean
     public NewTopic notificationDeadLetterTopic(KafkaTopicsProperties properties) {
         // Notification consumer 失败只进 notification DLT。
         return deadLetterTopic(properties.notificationDeadLetter());

@@ -1,27 +1,23 @@
 package com.minicard.repayment.domain;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
-import com.minicard.repayment.domain.event.RepaymentDomainEvent;
-import com.minicard.repayment.domain.event.RepaymentReceivedDomainEvent;
 import lombok.Getter;
 import lombok.experimental.Accessors;
 
 /**
  * 还款 aggregate root，表达一次客户还款从 idempotency claim 到成功入账的生命周期。
  *
- * <p>关键词：还款聚合, 幂等 claim, 入账事件, repayment aggregate,
- * idempotency claim, repayment received, 入金集約(にゅうきんしゅうやく),
+ * <p>关键词：还款聚合, 幂等 claim, 状态转换, repayment aggregate,
+ * idempotency claim, state transition, 入金集約(にゅうきんしゅうやく),
  * 支払い済み(しはらいずみ)。</p>
  *
  * <p>它不负责直接修改 statement/account；这些跨 aggregate 协作由 RepaymentService 在一个
- * transaction boundary 内完成。Repayment 自己负责记录“这笔还款已收到”这个业务事实。</p>
+ * transaction boundary 内完成。Repayment 自己只保护 PENDING -> RECEIVED 状态转换及字段一致性。</p>
  */
 // Repayment 只开放 getter；状态必须通过 markReceived 推进，避免外部直接 setStatus(RECEIVED)。
 // fluent getter 保持 repayment.status() 这种 record-like 风格，读起来比 getStatus() 更贴近现有 domain。
@@ -49,8 +45,6 @@ public final class Repayment {
     private final Instant createdAt;
     /** 最近一次状态变化时间。 */
     private Instant updatedAt;
-    // Domain event buffer 只存在于内存中；restore 历史还款不会重新发布 repayment.received。
-    private final List<RepaymentDomainEvent> domainEvents = new ArrayList<>();
 
     private Repayment(
             UUID id,
@@ -129,16 +123,11 @@ public final class Repayment {
     }
 
     /**
-     * 将还款 claim 推进为 RECEIVED，并记录 repayment.received 领域事件。
+     * 将还款 claim 推进为 RECEIVED。
      */
-    public void markReceived(
-            UUID creditAccountId,
-            Money statementPaidAmount,
-            Money statementRemainingAmount,
-            Instant receivedAt
-    ) {
+    public void markReceived(UUID creditAccountId, Instant receivedAt) {
         // PENDING -> RECEIVED 是 repayment 的核心 state transition。
-        // Statement/account 已在 service 中完成同事务更新，这里记录可发布的业务事实。
+        // Statement/account 已在 service 中完成同事务更新，这里只记录 repayment 自身的最终状态。
         if (status != RepaymentStatus.PENDING) {
             throw new IllegalStateException("cannot receive repayment in status " + status);
         }
@@ -146,15 +135,6 @@ public final class Repayment {
         this.receivedAt = Objects.requireNonNull(receivedAt);
         this.updatedAt = receivedAt;
         this.status = RepaymentStatus.RECEIVED;
-        domainEvents.add(new RepaymentReceivedDomainEvent(
-                id,
-                statementId,
-                this.creditAccountId,
-                amount,
-                statementPaidAmount,
-                statementRemainingAmount,
-                this.receivedAt
-        ));
     }
 
     public Optional<UUID> creditAccountId() {
@@ -164,17 +144,6 @@ public final class Repayment {
 
     public Optional<Instant> receivedAt() {
         return Optional.ofNullable(receivedAt);
-    }
-
-    /**
-     * 取出并清空本次还款状态变化产生的领域事件，供 service 写入 Outbox。
-     */
-    public List<RepaymentDomainEvent> pullDomainEvents() {
-        // Application service 在同一 transaction 内保存 aggregate 后调用这里。
-        // 返回 copy 并清空，避免同一笔 repayment.received 被重复 append 到 Outbox。
-        List<RepaymentDomainEvent> events = List.copyOf(domainEvents);
-        domainEvents.clear();
-        return events;
     }
 
     /**

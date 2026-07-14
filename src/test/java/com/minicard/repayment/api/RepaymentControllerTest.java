@@ -111,11 +111,8 @@ class RepaymentControllerTest {
         );
         repayment.markReceived(
                 UUID.fromString("11111111-1111-1111-1111-111111111111"),
-                money("500.00"),
-                money("1000.00"),
                 Instant.parse("2026-07-10T00:00:01Z")
         );
-        repayment.pullDomainEvents();
         return repayment;
     }
 
