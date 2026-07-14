@@ -95,7 +95,7 @@ marker annotation on class/interface
 
 类似组合还有：
 
-- `@ConfigurationProperties` + `@EnableConfigurationProperties`
+- `@ConfigurationProperties` + `@ConfigurationPropertiesScan`（或 `@EnableConfigurationProperties`）
 - `@Scheduled` + `@EnableScheduling`
 - `@Mapper` + MyBatis starter/scan
 
@@ -605,11 +605,23 @@ private BigDecimal jpyLimit;
 - 默认值逻辑重复。
 - 改配置结构时容易漏。
 
-### 5.2 `@EnableConfigurationProperties`
+### 5.2 `@ConfigurationPropertiesScan` 与 `@EnableConfigurationProperties`
 
-`@ConfigurationProperties` 标在 record 上，不一定意味着它已经是 Spring bean。
+`@ConfigurationProperties` 标在 record 上，不一定意味着它已经是 Spring bean，还需要一个"启用"步骤。
 
-本项目通过配置类启用：
+本项目在主类上统一扫描：
+
+```java
+@SpringBootApplication
+@ConfigurationPropertiesScan
+public class MiniCardPaymentSystemApplication {
+}
+```
+
+`com.minicard` 下所有 `@ConfigurationProperties` record 会被自动注册成 bean，
+新增 properties record 不需要再去任何配置类登记。
+
+另一种方式是逐个显式启用（本项目早期版本的写法）：
 
 ```java
 @Configuration
@@ -618,7 +630,14 @@ public class AuthorizationPolicyConfiguration {
 }
 ```
 
-如果省掉启用步骤：
+两种方式的取舍：
+
+- `@ConfigurationPropertiesScan`：零样板，消除"写了 record 忘了启用、启动时缺 bean"这类错误；
+  但绑定入口是隐式的，且切片测试（`@WebMvcTest` 等）不触发扫描。
+- `@EnableConfigurationProperties`：每个模块自包含、看得见绑定入口，是编写 starter /
+  auto-configuration 时的唯一选择；代价是每个 properties 类都要登记一次，容易漏。
+
+如果两种启用步骤都省掉：
 
 - record 仍能编译。
 - 但 Spring 不会创建该 properties bean。
@@ -2147,7 +2166,7 @@ KafkaTemplate future ack
 ```text
 @RestController / @RequestMapping 旁边解释 Spring MVC boundary
 @Valid / @NotNull / @Param 旁边解释参数绑定和 fail fast
-@ConfigurationProperties / @EnableConfigurationProperties 旁边解释配置绑定和 bean 注册
+@ConfigurationProperties / @ConfigurationPropertiesScan 旁边解释配置绑定和 bean 注册
 @Scheduled / @KafkaListener 旁边解释线程池、groupId、concurrency
 record compact constructor 旁边解释不可变输入和非 HTTP 路径防御
 repository/port 方法旁边解释 Optional、insert-first claim、DuplicateKeyException

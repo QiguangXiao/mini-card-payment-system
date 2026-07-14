@@ -5,7 +5,6 @@ import java.time.Duration;
 import com.minicard.delayjob.DelayJobProperties;
 import com.minicard.messaging.kafka.KafkaConsumersProperties;
 import com.minicard.notification.application.delivery.NotificationDeliveryProperties;
-import com.minicard.notification.infrastructure.delivery.NotificationDeliveryConfiguration;
 import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.web.ServerProperties;
@@ -66,19 +65,6 @@ class ApplicationCapacityConfigurationTest {
             assertThat(consumers.notification().concurrency()).isEqualTo(2);
             assertThat(consumers.riskFeature().concurrency()).isEqualTo(3);
         });
-    }
-
-    @Test
-    // 测试目的：Notification 模块自己的配置入口负责注册 properties Bean；
-    // 反向事实：如果注册责任又藏回全局 worker executor，单独装配通知模块时这里会缺 Bean。
-    void notificationDeliveryConfigurationOwnsItsPropertiesBinding() {
-        contextRunner
-                .withUserConfiguration(NotificationDeliveryConfiguration.class)
-                .run(context -> {
-                    assertThat(context).hasSingleBean(NotificationDeliveryProperties.class);
-                    assertThat(context.getBean(NotificationDeliveryProperties.class).batchSize())
-                            .isEqualTo(40);
-                });
     }
 
     private <T> T bind(Binder binder, String prefix, Class<T> type) {

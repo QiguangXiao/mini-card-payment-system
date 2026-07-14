@@ -1,7 +1,5 @@
 package com.minicard.infrastructure.scheduler;
 
-import com.minicard.delayjob.DelayJobProperties;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -20,8 +18,6 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 @Configuration
 // @EnableScheduling 打开 @Scheduled 扫描。没有它，poller/recoverer 方法会正常编译但永远不会被定时触发。
 @EnableScheduling
-// DelayJobProperties 在 scheduler 配置里启用，是因为 scheduler 开关/频率属于平台执行参数。
-@EnableConfigurationProperties(DelayJobProperties.class)
 public class PollingSchedulerConfiguration {
 
     /**

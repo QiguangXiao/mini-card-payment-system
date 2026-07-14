@@ -1,7 +1,6 @@
 package com.minicard.messaging.kafka;
 
 import org.apache.kafka.clients.admin.NewTopic;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -22,9 +21,8 @@ import org.springframework.kafka.config.TopicBuilder;
  * partition，已有 topic 的 replication factor 也不会靠这段 builder 自动重排。生产仍应由 IaC 管理变更。</p>
  */
 @Configuration
-// Kafka topic 名、DLT 名都从配置绑定进来，避免 listener/publisher 写死环境差异。
-// 如果 topic string 散落在代码里，改版本或加命名空间时很容易漏改。
-@EnableConfigurationProperties(KafkaTopicsProperties.class)
+// Kafka topic 名、DLT 名都从 KafkaTopicsProperties（主类 @ConfigurationPropertiesScan 注册）绑定进来，
+// 避免 listener/publisher 写死环境差异。如果 topic string 散落在代码里，改版本或加命名空间时很容易漏改。
 public class KafkaTopicsConfiguration {
 
     @Bean

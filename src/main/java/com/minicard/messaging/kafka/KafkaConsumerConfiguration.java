@@ -3,7 +3,6 @@ package com.minicard.messaging.kafka;
 import java.util.Map;
 
 import org.apache.kafka.common.TopicPartition;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -56,9 +55,9 @@ import org.springframework.util.backoff.FixedBackOff;
  * 本项目刻意把 payload 解析放在 listener 内的 tolerant reader 里。</p>
  */
 @Configuration
-// group-id 和 concurrency 从 messaging.consumers.* 绑定/占位符消费，调整不需要改代码。
+// group-id 和 concurrency 从 messaging.consumers.* 绑定/占位符消费（KafkaConsumersProperties 由主类
+// @ConfigurationPropertiesScan 注册），调整不需要改代码。
 // 绑定类 KafkaConsumersProperties 在这里还承担第二职责：为 DLT 路由表提供各 context 的 group-id。
-@EnableConfigurationProperties(KafkaConsumersProperties.class)
 public class KafkaConsumerConfiguration {
 
     @Bean

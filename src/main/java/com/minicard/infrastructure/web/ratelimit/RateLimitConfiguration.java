@@ -4,7 +4,6 @@ import java.time.Clock;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -34,7 +33,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
         havingValue = "true",
         matchIfMissing = true
 )
-@EnableConfigurationProperties(RateLimitProperties.class)
+// RateLimitProperties 由主类 @ConfigurationPropertiesScan 注册，因此即使 kill switch 关闭、
+// 本配置类整体不生效，properties bean 依然存在——这没有副作用，limiter/interceptor 才是条件 bean。
 public class RateLimitConfiguration {
 
     @Bean
