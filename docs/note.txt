@@ -43,8 +43,15 @@ AutoProxyCreator 收集所有 Advisor
 方法调用时，先按顺序执行拦截器链（前处理），再调用实际方法，再按逆序返回（经过每个拦截器的后处理）
 
 
-SpringMVC的DispacherServlet：
-也会取得一串HandlerInterceptor，加上原来的Controller方法，组成一个HandlerExecutionChain，这个在GPT问了，回去总结下
+SpringMVC
+DispacherServlet：
+也会取得一串HandlerInterceptor，加上原来的Controller即Handler方法，组成一个HandlerExecutionChain，这个在GPT问了，回去总结下
+
+然后使用HandlerAdaptor，执行整个HandlerExecutionChain？
+
+
+自动配置
+包括参数绑定，再从头过一次，用一个具体的举例，比如Mybatis
 
 
 
