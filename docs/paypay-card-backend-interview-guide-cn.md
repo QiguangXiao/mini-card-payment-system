@@ -28,8 +28,12 @@ issuer backend 场景。
 如果你有 2 到 3 小时：
 
 1. 每个专题都按“项目锚点 -> 30 秒回答 -> 追问”复述一次。
-2. 第 14 节interview问答不要死背，重点练“先给结论，再给项目例子，再讲 trade-off”。
+2. 过一遍问答总库 [`interview-qa-bank-cn.md`](interview-qa-bank-cn.md) 第 1 节的速记二十问，
+   不要死背，重点练“先给结论，再给项目例子，再讲 trade-off”；答不顺的题看它标注的深挖版。
 3. 最后用第 15 节自测，任何答不顺的题回到对应专题补。
+
+本手册管冲刺流程（专题速记 + 自测 + 复习计划 + 压缩素材 + 反向提问）；
+全部问答在问答总库，JD 逐条对照在 `paypay-card-jd-fit-cn.md`。
 
 interview时的推荐回答结构：
 
@@ -659,127 +663,10 @@ interview回答：
 
 > 拆服务会增加分布式一致性、部署、观测和契约管理成本。这个项目先保持单体，但用明确 package、domain boundary、Outbox event contract 和 consumer group 模拟未来拆分边界。不是因为不会微服务，而是当前学习阶段单体更容易讲清楚核心业务和事务。
 
-## 14. interview问答库
+## 14. interview 问答库（已迁至问答总库）
 
-### Q1：一次授权请求从进来到返回，发生了什么？
-
-答：
-
-> Controller 读取 `Idempotency-Key` 和 request body，转成 `AuthorizationCommand`。Application service 开启事务，先创建 `PENDING` authorization 并通过 unique key claim 幂等所有权。winner 做卡状态、风控、账户额度检查，额度检查时锁住 `credit_accounts` row。批准后更新 reserved amount 和 authorization 状态，写 expiry DelayJob 和 Outbox event，最后事务提交返回结果。
-
-### Q2：如何防止同一个授权请求重复扣额度？
-
-答：
-
-> 用 `Idempotency-Key` 加数据库唯一约束。第一次请求 insert-first claim 成功后继续决策；重复请求拿不到 claim，会锁住并读取已有 authorization。如果 fingerprint 相同返回原结果，如果不同返回 conflict。这样并发 retry 不会重复 reserve credit。
-
-### Q3：如果两个不同授权同时刷同一个账户，会不会超额度？
-
-答：
-
-> 不会依赖应用内存判断。两笔请求都会在改变额度前执行 `creditAccountRepository.findByIdForUpdate(...)`，同一个 account row 会被 InnoDB 串行化。第二个请求会等第一个 commit 后再看到最新的 reserved amount 和 posted balance。
-
-### Q4：为什么 authorization 批准后不直接写 posted balance？
-
-答：
-
-> 授权只是 issuer 临时批准并 hold 额度，商户还没有正式请款。只有 presentment/clearing 到达后，issuer 才把 hold 转成 posted transaction。直接入账会混淆授权和清分入账，也会让取消、过期、金额不匹配等场景难处理。
-
-### Q5：presentment 为什么用 `network_transaction_id` 做幂等？
-
-答：
-
-> 因为 presentment 来自外部网络或 clearing record，`network_transaction_id` 是这条外部交易记录的业务身份。客户端 header 的 idempotency key 更适合 API 请求重试，而 presentment 的重复通常来自文件重放、网络重发或上游重复投递，所以用外部业务 id 更自然。
-
-### Q6：为什么账单要保存 `statement_lines` 快照？
-
-答：
-
-> 账单是对某个 billing cycle 的正式结果，应该稳定、可审计。不能每次查询时临时 SUM 当前交易表，因为后续退款、调整、交易字段修正可能改变查询结果。`statement_lines` 保存出账时的交易快照，让用户看到的账单明细稳定。
-
-### Q7：Outbox 解决了什么，没解决什么？
-
-答：
-
-> Outbox 解决业务 DB 和消息发布的 dual-write 问题，让业务状态变化后一定有 durable event 待发布。但它不保证 consumer side effect exactly-once，也不保证 Kafka 全局有序。所以 consumer 还需要 Inbox 或 unique constraint，事件设计还需要合适 partition key 和版本管理。
-
-### Q8：Kafka 消息重复投递怎么办？
-
-答：
-
-> 设计上承认 Kafka 是 at-least-once。Notification 用 `source_event_id` 唯一约束防重复创建通知，其他 consumer 可以用 `consumer_inbox` 按 `consumer_name + event_id` 去重。处理逻辑要能重复执行而不产生重复 side effect。
-
-### Q9：为什么 consumer 关闭 auto commit？
-
-答：
-
-> 如果 offset 自动提交，而业务 side effect 还没写入 MySQL 时进程宕机，Kafka 会认为消息已消费，导致 side effect 丢失。关闭 auto commit 后，listener 成功处理并返回后再提交 offset。即便处理成功但提交 offset 前宕机，也只是重复投递，靠幂等处理。
-
-### Q10：DelayJob 和 Outbox 有什么区别？
-
-答：
-
-> Outbox 是发布已经发生的业务事实，例如 authorization approved。DelayJob 是计划未来执行业务动作，例如授权 7 天后过期释放额度，或账单到期自动扣款。两者都需要 retry 和 lease，但语义不同。
-
-### Q11：为什么 `@Scheduled` 不直接处理所有 job？
-
-答：
-
-> 因为定时方法如果同时负责扫描、执行业务、更新状态，会很难处理长任务、线程池拒绝、进程宕机和并发实例。项目把 poller 做薄，只 claim 到 PROCESSING lease，worker 执行业务并 finalize，recoverer 回收超时 lease。这样失败恢复路径更清楚。
-
-### Q12：DDD 在这个项目里怎么体现？
-
-答：
-
-> 业务状态和不变量放在 domain object，例如 `CreditAccount.reserve(...)`、`Authorization.approve(...)`、`Statement.applyRepayment(...)`。Application service 负责 use case orchestration 和 transaction boundary。Repository 是 domain 需要的接口，MyBatis 是 infrastructure adapter。对 Outbox、DelayJob 这种技术机制，不强行套复杂 DDD 结构，而是保持简单机制包。
-
-### Q13：为什么事件要由 aggregate 产生？
-
-答：
-
-> 因为 integration event 应该反映真实发生的状态转换。状态从 `PENDING` 到 `APPROVED` 时，`Authorization` aggregate 产生 approved domain event；service 只是把它交给 Outbox。这样不会出现 service 根据参数拼出一个和实际状态不一致的事件。
-
-### Q14：如何处理外部风控服务不可用？
-
-答：
-
-> 项目用 CircuitBreaker 保护外部风控调用，fallback 采用 fail-closed，返回 `EXTERNAL_RISK_UNAVAILABLE` 拒绝授权。原因是信用卡授权涉及资金风险，不可判定时默认放行可能造成损失。生产中可以按金额、客户等级、商户风险做更细策略。
-
-### Q15：为什么金额不用 `double`？
-
-答：
-
-> 金额需要十进制精确语义，`double` 有二进制浮点误差。项目用 `Money` value object 包装 `BigDecimal` 和 `Currency`，数据库用 `DECIMAL(19,2)`，并在 domain 层做正数、币种一致、金额比较等规则。
-
-### Q16：你如何解释 `FOR UPDATE SKIP LOCKED`？
-
-答：
-
-> 它适合多个 worker 并发 claim 队列表。一个 worker 锁住某些 `PENDING` rows 后，其他 worker 查询时跳过已锁定 rows，而不是等待。这样可以横向扩容 poller/worker，同时避免重复 claim。同一条 row 最终仍由数据库锁和状态字段保护。
-
-### Q17：如果 Outbox worker publish 成功后，mark published 前宕机怎么办？
-
-答：
-
-> Outbox row 仍然是 `PROCESSING`，lease 过期后 recoverer 会放回 retry，可能再次 publish 同一 event。这是 at-least-once 的典型窗口，所以 consumer 必须按 `eventId` 幂等。系统选择重复可控，而不是消息丢失。
-
-### Q18：如果你加入生产团队，只负责一个模块，这个项目还有什么帮助？
-
-答：
-
-> 生产工作通常只负责一个 bounded context，但你必须理解上下游契约和一致性责任。比如只做 statement，也要知道 posted transactions 从哪里来、是否可能重复、账单生成如何防止漏账、通知如何异步发出、还款如何影响 statement 状态。这个项目训练的是跨模块读代码和判断风险的能力。
-
-### Q19：这个项目离真实生产系统还差什么？
-
-答：
-
-> 它是学习项目，不是完整生产信用卡核心。项目刻意不实现 Ledger；真实 accounting system 需要 balanced journal、科目、调整/冲正和严格审计，不能用单边分录投影代替。真实系统还需要账户持有人、权限认证、settlement/reconciliation、refund/dispute、监管报表、监控告警、迁移工具、灰度发布、密钥管理和更严格的安全控制。但当前项目已经覆盖后端interview最常问的交易状态、一致性、幂等、锁、异步可靠性和失败恢复。
-
-### Q20：如果高并发下授权接口变慢，你会怎么排查？
-
-答：
-
-> 先看慢在哪里：外部风控延迟、数据库锁等待、索引问题、连接池、Kafka/Outbox 不应该阻塞主请求。对数据库看 slow query、lock wait、`EXPLAIN` 和相关索引；对应用看接口 latency breakdown、thread pool、connection pool。优化方向包括把慢外部调用放锁外、缩短事务、确保 account lookup 走索引、调优连接池，必要时做账户级限流或读模型缓存，但不能牺牲额度一致性。
+20 题速记问答连同深挖题库一起收拢在 [`interview-qa-bank-cn.md`](interview-qa-bank-cn.md)。
+速记版编号 速Q1–速Q20，每题标注对应深挖题；冲刺时先过速记版。
 
 ## 15. 自测清单
 
@@ -802,15 +689,162 @@ interview回答：
 15. 解释金额为什么用 `BigDecimal` 和 `DECIMAL(19,2)`。
 16. 说出这个学习项目离真实生产系统还缺哪些东西。
 
-## 16. 最后一轮复习顺序
+## 16. 复习路线
+
+如果只有 30 分钟：
+
+1. 背熟 JD 对照手册（`paypay-card-jd-fit-cn.md`）第 2 节的一分钟定位。
+2. 看 JD 对照手册第 3 节总体匹配度。
+3. 练问答总库（`interview-qa-bank-cn.md`）第 2 节的 Q1、Q2、Q4、Q5。
+
+如果有 2 小时：
+
+1. 看 `docs/paypay-card-backend-interview-guide-cn.md` 的主链路。
+2. 看本文件第 5、6、8、9、10 节。
+3. 看 `docs/caching-and-rate-limiting-cn.md` 和 `docs/jvm-threads-runtime-cn.md`。
+4. 用自己的话讲一遍：authorization 请求如何从 HTTP 到 DB lock，再到 Outbox/Kafka/cache/metrics。
+
+如果有 1 天：
+
+1. 学习 `docs/traffic-rate-limiting-and-capacity-cn.md`。
+2. 补 `docs/aws-ecs-deployment-cn.md`。
+3. 补 `docs/nosql-tradeoffs-cn.md`。
+4. 选做 gRPC Risk adapter 或最小 Reconciliation。
+
+> [!IMPORTANT]
+> 最后记住这个回答原则：先讲业务正确性，再讲技术机制，再讲扩展 trade-off。
+> 不要为了 JD 关键词而牺牲金融系统的正确性边界。
+
+## 17. 最后一周复习计划
+
+### 第 7 天：主链路
+
+目标：
+
+- 60 秒讲项目。
+- 5 分钟讲 authorization。
+- 5 分钟讲 posting。
+- 5 分钟讲 statement/repayment。
+
+必须能画：
+
+```text
+Controller
+-> Command
+-> Application Service
+-> Domain
+-> Repository/MyBatis
+-> Outbox/DelayJob
+-> Kafka Consumer
+```
+
+### 第 6 天：幂等和锁
+
+目标：
+
+- 讲清 API idempotency。
+- 讲清 presentment idempotency。
+- 讲清 Kafka Inbox。
+- 讲清 `FOR UPDATE` 和 unique constraint。
+
+练习题：
+
+- 同 key 同请求。
+- 同 key 不同请求。
+- 同 account 不同授权。
+- Worker duplicate。
+
+### 第 5 天：Kafka/Outbox/DelayJob
+
+目标：
+
+- 讲清 Outbox dual-write。
+- 讲清 Inbox at-least-once。
+- 讲清 DelayJob future action。
+- 讲清 DLT 和 replay。
+
+练习题：
+
+- publish 成功后宕机。
+- consumer 成功后 offset 未提交。
+- DelayJob worker 宕机。
+- Kafka backlog 上升。
+
+### 第 4 天：Cache/NoSQL
+
+目标：
+
+- 讲清 Caffeine L1 + Redis L2。
+- 讲清为什么不缓存额度。
+- 讲清 after-commit evict。
+- 讲清 NoSQL 适合 read model。
+
+练习题：
+
+- Redis stale。
+- Redis timeout。
+- Card blocked 后 cache 旧值。
+- DynamoDB 是否适合 credit account。
+
+### 第 3 天：High traffic 和 observability
+
+目标：
+
+- 讲清性能瓶颈定位。
+- 讲清 thread pool/DB pool/Kafka concurrency。
+- 讲清 Actuator/JVM/CloudWatch 指标。
+- 讲清 backpressure。
+
+练习题：
+
+- p99 变慢。
+- DB lock wait。
+- Kafka lag。
+- Outbox DEAD 增长。
+
+### 第 2 天：AWS 和架构演进
+
+目标：
+
+- 讲清 ECS/RDS/ElastiCache/MSK 映射。
+- 讲清 CloudFormation stack。
+- 讲清 CodePipeline 基本路径。
+- 讲清 modular monolith 到 microservices。
+
+练习题：
+
+- readiness/liveness。
+- rollback。
+- DB migration。
+- Java EE modernization。
+
+### 第 1 天：模拟 interview
+
+模拟流程：
+
+1. 60 秒项目介绍。
+2. 10 分钟主链路。
+3. 15 分钟幂等/锁深挖。
+4. 15 分钟 Kafka/cache/high traffic。
+5. 10 分钟 AWS/NoSQL/gRPC gap。
+6. 5 分钟反向提问。
+
+检查标准：
+
+- 每个回答都能落到项目类/表/配置。
+- 每个回答都能说出 trade-off。
+- 遇到没做过的东西能诚实讲迁移路径。
+- 不把 Redis、Kafka、microservices 当万能答案。
+
+## 18. 最后一轮复习顺序
 
 interview前一天建议这样复习：
 
 1. 读 `docs/domain-state-flow-cn.md`，把状态流转和锁顺序过一遍。
 2. 读本文第 5 到 8 节，重点练幂等、锁、Outbox、DelayJob。
-3. 读 `docs/mybatis-sql-learning-cn.md` 的锁、索引、事务、`EXPLAIN` 部分。
-4. 读 `docs/kafka-learning-cn.md` 的 producer/consumer 配置和 DLT 部分。
-5. 对着第 14 节 Q&A 口头模拟 30 分钟。
+3. 读 `docs/mybatis-sql-and-migration-cn.md` 的锁、索引、事务、`EXPLAIN` 部分。
+4. 读 `docs/events-outbox-inbox-kafka-cn.md` 的 producer/consumer 配置和 DLT 部分。
+5. 对着问答总库（`interview-qa-bank-cn.md`）的速记二十问口头模拟 30 分钟。
 
 最终目标不是背出所有类名，而是能做到：
 
@@ -818,3 +852,116 @@ interview前一天建议这样复习：
 任何一个设计问题
 都能回到一个具体请求、具体表、具体锁、具体失败场景来解释。
 ```
+
+## 19. 最终压缩版：强回答素材
+
+> [!IMPORTANT]
+> 如果只记 12 句话，记这些：
+
+1. Authorization 不是扣款，而是 hold credit。
+2. Posting 才把 reserved amount 转成 posted balance。
+3. Statement 是审计快照，不是实时 SUM。
+4. Repayment 必须同时推进 statement 和 account。
+5. API 幂等靠 unique constraint，不靠 JVM memory。
+6. 同账户额度并发靠 `SELECT ... FOR UPDATE`。
+7. Kafka 不替代 DB transaction。
+8. Outbox 解决 publish intent 和业务状态的 dual-write。
+9. Inbox 解决 consumer side effect 重复执行。
+10. Cache 只保存可重建 snapshot，不缓存额度。
+11. High traffic 先定位瓶颈，不是先加机器。
+12. Microservices 是边界和组织问题，不是越拆越好。
+
+> [!TIP]
+> 最终 60 秒硬核版可以这样讲：
+
+> 我的项目是一个 credit card issuer backend，核心是 authorization、posting、statement、repayment。
+> 我用 Spring Boot 和 MySQL/MyBatis 实现主交易链路，用 domain object 管状态机和金额 invariant。
+> 对重复请求，API 层用 `Idempotency-Key` 和数据库 unique constraint；对同账户并发额度，使用
+> `SELECT ... FOR UPDATE` 锁 `credit_accounts` 行；对异步通知，使用
+> Transactional Outbox + Kafka + Consumer Inbox，承认 at-least-once 并让 consumer 幂等。
+> 对读扩展，我实现了 Caffeine L1 + Redis L2 的 statement GET cache，只缓存 statement read model；
+> 旧版 card snapshot cache 已删除，因为 stale card status 会影响 authorization。生产上我会用 Actuator/CloudWatch 观测 API latency、DB lock wait、
+> Kafka lag、Outbox/DelayJob backlog、Redis hit ratio 和 JVM GC。这个项目还没真实上 AWS 和 NoSQL，
+> 但我能说明 ECS/RDS/ElastiCache/MSK 的部署映射，以及 NoSQL 更适合 read model 而不是核心账务 transaction。
+
+## 20. 反向提问准备
+
+真实 interview 最后通常会让你问问题。
+
+不要只问：
+
+```text
+团队氛围怎么样？
+```
+
+可以问更贴岗位的问题：
+
+### 问题 1：架构演进
+
+```text
+JD 提到 PayPay Card 正在挑战当前架构。
+目前团队更关注从 monolith 到 microservices 的拆分，
+还是先提升现有系统的 reliability、observability 和 delivery speed？
+```
+
+为什么好：
+
+- 呼应 JD。
+- 显示你理解架构演进不是盲目换技术。
+
+### 问题 2：一致性边界
+
+```text
+在信用卡核心链路里，哪些场景团队认为必须强一致，
+哪些场景可以接受 eventual consistency？
+```
+
+为什么好：
+
+- 直接命中金融后端核心。
+- 也能引出 Outbox、Kafka、cache 的讨论。
+
+### 问题 3：高流量挑战
+
+```text
+目前高流量瓶颈更多来自数据库锁竞争、外部依赖延迟、Kafka backlog，
+还是应用层资源，例如 thread pool 和 connection pool？
+```
+
+为什么好：
+
+- 显示你知道性能瓶颈有层次。
+
+### 问题 4：Legacy modernization
+
+```text
+JD 提到有 Java EE legacy。
+团队现在是倾向 strangler pattern 渐进迁移，
+还是在某些领域做较大的 rewrite？
+```
+
+为什么好：
+
+- 显示你知道 legacy 风险。
+
+### 问题 5：Cloud operations
+
+```text
+服务在 AWS ECS 上运行时，团队主要用 CloudWatch 还是也接入 Prometheus/Grafana？
+对业务指标比如 authorization latency、Kafka lag、Outbox backlog 有没有统一 SLO？
+```
+
+为什么好：
+
+- 把 AWS、observability、业务可靠性连起来。
+
+### 问题 6：Cache/NoSQL
+
+```text
+团队对 Redis/NoSQL 的使用边界是怎样的？
+哪些数据会进入 distributed cache，哪些仍然坚持以 RDBMS transaction 为准？
+```
+
+为什么好：
+
+- 显示你不会为了性能牺牲正确性。

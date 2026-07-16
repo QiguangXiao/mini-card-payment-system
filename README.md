@@ -59,8 +59,10 @@ See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-gui
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
 See [PayPay Card JD Fit Guide](docs/paypay-card-jd-fit-cn.md) for a JD-to-project
-evidence map, prioritized gap analysis, and answer templates tied to this
-project.
+evidence map and prioritized gap analysis.
+See [Interview Q&A Bank](docs/interview-qa-bank-cn.md) for the complete question
+bank: quick-recall answers, deep-dive questions, system design, troubleshooting,
+red-flag answers, and follow-up drill-downs.
 See [PayPay Card JD Alignment Review](docs/paypay-card-jd-alignment-review-cn.md)
 for an opinionated, independent assessment: what is already strong, what is
 over-invested, what to strengthen now versus defer, and an interview-prep plan

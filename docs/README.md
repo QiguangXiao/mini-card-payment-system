@@ -71,7 +71,9 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| `paypay-card-jd-fit-cn.md` + `paypay-card-backend-interview-guide-cn.md` | ⏳ | 拟重度去重，合并为一份更精炼的"JD 对照 + 题库"（保留有价值的深挖 Q&A） |
+| [`interview-qa-bank-cn.md`](interview-qa-bank-cn.md) | ✅ | **问答总库（2026-07-16 重组）**：收拢原 jd-fit 的回答模板（Q1–Q7）、深挖题库（Q8–Q80）、系统设计题、排障题、red flag 回答、追问速查，以及原 guide 的速记二十问（速Q1–速Q20，逐题标注对应深挖题，重复问答以"速记 + 深挖"两档并存） |
+| [`paypay-card-jd-fit-cn.md`](paypay-card-jd-fit-cn.md) | ✅ | 瘦身为纯"JD 对照与证据"（JD 映射 + 项目锚点 + gap + 面试官视角，5564→781 行）；问答迁至问答总库，distributed lock 专题独立，复习流程迁至 guide |
+| [`paypay-card-backend-interview-guide-cn.md`](paypay-card-backend-interview-guide-cn.md) | ✅ | 冲刺手册：主链路速记 + 九个高频专题 + 自测清单 + 复习路线/最后一周计划/最后一轮顺序/压缩素材/反向提问（后四者自 jd-fit 迁入）；顺带修正了迁入段落里指向已归档文档的旧引用 |
 | [`paypay-card-jd-alignment-review-cn.md`](paypay-card-jd-alignment-review-cn.md) | ✅ | 独立评审（已对齐最新代码），保留；§8 三次复盘（2026-07-12）：复习边界（收窄/删除/略读/学透四档）+ 面试数字清单（12 个锚点数字与"只记公式"规则） |
 | [`interview-readiness-review-cn.md`](interview-readiness-review-cn.md) | ✅ | 面试就绪评审（2026-07-02）：优秀设计证据、JD 对齐评分 78%、展示排序、题库答题要点（含 Q13 missed-cron）、三个缺陷时序推演（missed-cron 已按 reconciliation 修复，见 §6.9）、过度工程清单、ROI 改进计划，**文末附 15 条英文背诵材料** |
 
@@ -80,6 +82,12 @@
 | 文档 | 状态 | 说明 |
 | --- | --- | --- |
 | `trilingual-glossary-cn.md` | ⏳ | 中英日术语表，保留 |
+
+### 10. 独立专题（Standalone Topics）
+
+| 文档 | 状态 | 说明 |
+| --- | --- | --- |
+| [`distributed-lock-cn.md`](distributed-lock-cn.md) | ✅ | 原 jd-fit §33 独立成篇：distributed lock 是什么、生产四种做法、10 个必答问题、典型事故；money path 为什么用 DB row lock / DB lease，以及项目里唯一一把 best-effort Redis 锁（statement cache 重建 single-flight）为什么可以例外 |
 
 ---
 
