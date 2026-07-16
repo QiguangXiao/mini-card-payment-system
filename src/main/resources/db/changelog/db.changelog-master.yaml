@@ -11,3 +11,5 @@ databaseChangeLog:
       file: db/changelog/changes/0005-remove-statement-notification-event.sql
   - include:
       file: db/changelog/changes/0006-remove-repayment-notification-event.sql
+  - include:
+      file: db/changelog/changes/0007-remove-statement-overdue-status.sql

@@ -18,7 +18,7 @@ class HttpRequestLoggingFilterTest {
 
     @Test
     void logsRequestStartAndCompletion(CapturedOutput output) throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/statements");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, new MockFilterChain());
@@ -27,7 +27,7 @@ class HttpRequestLoggingFilterTest {
         assertThat(output)
                 .contains("request_started")
                 .contains("method=GET")
-                .contains("path=/api/health")
+                .contains("path=/api/statements")
                 .contains("request_completed")
                 .contains("status=200")
                 .contains("durationMs=");
@@ -35,7 +35,7 @@ class HttpRequestLoggingFilterTest {
 
     @Test
     void reusesIncomingRequestIdAndExposesItThroughMdcDuringRequest() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/statements");
         request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, "client-request_001.trace:abc");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -51,7 +51,7 @@ class HttpRequestLoggingFilterTest {
 
     @Test
     void replacesUnsafeIncomingRequestId() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/statements");
         request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, "bad request\nid");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -68,7 +68,7 @@ class HttpRequestLoggingFilterTest {
 
     @Test
     void replacesOverlongIncomingRequestId() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/health");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/statements");
         String overlong = "a".repeat(65);
         request.addHeader(HttpRequestLoggingFilter.REQUEST_ID_HEADER, overlong);
         MockHttpServletResponse response = new MockHttpServletResponse();

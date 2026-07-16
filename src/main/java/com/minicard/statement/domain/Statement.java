@@ -29,14 +29,13 @@ import lombok.experimental.Accessors;
  * CLOSED          -> PARTIALLY_PAID  applyRepayment()  部分还款
  * CLOSED          -> PAID            applyRepayment()  一次性全额结清（终态，PAID 后拒绝再收款）
  * PARTIALLY_PAID  -> PAID            applyRepayment()  补足剩余金额（终态）
- * OVERDUE         -> PAID            applyRepayment()  逾期后全额结清；部分还款保持 OVERDUE 不回 PARTIALLY_PAID
  * </pre>
  *
  * <p>划分逻辑：CLOSED 由 billing-cycle batch（StatementJob）推动，没有 API 能出账；
  * 还款转换由两条入口共同推动——手动还款 API（RepaymentController）和 due date 自动扣款
  * DelayJob（AutoRepaymentDelayJobHandler），二者最终都走 RepaymentService 同一事务。
- * OVERDUE 预留给未来的 due-date 逾期扫描：当前没有任何代码路径写入 OVERDUE，
- * restore()/applyRepayment() 只是提前兼容这个状态。</p>
+ * 逾期（例如 OVERDUE 状态）刻意不建模：需要 due-date 逾期扫描 cron 写入才有意义，
+ * 没有写入方的状态只会在状态机里留死分支。</p>
  */
 @Getter
 @Accessors(fluent = true)
@@ -225,10 +224,7 @@ public final class Statement {
             bumpVersion();
             return;
         }
-        // OVERDUE 账单部分还款后仍然逾期；CLOSED 账单部分还款才进入 PARTIALLY_PAID。
-        if (status != StatementStatus.OVERDUE) {
-            status = StatementStatus.PARTIALLY_PAID;
-        }
+        status = StatementStatus.PARTIALLY_PAID;
         bumpVersion();
     }
 
@@ -322,11 +318,6 @@ public final class Statement {
             case PAID -> {
                 if (!paidFull) {
                     throw new IllegalArgumentException("paid statement requires full paidAmount");
-                }
-            }
-            case OVERDUE -> {
-                if (paidFull) {
-                    throw new IllegalArgumentException("overdue statement cannot be fully paid");
                 }
             }
         }

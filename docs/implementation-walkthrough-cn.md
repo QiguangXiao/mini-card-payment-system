@@ -136,7 +136,8 @@ repayment 阶段减少 `postedBalance`，恢复可用额度。
 - `minimum_payment_amount`：当前简化规则计算出的最低还款额。
 - `paid_amount`：还款阶段累计已经还入这张账单的金额；生成账单时为 0。
 - `transaction_count`：本期收录的 posted transactions 数量。
-- `status`：生成后为 `CLOSED`，还款后进入 `PARTIALLY_PAID` 或 `PAID`，未来逾期阶段会使用 `OVERDUE`。
+- `status`：生成后为 `CLOSED`，还款后进入 `PARTIALLY_PAID` 或 `PAID`。逾期状态刻意不建模：
+  没有写入方（逾期扫描 job）的状态只是状态机死分支，需要时再和扫描 job 一起加回来。
 - `version`：statement read model 的正式单调版本，生成时为 0；还款等会改变 GET 展示快照的状态变化会递增它，
   用于 Redis L2 的 CAS/tombstone。
 

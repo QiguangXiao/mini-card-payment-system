@@ -530,7 +530,6 @@ interview 高分回答：
 本项目已有几个健康相关入口：
 
 ```http
-GET /api/health
 GET /actuator/health
 GET /actuator/health/liveness
 GET /actuator/health/readiness
@@ -595,7 +594,7 @@ cardId=card-123
 amount=100 JPY
 ```
 
-如果 ALB health check 只打 `/api/health`，而这个接口不检查 DB，那么可能出现：
+如果 ALB health check 只打 `/actuator/health/liveness`，而 liveness 组不检查 DB，那么可能出现：
 
 ```text
 task-new Spring Boot 已经能返回 OK
@@ -1065,7 +1064,7 @@ ECS service -> previous task definition revision
 
 ```text
 10:00:00 task-new starts
-10:00:10 /api/health returns OK
+10:00:10 /actuator/health/liveness returns OK
 10:00:11 ALB marks task-new healthy
 10:00:12 request A routed to task-new
 10:00:12 Hikari pool still cannot connect to RDS
@@ -1158,7 +1157,7 @@ request B returns 500
 
 | 请求类型 | 示例 | 主要瓶颈 | 是否容易水平扩容 |
 | --- | --- | --- | --- |
-| 轻读请求 | `GET /api/health`, `GET /actuator/health/liveness` | ALB + app CPU | 很容易 |
+| 轻读请求 | `GET /actuator/health/liveness` | ALB + app CPU | 很容易 |
 | 普通读请求 | `GET /api/statements/{id}` 命中 Redis/Caffeine | app + Redis | 比较容易 |
 | 回源读请求 | statement cache miss 后查 RDS | RDS read IO/CPU | 中等 |
 | 金融写请求 | `POST /api/authorizations` | RDS transaction + row lock + risk | 最难 |
@@ -1551,7 +1550,7 @@ interview 中不要虚报：
 
 1. 先理解 VPC、subnet、security group，画出 ALB -> ECS -> RDS/Redis/MSK。
 2. 把 Spring Boot 打成 Docker image，推到 ECR。
-3. 用 ECS/Fargate 跑一个 task，能访问 `/api/health`。
+3. 用 ECS/Fargate 跑一个 task，能访问 `/actuator/health/liveness`。
 4. 加 ALB target group，验证 readiness 和滚动发布。
 5. 接 RDS MySQL，确认 Liquibase 策略。
 6. 接 ElastiCache Redis，验证 cache down 时能回源。

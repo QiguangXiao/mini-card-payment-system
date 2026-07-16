@@ -108,8 +108,12 @@ public class ResilientCallHelper {
      * </pre>
      *
      * <p>所以一次 {@code call()} 的真实 HTTP 次数是 0 次（限流 / 断路 OPEN / 4xx permanent）、
-     * 1 次（成功）或最多 3 次（transient 重试）。出口只有四种，区分标准是“provider HTTP
-     * 是否真的发生过”，它决定 durable attempts 预算被谁消耗：</p>
+     * 1 次（成功）或最多 3 次（transient 重试）。出口只有四种。注意 durable attempts 的
+     * 区分标准不是“HTTP 是否发生”——断路 OPEN 时 HTTP 同样没发生，但 attempts 照样 +1
+     * （由 openCircuitBreakerDoesNotConsumeRateLimiterPermit 测试钉住）。真实标准是
+     * “失败是否反映 provider 侧状况”：RateLimiter 拒绝是本 pod 的主动节流，不含 provider
+     * 健康信息，消耗 attempts 会让自我保护把 delivery 错误推向 DEAD；断路 OPEN 由 provider
+     * 近期失败率撑起，attempts 照常推进，让持续 brownout 的 delivery 走向 DEAD 而不是无限重试：</p>
      *
      * <pre>
      * 成功                                    -> 返回 providerMessageId，worker markSent

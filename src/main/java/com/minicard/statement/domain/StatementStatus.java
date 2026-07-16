@@ -12,9 +12,5 @@ public enum StatementStatus {
     /**
      * Repayment 已完全结清账单。
      */
-    PAID,
-    /**
-     * 未来 due-date scheduler 使用：到期后仍未还清。
-     */
-    OVERDUE
+    PAID
 }

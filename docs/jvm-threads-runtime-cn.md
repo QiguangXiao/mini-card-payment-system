@@ -219,11 +219,12 @@ Kafka listener：consumer thread poll → IntegrationEventReader.read → @Trans
 ### 5.1 liveness / readiness 与 Actuator
 
 ```text
-GET /api/health                → public liveness（只证明 HTTP 应用还活着，不查 DB/Kafka/JVM）
-GET /actuator/health{,/liveness,/readiness}   → readiness 组含 db
+GET /actuator/health/liveness    → liveness（只证明进程还活着，不查 DB/Kafka/JVM）
+GET /actuator/health/readiness   → readiness 组含 db
+GET /actuator/health             → 聚合视图
 ```
 
-`HealthController`（`monitoring.api`）的 `/api/health` 故意不查依赖：public liveness 只回答"进程是否活着"，DB 抖动不该让容器反复重启；JVM/GC/thread/dependency health 属 management plane，交给 Actuator/Micrometer。
+liveness/readiness 全部交给 Actuator，不自建 health controller：liveness probe 故意不查依赖——它只回答"进程是否活着"，DB 抖动不该让容器反复重启；JVM/GC/thread/dependency health 属 management plane，由 Actuator/Micrometer 承担。
 
 > **DB 挂了 liveness 要失败吗？** 不一定。DB 暂时不可用通常应让 **readiness 失败**（把实例摘出流量、保留进程等依赖恢复），而不是 liveness 失败（更适合进程内不可恢复问题）。Full GC/deadlock/线程池耗尽可能导致 readiness 失败或超时；但别让一个昂贵的 liveness endpoint 自己制造故障；heapdump/threaddump/env 等高危 endpoint 不该公开暴露。
 

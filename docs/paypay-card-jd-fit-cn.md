@@ -585,8 +585,7 @@ docs/aws-ecs-deployment-cn.md
 
 当前已有：
 
-- `HealthController` 暴露轻量 `/api/health`。
-- Spring Boot Actuator 暴露 `/actuator/health`、`/actuator/health/liveness`、`/actuator/health/readiness`、`/actuator/metrics`。
+- Spring Boot Actuator 暴露 `/actuator/health`、`/actuator/health/liveness`、`/actuator/health/readiness`、`/actuator/metrics`（不自建 health controller，避免和 Actuator 重复）。
 - readiness 包含 `db`。
 - `docs/jvm-monitoring-learning-cn.md` 解释 JVM memory、GC、threads、Actuator。
 - `docs/thread-runtime-learning-cn.md` 解释 Tomcat、scheduler、worker、Kafka listener 线程模型。

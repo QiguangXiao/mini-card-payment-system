@@ -109,7 +109,7 @@ repaymentId2 = 99999999-9999-9999-9999-999999999992
 | `Authorization` / `authorizations.status` | `PENDING`, `APPROVED`, `DECLINED`, `POSTED`, `EXPIRED` | `PENDING -> APPROVED -> POSTED` | 授权 API、presentment API、expiry job |
 | `CreditAccount` / `credit_accounts` | `status`, `reserved_amount`, `posted_balance` | `reserved 0 -> 1500 -> 0`, `posted 0 -> 1500 -> 1000 -> 0` | 授权、posting、repayment、expiry |
 | `CardTransaction` / `card_transactions.status` | `PENDING`, `POSTED` | `PENDING -> POSTED`，之后被 statement 收录 | presentment API、statement generation |
-| `Statement` / `statements.status` | `CLOSED`, `PARTIALLY_PAID`, `PAID`, `OVERDUE` | 新建 `CLOSED -> PARTIALLY_PAID -> PAID` | statement batch、repayment |
+| `Statement` / `statements.status` | `CLOSED`, `PARTIALLY_PAID`, `PAID` | 新建 `CLOSED -> PARTIALLY_PAID -> PAID` | statement batch、repayment |
 | `Repayment` / `repayments.status` | `PENDING`, `RECEIVED` | 每次还款 `PENDING -> RECEIVED` | repayment API、auto debit |
 | `DelayJob` / `delay_jobs.status` | `PENDING`, `PROCESSING`, `DONE`, `DEAD` | `AUTO_REPAYMENT` 从 `PENDING -> DONE` | due-date auto repayment |
 | `OutboxEvent` / `outbox_events.status` | `PENDING`, `PROCESSING`, `PUBLISHED`, `DEAD` | 每个业务事件先 `PENDING`，后台发布后 `PUBLISHED` | 各业务 service、Outbox worker |

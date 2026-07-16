@@ -151,7 +151,7 @@ toolchain 是让“我以为用 Java 21”变成“构建系统保证用 Java 21
 
 ### 2.1 `@RestController`
 
-位置：`AuthorizationController`、`PresentmentController`、`HealthController`
+位置：`AuthorizationController`、`PresentmentController`、`RepaymentController`
 
 `@RestController` 等价于：
 
