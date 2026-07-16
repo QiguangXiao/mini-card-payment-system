@@ -415,8 +415,8 @@ repayment:
     # bank-base-url 指向模拟银行；接真实银行/行内扣款网关时只改这里，调用方式不变。
     bank-base-url: http://localhost:8080
     # 默认模拟银行扣款成功；改成 false 可演示"业务性拒绝"路径（200+FAILED，如余额不足）：
-    # AutoRepaymentService.debitStatement 收到失败后抛 AutoRepaymentFailedException，
-    # DelayJob 按退避重试——客户补足余额后重试就能成功，所以这类失败不进快速 DEAD。
+    # AutoRepaymentService.debitStatement 收到失败后抛普通运行期异常，DelayJob 按退避重试；
+    # 客户补足余额后重试就能成功，所以这类失败不进快速 DEAD。
     simulated-success: true
     failure-reason: simulated insufficient bank balance
 
@@ -491,7 +491,7 @@ resilience4j:
         # provider 4xx 是请求/配置永久错误，不代表 push provider brownout；不计入断路器失败率。
         ignore-exceptions:
           - io.github.resilience4j.ratelimiter.RequestNotPermitted
-          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
+          - com.minicard.notification.application.delivery.NotificationDeliveryPermanentException
       notificationEmail:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
@@ -506,7 +506,7 @@ resilience4j:
         # provider 4xx 是请求/配置永久错误，不代表 email provider brownout；不计入断路器失败率。
         ignore-exceptions:
           - io.github.resilience4j.ratelimiter.RequestNotPermitted
-          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
+          - com.minicard.notification.application.delivery.NotificationDeliveryPermanentException
       # 银行扣款只配熔断，不配 R4j retry：DelayJob 已是带退避的 durable retry 层，
       # 双层重试相乘会放大银行压力；bulkhead 也不需要——调用方跑在有界 worker pool 里。
       # 对应代码：BankDebitGatewayAdapter 的 @CircuitBreaker(name="bankDebit")。
@@ -522,7 +522,7 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         # 银行 4xx 是契约/配置永久错误，不代表银行网关 brownout；不计入断路器失败率。
         ignore-exceptions:
-          - com.minicard.repayment.application.BankDebitPermanentException
+          - com.minicard.repayment.application.autorepayment.BankDebitPermanentException
   retry:
     instances:
       # intra-attempt 快速重试：对 provider 抖动做几次内存级退避重试；跨重启的 durable 重试由投递状态机负责。
@@ -542,7 +542,7 @@ resilience4j:
         ignore-exceptions:
           - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
-          - com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException
+          - com.minicard.notification.application.delivery.NotificationDeliveryPermanentException
   ratelimiter:
     instances:
       # notification provider 的 client-side throttling：限制"本 pod"打外部 provider 的速率。

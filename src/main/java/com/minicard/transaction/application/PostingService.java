@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
-import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
+import com.minicard.authorization.application.AuthorizationDomainEventAppender;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
@@ -58,8 +58,8 @@ public class PostingService {
     private final AuthorizationRepository authorizationRepository;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final AuthorizationDomainEventPublisher authorizationEventPublisher;
-    private final CardTransactionDomainEventPublisher transactionEventPublisher;
+    private final AuthorizationDomainEventAppender authorizationEventAppender;
+    private final CardTransactionDomainEventAppender transactionEventAppender;
     private final Clock clock;
 
     /**
@@ -146,8 +146,8 @@ public class PostingService {
         // 两个 aggregate 都发生了状态转换，但语义不同：
         // Authorization event 表达授权生命周期结束；CardTransaction event 表达用户交易已入账。
         // 两类 Outbox rows 仍和本次 posting transaction 一起提交，避免消息与状态不一致。
-        publishAuthorizationEvents(authorization);
-        publishCardTransactionEvents(pending);
+        appendAuthorizationEvents(authorization);
+        appendCardTransactionEvents(pending);
         return pending;
     }
 
@@ -229,9 +229,9 @@ public class PostingService {
      * <p>事务归属：只由 {@link #post(PostPresentmentCommand)} 调用，加入同一个
      * {@code @Transactional} 边界；Outbox row 必须和 authorization POSTED 状态一起提交。</p>
      */
-    private void publishAuthorizationEvents(Authorization authorization) {
+    private void appendAuthorizationEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
-            authorizationEventPublisher.append(event);
+            authorizationEventAppender.append(event);
         }
     }
 
@@ -241,9 +241,9 @@ public class PostingService {
      * <p>事务归属：只由 {@link #post(PostPresentmentCommand)} 调用，加入同一个
      * {@code @Transactional} 边界；Outbox row 必须和交易 POSTED 状态一起提交。</p>
      */
-    private void publishCardTransactionEvents(CardTransaction transaction) {
+    private void appendCardTransactionEvents(CardTransaction transaction) {
         for (CardTransactionDomainEvent event : transaction.pullDomainEvents()) {
-            transactionEventPublisher.append(event);
+            transactionEventAppender.append(event);
         }
     }
 }

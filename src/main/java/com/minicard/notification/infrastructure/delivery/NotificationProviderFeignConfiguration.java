@@ -1,6 +1,6 @@
 package com.minicard.notification.infrastructure.delivery;
 
-import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
+import com.minicard.notification.application.delivery.NotificationDeliveryPermanentException;
 import feign.Response;
 import feign.codec.ErrorDecoder;
 import org.springframework.context.annotation.Bean;

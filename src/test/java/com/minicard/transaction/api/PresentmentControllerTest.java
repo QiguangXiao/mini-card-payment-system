@@ -18,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -54,6 +55,25 @@ class PresentmentControllerTest {
                         .value("fb6933e2-20ea-4268-b1c2-21c6705b1884"))
                 .andExpect(jsonPath("$.status").value("POSTED"))
                 .andExpect(jsonPath("$.postedAt").exists());
+    }
+
+    @Test
+    void rejectsLowercaseCurrencyAtHttpBoundary() throws Exception {
+        mockMvc.perform(post("/api/presentments")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "networkTransactionId": "ntx-001",
+                                  "authorizationId": "fb6933e2-20ea-4268-b1c2-21c6705b1884",
+                                  "amount": 100,
+                                  "currency": "jpy"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        // HTTP contract 不合法时不能进入 posting transaction；否则会无意义地获取 row lock。
+        verifyNoInteractions(postingService);
     }
 
     private CardTransaction postedTransaction() {

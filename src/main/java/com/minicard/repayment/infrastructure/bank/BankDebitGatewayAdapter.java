@@ -1,9 +1,9 @@
 package com.minicard.repayment.infrastructure.bank;
 
-import com.minicard.repayment.application.BankDebitGateway;
-import com.minicard.repayment.application.BankDebitPermanentException;
-import com.minicard.repayment.application.BankDebitRequest;
-import com.minicard.repayment.application.BankDebitResult;
+import com.minicard.repayment.application.autorepayment.BankDebitGateway;
+import com.minicard.repayment.application.autorepayment.BankDebitPermanentException;
+import com.minicard.repayment.application.autorepayment.BankDebitRequest;
+import com.minicard.repayment.application.autorepayment.BankDebitResult;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
@@ -90,8 +90,8 @@ public class BankDebitGatewayAdapter implements BankDebitGateway {
     /**
      * 瞬态 fallback：熔断打开、超时、5xx、连接失败都转成 failed 结果。
      *
-     * <p>失败结果会让 AutoRepaymentService 抛 AutoRepaymentFailedException，
-     * DelayJob 按退避重试——这就是"不知道银行状态时绝不入账"的 fail-safe 路径。</p>
+     * <p>失败结果会让 AutoRepaymentService 抛普通运行期异常，DelayJob 按退避重试；
+     * 只有 4xx 契约错误保留独立的 permanent 类型并快速进入 DEAD。</p>
      */
     @SuppressWarnings("unused")
     public BankDebitResult fallback(BankDebitRequest request, Throwable throwable) {

@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.minicard.notification.application.delivery.NotificationDeliveryThrottledException;
-import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
+import com.minicard.notification.application.delivery.NotificationDeliveryPermanentException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;

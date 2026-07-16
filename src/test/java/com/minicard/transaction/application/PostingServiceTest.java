@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
+import com.minicard.authorization.application.AuthorizationDomainEventAppender;
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
@@ -50,8 +50,8 @@ class PostingServiceTest {
     private AuthorizationRepository authorizationRepository;
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
-    private AuthorizationDomainEventPublisher authorizationEventPublisher;
-    private CardTransactionDomainEventPublisher transactionEventPublisher;
+    private AuthorizationDomainEventAppender authorizationEventAppender;
+    private CardTransactionDomainEventAppender transactionEventAppender;
     private PostingService service;
 
     @BeforeEach
@@ -60,15 +60,15 @@ class PostingServiceTest {
         authorizationRepository = mock(AuthorizationRepository.class);
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
-        authorizationEventPublisher = mock(AuthorizationDomainEventPublisher.class);
-        transactionEventPublisher = mock(CardTransactionDomainEventPublisher.class);
+        authorizationEventAppender = mock(AuthorizationDomainEventAppender.class);
+        transactionEventAppender = mock(CardTransactionDomainEventAppender.class);
         service = new PostingService(
                 transactionRepository,
                 authorizationRepository,
                 cardRepository,
                 creditAccountRepository,
-                authorizationEventPublisher,
-                transactionEventPublisher,
+                authorizationEventAppender,
+                transactionEventAppender,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -101,11 +101,11 @@ class PostingServiceTest {
         verify(transactionRepository).update(transaction);
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
-        verify(authorizationEventPublisher).append(event.capture());
+        verify(authorizationEventAppender).append(event.capture());
         assertThat(event.getValue()).isInstanceOf(AuthorizationPostedDomainEvent.class);
         ArgumentCaptor<CardTransactionDomainEvent> transactionEvent =
                 ArgumentCaptor.forClass(CardTransactionDomainEvent.class);
-        verify(transactionEventPublisher).append(transactionEvent.capture());
+        verify(transactionEventAppender).append(transactionEvent.capture());
         assertThat(transactionEvent.getValue()).isInstanceOf(CardTransactionPostedDomainEvent.class);
     }
 
@@ -130,8 +130,8 @@ class PostingServiceTest {
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
         verify(transactionRepository, never()).update(any());
-        verify(authorizationEventPublisher, never()).append(any());
-        verify(transactionEventPublisher, never()).append(any());
+        verify(authorizationEventAppender, never()).append(any());
+        verify(transactionEventAppender, never()).append(any());
     }
 
     @Test

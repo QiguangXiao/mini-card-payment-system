@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 /**
  * 银行扣款结果（bank debit result / 口座振替結果）。

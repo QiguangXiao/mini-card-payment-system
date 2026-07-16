@@ -12,7 +12,6 @@ import com.minicard.notification.domain.delivery.NotificationChannel;
 import com.minicard.notification.domain.delivery.NotificationDelivery;
 import com.minicard.notification.domain.delivery.NotificationDeliveryRepository;
 import com.minicard.notification.domain.delivery.NotificationDeliverySender;
-import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
 import com.minicard.notification.domain.delivery.NotificationDeliveryStatus;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;

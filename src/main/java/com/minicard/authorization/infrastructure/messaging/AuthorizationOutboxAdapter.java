@@ -8,7 +8,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.minicard.authorization.application.AuthorizationDomainEventPublisher;
+import com.minicard.authorization.application.AuthorizationDomainEventAppender;
 import com.minicard.shared.domain.Money;
 import com.minicard.authorization.domain.event.AuthorizationApprovedDomainEvent;
 import com.minicard.authorization.domain.event.AuthorizationDeclinedDomainEvent;
@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class AuthorizationOutboxAdapter implements AuthorizationDomainEventPublisher {
+public class AuthorizationOutboxAdapter implements AuthorizationDomainEventAppender {
 
     private static final String AGGREGATE_TYPE = "Authorization";
     private static final String AUTHORIZATION_APPROVED = "authorization.approved";

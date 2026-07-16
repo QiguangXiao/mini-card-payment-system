@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.infrastructure.delayjob;
 
 import java.util.UUID;
 
@@ -6,6 +6,8 @@ import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobHandler;
 import com.minicard.delayjob.DelayJobPermanentException;
 import com.minicard.delayjob.DelayJobType;
+import com.minicard.repayment.application.autorepayment.AutoRepaymentService;
+import com.minicard.repayment.application.autorepayment.BankDebitPermanentException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

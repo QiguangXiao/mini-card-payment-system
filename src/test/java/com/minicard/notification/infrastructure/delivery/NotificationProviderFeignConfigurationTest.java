@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
-import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
+import com.minicard.notification.application.delivery.NotificationDeliveryPermanentException;
 import feign.Request;
 import feign.Response;
 import feign.codec.ErrorDecoder;

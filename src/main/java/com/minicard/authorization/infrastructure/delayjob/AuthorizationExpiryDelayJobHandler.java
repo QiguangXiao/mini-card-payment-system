@@ -1,7 +1,8 @@
-package com.minicard.authorization.application;
+package com.minicard.authorization.infrastructure.delayjob;
 
 import java.util.UUID;
 
+import com.minicard.authorization.application.AuthorizationExpiryService;
 import com.minicard.delayjob.DelayJobHandler;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobType;
@@ -11,11 +12,13 @@ import org.springframework.stereotype.Component;
 /**
  * Authorization expiry 的 DelayJob handler，把通用延迟任务分发到具体业务用例。
  *
+ * <p>关键词：授权过期任务, inbound adapter, DelayJob dispatch,
+ * authorization expiry, オーソリ期限切れジョブ。</p>
+ *
  * <p>interview重点：DelayJobWorker 不认识授权业务，只按 jobType 找 handler；
  * 这样 scheduler 是通用机制，业务动作仍留在 authorization application layer。</p>
  */
 @Component
-// @RequiredArgsConstructor 适合这种纯 dispatch adapter；没有额外初始化逻辑，只需要注入业务 service。
 @RequiredArgsConstructor
 public class AuthorizationExpiryDelayJobHandler implements DelayJobHandler {
 

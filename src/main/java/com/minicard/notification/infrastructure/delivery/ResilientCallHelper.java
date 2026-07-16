@@ -3,7 +3,7 @@ package com.minicard.notification.infrastructure.delivery;
 import java.util.function.Supplier;
 
 import com.minicard.notification.application.delivery.NotificationDeliveryThrottledException;
-import com.minicard.notification.domain.delivery.NotificationDeliveryPermanentException;
+import com.minicard.notification.application.delivery.NotificationDeliveryPermanentException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiter;

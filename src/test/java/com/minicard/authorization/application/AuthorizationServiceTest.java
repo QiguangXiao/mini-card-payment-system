@@ -47,7 +47,7 @@ class AuthorizationServiceTest {
     private CardRepository cardRepository;
     private CreditAccountRepository creditAccountRepository;
     private RiskAssessmentService riskAssessmentService;
-    private AuthorizationDomainEventPublisher eventPublisher;
+    private AuthorizationDomainEventAppender eventAppender;
     private AuthorizationExpiryJobScheduler expiryJobScheduler;
     private AuthorizationService service;
 
@@ -57,7 +57,7 @@ class AuthorizationServiceTest {
         cardRepository = mock(CardRepository.class);
         creditAccountRepository = mock(CreditAccountRepository.class);
         riskAssessmentService = mock(RiskAssessmentService.class);
-        eventPublisher = mock(AuthorizationDomainEventPublisher.class);
+        eventAppender = mock(AuthorizationDomainEventAppender.class);
         expiryJobScheduler = mock(AuthorizationExpiryJobScheduler.class);
         when(riskAssessmentService.assess(any())).thenReturn(RiskDecision.approve(20));
         service = new AuthorizationService(
@@ -66,7 +66,7 @@ class AuthorizationServiceTest {
                 cardRepository,
                 creditAccountRepository,
                 riskAssessmentService,
-                eventPublisher,
+                eventAppender,
                 expiryJobScheduler,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
@@ -92,7 +92,7 @@ class AuthorizationServiceTest {
         verify(expiryJobScheduler).schedule(result);
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
-        verify(eventPublisher).append(event.capture());
+        verify(eventAppender).append(event.capture());
         assertThat(event.getValue()).isInstanceOf(AuthorizationApprovedDomainEvent.class);
         assertThat(event.getValue().authorizationId()).isEqualTo(result.id());
     }
@@ -216,7 +216,7 @@ class AuthorizationServiceTest {
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
         verify(expiryJobScheduler, never()).schedule(any());
-        verify(eventPublisher, never()).append(any());
+        verify(eventAppender, never()).append(any());
     }
 
     @Test

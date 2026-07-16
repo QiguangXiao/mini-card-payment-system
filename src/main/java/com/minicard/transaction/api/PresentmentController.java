@@ -29,8 +29,8 @@ public class PresentmentController {
 
     @PostMapping
     public CardTransactionResponse postPresentment(
-            // @Valid 只负责 HTTP boundary；非 HTTP 调用仍要靠 PostPresentmentCommand/domain constructor 防御。
-            // 如果省略，空 networkTransactionId 可能一路进入数据库唯一键，错误会变成低层 SQL 异常。
+            // @Valid 拦住不可信 HTTP 输入；Money/CardTransaction 仍保留业务 invariant，
+            // 但 command 只做已校验 DTO 到 application use case 的类型传递，不重复一套字段校验。
             @Valid @RequestBody CreatePresentmentRequest request
     ) {
         PostPresentmentCommand command = new PostPresentmentCommand(

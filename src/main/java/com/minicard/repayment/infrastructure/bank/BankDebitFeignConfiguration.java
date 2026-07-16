@@ -1,6 +1,6 @@
 package com.minicard.repayment.infrastructure.bank;
 
-import com.minicard.repayment.application.BankDebitPermanentException;
+import com.minicard.repayment.application.autorepayment.BankDebitPermanentException;
 import feign.Response;
 import feign.codec.ErrorDecoder;
 import org.springframework.context.annotation.Bean;

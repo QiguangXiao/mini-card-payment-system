@@ -41,7 +41,7 @@ public class AuthorizationExpiryService {
     private final AuthorizationRepository authorizationRepository;
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final AuthorizationDomainEventPublisher eventPublisher;
+    private final AuthorizationDomainEventAppender eventAppender;
     private final Clock clock;
 
     /**
@@ -97,7 +97,7 @@ public class AuthorizationExpiryService {
         // 任何一步失败都会 rollback，避免释放额度但状态/事件缺失。
         creditAccountRepository.update(account);
         authorizationRepository.update(authorization);
-        publishDomainEvents(authorization);
+        appendDomainEvents(authorization);
         log.info(
                 "authorization_expired authorizationId={} accountId={} amount={} currency={}",
                 authorization.id(),
@@ -113,11 +113,11 @@ public class AuthorizationExpiryService {
      * <p>事务归属：只由 {@link #expire(UUID)} 调用，加入同一个 {@code @Transactional}
      * 边界；Outbox row 必须和 account release、authorization EXPIRED 状态一起提交。</p>
      */
-    private void publishDomainEvents(Authorization authorization) {
+    private void appendDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
             // expire() 产生业务事实，Outbox adapter 负责 durable publish intent。
             // 这样过期状态和 expired event 仍处在同一个 transaction boundary。
-            eventPublisher.append(event);
+            eventAppender.append(event);
         }
     }
 }

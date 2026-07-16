@@ -11,7 +11,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.minicard.messaging.event.IntegrationEvent;
 import com.minicard.messaging.outbox.OutboxEvent;
 import com.minicard.messaging.outbox.OutboxEventRepository;
-import com.minicard.transaction.application.CardTransactionDomainEventPublisher;
+import com.minicard.transaction.application.CardTransactionDomainEventAppender;
 import com.minicard.transaction.domain.event.CardTransactionDomainEvent;
 import com.minicard.transaction.domain.event.CardTransactionPostedDomainEvent;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +26,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class CardTransactionOutboxAdapter implements CardTransactionDomainEventPublisher {
+public class CardTransactionOutboxAdapter implements CardTransactionDomainEventAppender {
 
     private static final String AGGREGATE_TYPE = "CardTransaction";
     private static final String CARD_TRANSACTION_POSTED = "card_transaction.posted";

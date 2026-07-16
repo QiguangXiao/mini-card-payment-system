@@ -41,8 +41,8 @@ class AuthorizationExpiryServiceTest {
         AuthorizationRepository authorizationRepository = mock(AuthorizationRepository.class);
         CardRepository cardRepository = mock(CardRepository.class);
         CreditAccountRepository accountRepository = mock(CreditAccountRepository.class);
-        AuthorizationDomainEventPublisher eventPublisher =
-                mock(AuthorizationDomainEventPublisher.class);
+        AuthorizationDomainEventAppender eventAppender =
+                mock(AuthorizationDomainEventAppender.class);
         Authorization authorization = approvedAuthorization();
         CreditAccount account = account();
         Card card = new Card("card-123", account.id(), CardStatus.ACTIVE);
@@ -54,7 +54,7 @@ class AuthorizationExpiryServiceTest {
                 authorizationRepository,
                 cardRepository,
                 accountRepository,
-                eventPublisher,
+                eventAppender,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 
@@ -65,12 +65,12 @@ class AuthorizationExpiryServiceTest {
         // This order documents the transaction's financial consistency story:
         // release the locked balance, persist both aggregates, then append the
         // event intent before the surrounding transaction commits.
-        var order = inOrder(accountRepository, authorizationRepository, eventPublisher);
+        var order = inOrder(accountRepository, authorizationRepository, eventAppender);
         order.verify(accountRepository).update(account);
         order.verify(authorizationRepository).update(authorization);
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
-        order.verify(eventPublisher).append(event.capture());
+        order.verify(eventAppender).append(event.capture());
         assertThat(event.getValue()).isInstanceOf(AuthorizationExpiredDomainEvent.class);
         assertThat(event.getValue().authorizationId()).isEqualTo(authorization.id());
     }
@@ -80,8 +80,8 @@ class AuthorizationExpiryServiceTest {
         AuthorizationRepository authorizationRepository = mock(AuthorizationRepository.class);
         CardRepository cardRepository = mock(CardRepository.class);
         CreditAccountRepository accountRepository = mock(CreditAccountRepository.class);
-        AuthorizationDomainEventPublisher eventPublisher =
-                mock(AuthorizationDomainEventPublisher.class);
+        AuthorizationDomainEventAppender eventAppender =
+                mock(AuthorizationDomainEventAppender.class);
         Authorization authorization = declinedAuthorization();
         when(authorizationRepository.findByIdForUpdate(authorization.id()))
                 .thenReturn(Optional.of(authorization));
@@ -89,7 +89,7 @@ class AuthorizationExpiryServiceTest {
                 authorizationRepository,
                 cardRepository,
                 accountRepository,
-                eventPublisher,
+                eventAppender,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
 
@@ -97,7 +97,7 @@ class AuthorizationExpiryServiceTest {
 
         verify(cardRepository, never()).findById(any());
         verify(accountRepository, never()).findByIdForUpdate(any());
-        verify(eventPublisher, never()).append(any());
+        verify(eventAppender, never()).append(any());
     }
 
     private Authorization approvedAuthorization() {

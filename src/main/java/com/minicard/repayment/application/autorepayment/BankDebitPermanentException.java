@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 /**
  * 银行扣款的永久失败：请求契约或配置错误（HTTP 4xx），重试同一请求也不会成功。

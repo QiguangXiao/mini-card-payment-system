@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 import java.time.LocalDate;
 import java.util.UUID;

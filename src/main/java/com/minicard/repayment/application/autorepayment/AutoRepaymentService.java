@@ -1,10 +1,12 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
-import com.minicard.shared.domain.Money;
+import com.minicard.repayment.application.ReceiveRepaymentCommand;
+import com.minicard.repayment.application.RepaymentService;
 import com.minicard.repayment.domain.Repayment;
+import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementStatus;
@@ -60,8 +62,8 @@ public class AutoRepaymentService {
      * <p>顺序非常关键：先拿到 bank debit 成功，再调用 repayment posting；
      * 否则会把银行未实际收到的钱错误记入 credit account。</p>
      *
-     * <p>无返回值：成功 / 已还清都正常结束（DelayJob 标 DONE），
-     * 失败抛 {@link AutoRepaymentFailedException} 让 DelayJob 进入 retry / DEAD。</p>
+     * <p>无返回值：成功 / 已还清都正常结束（DelayJob 标 DONE）；除明确的 permanent failure 外，
+     * 普通运行期异常都由 DelayJob 统一进入 retry/backoff。</p>
      */
     public void debitStatement(UUID statementId) {
         Statement statement = statementRepository.findById(statementId)
@@ -87,8 +89,8 @@ public class AutoRepaymentService {
         ));
         if (!debitResult.successful()) {
             // 失败时不能调用 RepaymentService，否则会把未收到的银行资金误记为已还款。
-            // 抛异常让 DelayJob retry/DEAD；后续可在这里追加通知或 overdue flow。
-            throw new AutoRepaymentFailedException(
+            // 普通运行期异常会让 DelayJob retry；permanent failure 则由 handler 单独翻译为快速 DEAD。
+            throw new IllegalStateException(
                     "bank debit failed for statement " + statement.id()
                             + ": " + debitResult.failureReason()
             );

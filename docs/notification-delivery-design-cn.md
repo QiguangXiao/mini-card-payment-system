@@ -296,7 +296,8 @@ Feign 真正发 HTTP。谁先拒绝，更内层就一步都不执行。一次 `h
   这种情况直接交给 worker 的 durable retry/DEAD 状态机更清楚。
 - **4xx 是 permanent failure**：`NotificationProviderFeignConfiguration` 的 ErrorDecoder 把 provider 4xx 转成
   `NotificationDeliveryPermanentException`；R4j Retry 不重试它，CircuitBreaker 不把它计入 provider brownout，
-  worker 也直接把 delivery 标成 DEAD。5xx/timeout/连接失败才按 transient failure 走 R4j retry 和 durable retry。
+  worker 也直接把 delivery 标成 DEAD。这个类型放在 `application/delivery`，因为它是 port 的失败分类信号，
+  不是 Notification aggregate invariant。5xx/timeout/连接失败才按 transient failure 走 R4j retry 和 durable retry。
 - **Feign 自身不重试**：保持 Spring Cloud OpenFeign 默认 `Retryer.NEVER_RETRY`，让重试预算只在 R4j 一层；
   否则会变成 R4j 次数 × Feign 次数的真实 HTTP 请求。真实 provider 接入后还应分类 4xx/5xx：
   4xx 多半是确定性 contract/config failure，不应像 timeout/5xx 一样重试。

@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 /**
  * 银行扣款端口（bank debit port / 口座振替）。

@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.infrastructure.external;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

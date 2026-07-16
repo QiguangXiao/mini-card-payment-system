@@ -64,7 +64,7 @@ public class AuthorizationService {
     private final CardRepository cardRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final RiskAssessmentService riskAssessmentService;
-    private final AuthorizationDomainEventPublisher eventPublisher;
+    private final AuthorizationDomainEventAppender eventAppender;
     private final AuthorizationExpiryJobScheduler expiryJobScheduler;
     private final Clock clock;
 
@@ -74,7 +74,7 @@ public class AuthorizationService {
             CardRepository cardRepository,
             CreditAccountRepository creditAccountRepository,
             RiskAssessmentService riskAssessmentService,
-            AuthorizationDomainEventPublisher eventPublisher,
+            AuthorizationDomainEventAppender eventAppender,
             AuthorizationExpiryJobScheduler expiryJobScheduler,
             Clock clock
     ) {
@@ -92,7 +92,7 @@ public class AuthorizationService {
         this.cardRepository = cardRepository;
         this.creditAccountRepository = creditAccountRepository;
         this.riskAssessmentService = riskAssessmentService;
-        this.eventPublisher = eventPublisher;
+        this.eventAppender = eventAppender;
         this.expiryJobScheduler = expiryJobScheduler;
         this.clock = clock;
     }
@@ -156,7 +156,7 @@ public class AuthorizationService {
         // 阶段 6：把 domain events 交给 Outbox adapter，和状态变更同事务提交。
         // Domain event 已在 approve()/decline() 状态转换时产生。
         // Service 只负责在同一 transaction boundary 内把事实交给 Outbox adapter。
-        publishDomainEvents(persisted);
+        appendDomainEvents(persisted);
         return persisted;
     }
 
@@ -311,11 +311,11 @@ public class AuthorizationService {
      * <p>事务归属：只由 {@link #authorize(AuthorizationCommand)} 调用，加入同一个
      * {@code @Transactional} 边界；Outbox row 必须和 authorization/account 状态一起提交。</p>
      */
-    private void publishDomainEvents(Authorization authorization) {
+    private void appendDomainEvents(Authorization authorization) {
         for (AuthorizationDomainEvent event : authorization.pullDomainEvents()) {
             // 这里仍然是同一个 DB transaction：Outbox row 和 authorization 状态一起 commit。
             // Kafka publish 由后台 outbox worker 完成，主交易不用等待 broker。
-            eventPublisher.append(event);
+            eventAppender.append(event);
         }
     }
 

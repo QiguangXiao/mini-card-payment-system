@@ -6,6 +6,7 @@ import java.util.UUID;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -30,8 +31,8 @@ public record CreatePresentmentRequest(
         @NotNull @DecimalMin(value = "0.00", inclusive = false)
         BigDecimal amount,
 
-        /** ISO 4217 三位货币代码。 */
-        @NotBlank @Size(min = 3, max = 3)
+        /** ISO 4217 三位大写货币代码；真实代码识别由 HTTP adapter 的 Currency 转换完成。 */
+        @NotBlank @Pattern(regexp = "[A-Z]{3}")
         String currency
 ) {
 }

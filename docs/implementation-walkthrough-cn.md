@@ -480,15 +480,15 @@ curl -X POST http://localhost:8080/api/authorizations \
 入口：
 
 - `Authorization.approve(...)` / `Authorization.decline(...)`
-- `AuthorizationService.publishDomainEvents(authorization)`
-- `AuthorizationDomainEventPublisher.append(event)`
+- `AuthorizationService.appendDomainEvents(authorization)`
+- `AuthorizationDomainEventAppender.append(event)`
 - `AuthorizationOutboxAdapter.append(event)`
 
 处理：
 
 - 如果结果是 `APPROVED`，`Authorization.approve(...)` 在状态变成 `APPROVED` 的同一处记录 `AuthorizationApprovedDomainEvent`。
 - 如果结果是 `DECLINED`，`Authorization.decline(...)` 在状态变成 `DECLINED` 的同一处记录 `AuthorizationDeclinedDomainEvent`。
-- `AuthorizationService` 保存 authorization 后调用 `authorization.pullDomainEvents()`，把领域事实交给 `AuthorizationDomainEventPublisher`。
+- `AuthorizationService` 保存 authorization 后调用 `authorization.pullDomainEvents()`，把领域事实交给 `AuthorizationDomainEventAppender`。
 - 创建 `IntegrationEvent`，包含 event metadata 和 JsonNode payload。
 - `eventId = UUID.randomUUID()`，由 `AuthorizationOutboxAdapter` 生成，因为它是 outbound message id，不是 authorization aggregate id。
 - 写入 `outbox_events`，状态为 `PENDING`。
@@ -1055,7 +1055,8 @@ curl -X POST http://localhost:8080/api/repayments \
    durable retry 层）也不加 bulkhead（跑在有界的 auto-repay 专用 worker 池里）。
 
    如果配置成失败（`repayment.auto-debit.simulated-success: false`），银行回 `FAILED`，
-   `AutoRepaymentService` 抛 `AutoRepaymentFailedException`。
+   `AutoRepaymentService` 抛普通运行期异常，让 DelayJob 进入 retry/backoff；
+   只有银行 4xx 契约错误使用独立的 permanent 类型并快速进入 DEAD。
    这时不会写 `repayments`，因为银行资金并没有到账。
 
 4. 自动构造 `ReceiveRepaymentCommand`
@@ -1361,9 +1362,9 @@ PayPay Card interview提示：
 
 - `com.minicard.delayjob` 是通用 DelayJob 机制，包含任务状态机、repository port、poller、claimer、worker、recoverer、handler interface。
 - `com.minicard.delayjob.mybatis` 是 DelayJob 的 MyBatis persistence 细节。
-- `com.minicard.authorization.infrastructure.delayjob` 是 Authorization 使用 DelayJob 的 adapter，只负责写入到期任务。
-- `com.minicard.repayment.infrastructure.delayjob` 是 Statement due-date 自动扣款使用 DelayJob 的 adapter。
-- `com.minicard.repayment.application.AutoRepaymentDelayJobHandler` 是 `AUTO_REPAYMENT` 的业务 handler。
+- `com.minicard.authorization.infrastructure.delayjob` 放授权过期的 DelayJob scheduler/handler adapter。
+- `com.minicard.repayment.infrastructure.delayjob` 放到期自动扣款的 DelayJob scheduler/handler adapter。
+- `com.minicard.repayment.application.autorepayment` 放自动扣款 use case 和银行扣款 port；handler 只负责把通用 DelayJob contract 翻译成这个 use case。
 - `com.minicard.infrastructure.scheduler` 只放 Spring `ThreadPoolTaskScheduler` 配置；它不包含业务 poller 逻辑。
 - `com.minicard.infrastructure.async` 只放后台 worker executor 配置；它不代表业务异步流程本身。
 - `com.minicard.infrastructure.transaction` 放共享 `TransactionOperations` helper，让 worker 可以显式拆分 handler transaction 和 finalize transaction。

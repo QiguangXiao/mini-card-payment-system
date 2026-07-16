@@ -5,9 +5,9 @@ import java.time.LocalDate;
 import java.util.Currency;
 import java.util.UUID;
 
-import com.minicard.repayment.application.BankDebitPermanentException;
-import com.minicard.repayment.application.BankDebitRequest;
-import com.minicard.repayment.application.BankDebitResult;
+import com.minicard.repayment.application.autorepayment.BankDebitPermanentException;
+import com.minicard.repayment.application.autorepayment.BankDebitRequest;
+import com.minicard.repayment.application.autorepayment.BankDebitResult;
 import com.minicard.shared.domain.Money;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -48,7 +48,7 @@ class BankDebitGatewayAdapterTest {
 
         BankDebitResult result = adapter.debit(request());
 
-        // 业务性拒绝不是异常：failed 结果让 AutoRepaymentService 抛 AutoRepaymentFailedException，
+        // 业务性拒绝不是 permanent：AutoRepaymentService 走普通失败，
         // DelayJob 按退避重试——客户补足余额后就能成功。
         assertThat(result.successful()).isFalse();
         assertThat(result.failureReason()).isEqualTo("insufficient balance");

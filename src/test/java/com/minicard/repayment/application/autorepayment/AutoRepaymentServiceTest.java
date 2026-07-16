@@ -1,4 +1,4 @@
-package com.minicard.repayment.application;
+package com.minicard.repayment.application.autorepayment;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -8,8 +8,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.minicard.shared.domain.Money;
+import com.minicard.repayment.application.ReceiveRepaymentCommand;
+import com.minicard.repayment.application.RepaymentService;
 import com.minicard.repayment.domain.Repayment;
+import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementRepository;
 import com.minicard.statement.domain.StatementLineSource;
@@ -83,7 +85,7 @@ class AutoRepaymentServiceTest {
                 .thenReturn(BankDebitResult.failed("insufficient bank balance"));
 
         assertThatThrownBy(() -> service.debitStatement(statement.id()))
-                .isInstanceOf(AutoRepaymentFailedException.class)
+                .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("insufficient bank balance");
         verify(repaymentService, never()).receive(any());
     }

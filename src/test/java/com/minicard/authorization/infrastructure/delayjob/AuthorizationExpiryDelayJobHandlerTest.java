@@ -1,8 +1,9 @@
-package com.minicard.authorization.application;
+package com.minicard.authorization.infrastructure.delayjob;
 
 import java.time.Instant;
 import java.util.UUID;
 
+import com.minicard.authorization.application.AuthorizationExpiryService;
 import com.minicard.delayjob.DelayJob;
 import com.minicard.delayjob.DelayJobType;
 import org.junit.jupiter.api.Test;
