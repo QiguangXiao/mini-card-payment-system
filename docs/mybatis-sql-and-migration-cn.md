@@ -333,10 +333,11 @@ src/main/resources/db/changelog/changes/
   0004-remove-historical-risk-projection.sql 删除历史 Risk projection
   0005-remove-statement-notification-event.sql 清理已移除的 statement notification 数据
   0006-remove-repayment-notification-event.sql 清理已移除的 repayment notification / Outbox / Inbox 数据
+  0007-remove-statement-overdue-status.sql   删除死状态 OVERDUE 后收紧 statements 的 CHECK 约束
 ```
 
 - `build.gradle` 引入 `org.liquibase:liquibase-core`；`application.yml` 关闭 Spring SQL init（`spring.sql.init.mode: never`），指向 master changelog。
-- `0001` 是 baseline，但已执行 changeset 不再回写；当前 schema 真相是按顺序应用 `0001–0006`：`0003/0004` 删除投影表，`0005/0006` 清理已删除事件支线的历史工作数据。
+- `0001` 是 baseline，但已执行 changeset 不再回写；当前 schema 真相是按顺序应用 `0001–0007`：`0003/0004` 删除投影表，`0005/0006` 清理已删除事件支线的历史工作数据，`0007` 在删除 Java 侧 OVERDUE 死状态后收紧 CHECK 约束——注意它只 DROP/ADD CHECK，不做数据迁移，因为该状态从未有写入方。
 - 这正是 forward-only migration：即使学习项目已收窄边界，也不修改本机可能已执行的 `0001/0002` 破坏 Liquibase checksum。
 - 有价值的历史迁移案例保留在 `docs/archive/database-migration-liquibase-cn.md`，用于学习 schema evolution；active changelog 则专注当前 source of truth。
 
@@ -358,11 +359,11 @@ docker compose exec mysql mysql -uroot -prootpassword mini_card \
   -e "SELECT ID, AUTHOR, FILENAME, DATEEXECUTED, ORDEREXECUTED FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED"
 ```
 
-新增一次 schema 变化（如给 `repayments` 加 `failure_reason`）时，从新编号继续追加，例如 `0007-add-repayment-failure-reason.sql`：
+新增一次 schema 变化（如给 `repayments` 加 `failure_reason`）时，从新编号继续追加，例如 `0008-add-repayment-failure-reason.sql`：
 
 ```sql
 --liquibase formatted sql
---changeset mini-card:0007-add-repayment-failure-reason dbms:mysql
+--changeset mini-card:0008-add-repayment-failure-reason dbms:mysql
 --comment: Store bank debit failure reason for retry and support investigation.
 --preconditions onFail:MARK_RAN onError:HALT
 --precondition-sql-check expectedResult:0 SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'repayments' AND column_name = 'failure_reason'

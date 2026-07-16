@@ -52,6 +52,11 @@
 
 ## 2. 三个家族
 
+> 严格说项目里有第四个同构家族：Notification delivery（同样是 poller/claimer/worker/recoverer
+> + lease，但叠加了 Resilience4j 限流/熔断/两层重试预算），它独立成篇见
+> [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md)。
+> 面试口径说"四套 claim 循环"（见问答总库新追问 13）；本文聚焦下面三个通用家族。
+
 ### 2.1 家族 A：`delayjob`（通用延迟业务动作）
 
 **4 个执行者，职责单一**：
