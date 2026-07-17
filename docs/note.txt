@@ -55,3 +55,22 @@ DispacherServlet：
 
 
 
+
+但说实话，@PathVariable UUID id 这种场景下，加约束注解的必要性很低，原因：
+
+类型转换本身已经是一道校验了——如果 URL 里传的字符串不是合法 UUID 格式，StringToUUIDConverter 转换阶段就会抛 MethodArgumentTypeMismatchException，根本走不到你方法体里，也走不到 @Validated 那一层
+@PathVariable 对应的 URL 路径段，Spring MVC 路由匹配不到就是 404，不存在"传了个空字符串"的情况（除非你路径写了 /{id} 但用户访问 /，那是路由不匹配，不是校验问题）
+
+所以 @Validated + 约束注解在 @PathVariable 场景下用得比较少，更多是用在：
+
+@RequestParam 上的约束（比如分页参数 @RequestParam @Min(1) int page）
+Service 层方法参数校验（@Validated 加在 Service 类上，配合 @NotNull、@Size 等）
+@RequestBody 对象内部字段的级联校验（不过那个走的是 @Valid，是另一套机制，HandlerMethodArgumentResolver 里直接调用 Validator，不经过 AOP 代理）
+
+你要是准备面试，这个点可能会被追问："@Valid 和 @Validated 有什么区别"——这俩机制完全不同：
+
+@Valid（javax/jakarta.validation）：用在 @RequestBody 参数上，MVC 参数解析阶段直接调用校验，不走AOP
+@Validated（Spring 自己的注解）：用在类/方法上，走AOP代理，能做分组校验（@Validated(Group.class)），@Valid 不支持分组
+
+
+
