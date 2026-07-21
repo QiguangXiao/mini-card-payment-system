@@ -1,6 +1,9 @@
-# Kafka 配置与interview学习笔记
+# Kafka 配置与 interview 学习笔记
 
-> **归档对齐说明（2026-07）**：文中的 `statement-events` / `repayment-events` topic 及 `statement.closed` / `repayment.received` 事件现已移除；现行仅 `authorization-events` 与 `transaction-events` 两个 topic。Kafka 机制讲解（consumer group、retry/DLT、Inbox）仍与现行实现一致。文中相关段落已按现行架构清理，其余内容保持原样；现行事件文档以 [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) 为准。
+> **归档对齐说明（2026-07）**：正文已按现行 Kafka 配置类、topic、consumer、
+> error handler、Inbox 和 Notification delivery 路径逐节对齐。已删除的 statement/repayment
+> topic 与 risk/ledger projection 不再出现在“当前实现”说明中。精简入口见
+> [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md)。
 
 这份文档专门解释本项目里的 Kafka 配置、它们解决什么问题，以及 PayPay Card / 信用卡发卡后台interview里可能被追问的点。
 
@@ -21,15 +24,25 @@ Kafka 负责异步消息传递，但不替代数据库事务，也不消除 cons
 
 ## 1. 当前 Kafka 配置在哪里
 
-主要在三个地方：
+主要在五个地方：
 
 - `src/main/resources/application.yml`
-- `KafkaMessagingConfiguration`
+- `KafkaTopicsConfiguration`
+- `KafkaConsumerConfiguration`
+- `KafkaTopicsProperties` / `KafkaConsumersProperties`
 - `KafkaOutboxMessagePublisher`
 
 `application.yml` 配置 broker、producer、consumer 和 listener 行为。
 
-`KafkaMessagingConfiguration` 创建 topic、consumer container factory、error handler 和 DLT。
+`KafkaTopicsConfiguration` 声明两个业务 topic 和 Notification DLT（均为 3 partitions / 1 replica）。
+
+`KafkaConsumerConfiguration` **不再手工创建 container factory**。Spring Boot 默认 factory
+读取 `spring.kafka.consumer/listener` 配置，并自动装入唯一的 `DefaultErrorHandler` bean；
+失败 record 再按 `ListenerExecutionFailedException.groupId` 路由到对应 DLT。这样新增 listener
+不会因为忘记指定某个自定义 factory 而静默失去 DLT 保护。
+
+`KafkaTopicsProperties` 绑定 topic 名；`KafkaConsumersProperties` 绑定 notification group-id
+和 concurrency，同时为 DLT group routing 提供经过启动期校验的配置。
 
 `KafkaOutboxMessagePublisher` 把 Outbox row 转成 Kafka record，并等待 broker acknowledgement。
 
@@ -78,7 +91,7 @@ spring:
 本项目为什么这么配：
 
 - 金融系统里事件丢失比延迟更严重。
-- Authorization / posting 事件用于通知、风控投影、后续运营视图，不能随便丢。
+- Authorization / posting 事件用于通知；Outbox 记录的发布意图不能随便丢。
 
 interview回答：
 
@@ -144,7 +157,9 @@ spring:
 
 interview回答：
 
-> 如果非常强调单 producer 严格顺序，可以降低 in-flight requests；但在本项目里，同一 authorization 的业务顺序主要依赖 Kafka key 进入同一 partition，以及事件本身按业务状态产生。Producer idempotence 也降低 retry 乱序风险。
+> 降低 in-flight requests 只能约束单 producer connection 内的 retry 顺序。本项目先用 aggregate key
+> 建立 partition affinity，并用 idempotent producer 降低 Kafka client retry 乱序；但 Outbox 多 worker
+> 仍可能并发发送同一 aggregate 的不同 row，因此业务 consumer 最终还要校验状态/version。
 
 ### 3.4 `delivery.timeout.ms` 和 `request.timeout.ms`
 
@@ -176,6 +191,11 @@ outbox:
 - `send-timeout-ms` 是应用等待 `kafkaTemplate.send(...).get(...)` 的时间。
 - `processing-timeout-seconds` 是 Outbox row 的 lease 时间。
 - lease 应该大于正常 send timeout，避免健康 worker 还在等 broker ack 时，被 recoverer 当成 stuck event。
+
+当前时间关系是：单次 broker request 3s、应用等待 ack 5s、Kafka delivery 总上限 10s、Outbox lease 30s。
+一个容易漏讲的 at-least-once 窗口是：`.get(5s)` 超时不代表 producer future 一定已取消，record 仍可能
+稍后进入 Kafka；worker 同时会把 Outbox 放回 retry，之后再次发送。这个 duplicate 不是靠猜测成功解决，
+而是靠稳定 `eventId`、Inbox 和业务唯一键吸收。
 
 interview回答：
 
@@ -252,7 +272,7 @@ spring:
 适合本项目的原因：
 
 - 学习环境里新建 consumer group，希望能读到已有事件，方便观察。
-- 对投影类 consumer，例如 Risk feature projection，从早期事件开始构建状态更合理。
+- Notification 有 Inbox 和业务唯一键，可以安全演示历史 replay / duplicate delivery。
 
 生产环境注意：
 
@@ -290,7 +310,7 @@ interview回答：
 
 ## 5. Topic 和 partition 配置
 
-### 5.1 authorization / transaction / statement / repayment events topics
+### 5.1 authorization / transaction events topics
 
 代码：
 
@@ -301,16 +321,6 @@ TopicBuilder.name(properties.authorizationEvents())
         .build();
 
 TopicBuilder.name(properties.transactionEvents())
-        .partitions(3)
-        .replicas(1)
-        .build();
-
-TopicBuilder.name(properties.statementEvents())
-        .partitions(3)
-        .replicas(1)
-        .build();
-
-TopicBuilder.name(properties.repaymentEvents())
         .partitions(3)
         .replicas(1)
         .build();
@@ -368,21 +378,21 @@ new ProducerRecord<>(
 当前 `partitionKey` 按事件所属业务范围选择：
 
 - authorization events：authorization id。
-- card transaction events：card transaction id。
-- statement events：credit account id。
-- repayment events：credit account id。
+- card-transaction events：card transaction id。
 
 效果：
 
 ```text
 同一 authorization 的 approved / posted / expired 等事件进入同一 partition
-同一账户的 statement / repayment 事件可以按 account scope 保持顺序
-不同 authorization 或不同 account 可以并行处理
+同一 card transaction 的事件进入同一 partition
+不同 authorization 或不同 card transaction 可以并行处理
 ```
 
 interview回答：
 
-> Kafka 只保证 partition 内顺序，不保证 topic 全局顺序。我们按 aggregate 或 account scope 选择 partition key，例如 authorizationId、cardTransactionId、creditAccountId，让真正需要有序的业务范围进入同一 partition。
+> Kafka 只保证 partition 内 broker 顺序，不保证 topic 全局顺序。当前按 source aggregate
+> 选择 authorizationId 或 cardTransactionId 作为 key；同时 Outbox 并发 publish 可能改变业务事件
+> 到达 broker 的先后，所以 consumer 仍要做状态/version 防御，不能把 key 当成端到端顺序证明。
 
 ### 5.3 replicas = 1
 
@@ -415,12 +425,17 @@ messaging:
   consumers:
     notification:
       group-id: mini-card-notification-v1
+      concurrency: 2
 ```
 
 代码：
 
 ```java
-factory.setConcurrency(2); // notification
+@KafkaListener(
+    topics = "${messaging.topics.authorization-events}",
+    groupId = "${messaging.consumers.notification.group-id}",
+    concurrency = "${messaging.consumers.notification.concurrency}"
+)
 ```
 
 Consumer group 语义：
@@ -440,9 +455,13 @@ authorization event
 
 Concurrency 语义：
 
-- `concurrency=3` 表示该 application instance 内最多启动 3 个 listener threads。
+- 当前 `concurrency=2` 表示每个 listener container 在单个 application instance 内启动 2 个 consumer threads。
 - 但最大有效并行度受 partition 数限制。
 - topic 只有 3 partitions 时，单个 group 的有效并行度最多就是 3。
+
+注意：`AuthorizationNotificationListener` 和 `CardTransactionNotificationListener` 是两个 container，
+分别订阅不同 topic，但共享同一个 notification group identity；`concurrency=2` 会分别应用到两个
+container。水平扩 pod 后，同一 topic 的总有效并行 consumer 仍不会超过它的 3 个 partitions。
 
 interview回答：
 
@@ -457,18 +476,19 @@ DefaultErrorHandler errorHandler = new DefaultErrorHandler(
         recoverer,
         new FixedBackOff(1000L, 2L)
 );
-errorHandler.addNotRetryableExceptions(EventContractException.class);
+errorHandler.addNotRetryableExceptions(InvalidIntegrationEventException.class);
 ```
 
 含义：
 
 - 普通异常：间隔 1 秒，重试 2 次。
 - 仍失败：发送到对应 DLT。
-- `EventContractException`：不重试，直接 DLT。
+- `InvalidIntegrationEventException`：不重试，直接 DLT。
 
 为什么 contract error 不重试：
 
-- JSON 格式错误、header 和 payload eventId 不一致、eventVersion 不支持，这些不会因为等 1 秒就变好。
+- JSON 格式错误、缺少必填 envelope/payload 字段、UUID/decimal/time 格式非法，这些不会因为等 1 秒就变好。
+- 当前 reader 只要求 `eventVersion >= 1`，并不会拒绝未知高版本；消费侧版本协商仍是 production gap。
 - 重试只会堵住 partition。
 
 DLT topic：
@@ -477,10 +497,11 @@ DLT topic：
 mini-card.notification.dlt.v1
 ```
 
-为什么每个 consumer group 一个 DLT：
+为什么按 consumer group 路由 DLT：
 
-- 同一条消息可能对一个 consumer group 成功、对另一个失败。
-- 分开 DLT 后，可以只修复和 replay 失败的 consumer，不影响其他 bounded context。
+- 同一条消息未来可能被多个 group 独立消费，失败归属必须跟随“哪个职责失败”，不能只根据 source topic 猜。
+- 当前只有 Notification group 和 `mini-card.notification.dlt.v1`，但路由表保留 per-group 形状。
+- 未知 group 会 fail loud：DLT publish 失败、原 partition offset 不推进，而不是猜一个 DLT 后静默丢错地方。
 
 代码里保留 original partition：
 
@@ -528,13 +549,15 @@ Payload 是 `IntegrationEvent` envelope：
 
 为什么 header 和 payload 都有 eventId/eventType：
 
-- Header 方便 routing、logging、DLT 排查，不用先 parse JSON。
-- Payload 是完整事件内容，方便持久化和 replay。
-- `IntegrationEventReader` 会校验 header 和 payload 是否一致，避免 transport contract 损坏。
+- Header 方便 logging、kcat 和 DLT 排查，不用先 parse JSON；它不参与业务 routing/correctness。
+- Body envelope 是完整、自描述的 durable event contract，负责 dispatch、幂等和 replay。
+- `IntegrationEventReader` 刻意不校验 header/body 一致性。这样 console producer 或修复脚本只要提供
+  合法 body 就能 replay；代价是 header 写错会误导排障，因此 publisher 测试要钉住两者同源。
 
 interview回答：
 
-> Header 是 transport-level metadata，payload 是 durable event contract。两者重复关键字段是为了提高可观测性和校验能力。
+> Header 是 transport-level observability metadata，body envelope 是 correctness contract。
+> 重复关键字段是为了提高排障效率，不是让 consumer 维护两份业务真相。
 
 ## 9. 为什么还需要 Outbox
 
@@ -582,32 +605,33 @@ interview回答：
 
 本项目有两种方式：
 
-### Notification
+当前 Notification 同时使用两层保护：
 
-`notifications.source_event_id` 有 unique constraint。
-
-同一个 eventId 重复消费时，不会创建重复 notification。
-
-### Risk Feature Projection
-
-使用 `consumer_inbox`：
+1. `consumer_inbox`：
 
 ```text
 consumer_name + event_id
 ```
 
-作为主键。
+作为主键；逻辑 consumer name 固定为 `notification-v1`，不跟着 Java listener 类名重构。
 
 处理流程：
 
 ```text
 begin transaction
   insert consumer_inbox row
-  update projection table
+  insert notifications intent（source_event_id unique）
+  fan-out APP_PUSH + EMAIL notification_deliveries
 commit
 ```
 
-如果 insert 失败，说明处理过，直接跳过 side effect。
+如果 Inbox claim 失败，说明该逻辑 consumer 已处理过，直接跳过 side effect。
+
+2. `notifications.source_event_id` unique constraint 是第二道业务幂等保护；
+   `notification_deliveries(notification_id, channel)` unique 防同一通知重复创建同渠道任务。
+
+当前没有 Risk Feature Projection consumer；它已在 2026-07 收缩中删除。实时风控 velocity
+直接走 Redis sliding window，不经过 Kafka projection。
 
 interview回答：
 
@@ -619,9 +643,12 @@ interview回答：
 
 只能保证 partition 内顺序，不保证 topic 全局顺序。
 
-本项目按事件语义选择 key：authorization lifecycle 用 authorizationId，交易入账用
-cardTransactionId，statement/repayment 用 creditAccountId。这样只保证需要的业务范围有序，
-不追求没有意义的全局顺序。
+本项目按 source aggregate 选择 key：authorization lifecycle 用 authorizationId，交易入账用
+cardTransactionId。这样只建立各自 partition affinity，不追求没有意义的 topic 全局顺序。
+
+还要注意 Outbox 有 4 个 publish workers：scheduler 单线程不等于严格发布顺序。多个 event
+可能并发等待 broker ack；需要依赖顺序的 consumer 仍应校验业务状态/version，不能只相信“数据库
+created_at 较早就一定先到 Kafka”。
 
 ### Kafka 是 exactly-once 吗？
 
@@ -706,6 +733,10 @@ Event 是跨 bounded context contract。
 - DLT alert 和 replay 工具
 - schema registry 或更严格的 event contract 管理
 - producer / consumer metrics dashboard
+
+当前尤其缺少 DLT consumer/monitor：error handler 会把 poison record 写入 Notification DLT，
+但没有 `@KafkaListener` 自动消费、告警或 replay。生产上应先告警和人工/受控重放，不能收到死信
+就自动回投 source topic，否则永久坏消息会形成 source → DLT → source 热循环。
 
 ## 13. 一句话总结
 

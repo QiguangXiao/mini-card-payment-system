@@ -178,8 +178,8 @@
 ### 3.3 Bounded context 的广度 > 深度（轻度过度）
 
 Notification consumer group + DLT 已经足够学习 consumer idempotency 与 dead-letter routing。
-继续按 `ToDo.md` 的 P3/P4/P5（refund / dispute / settlement）加领域，
-**只会增加广度，不增加面试说服力**——`ToDo.md` 自己也是这么判断的，这点你已经做对了。
+继续按 `remaining-domain-roadmap-cn.md` 的 P3/P4/P5（refund / dispute / settlement）加领域，
+**只会增加广度，不增加面试说服力**——该路线图自己也是这么判断的，这点你已经做对了。
 
 > [!WARNING]
 > "过度"的共同根源是同一个：**用"增加产出"代替"提高单位产出的说服力"。**
@@ -240,7 +240,7 @@ application 层只依赖 port 不变。这正好呼应 JD 的 "gRPC ... developm
 | 项 | 为什么可以先不做 |
 | --- | --- |
 | NoSQL 实操（引 DynamoDB 等） | 核心交易不该迁 NoSQL；现有 trade-off 论述对学习项目足够。**真要补也只补 read-model 投影，别动核心表。** |
-| Refund / Dispute / Settlement | `ToDo.md` 已正确判定为 P3–P5；只增广度不增说服力，概念能讲即可 |
+| Refund / Dispute / Settlement | `remaining-domain-roadmap-cn.md` 已正确判定为 P3–P5；只增广度不增说服力，概念能讲即可 |
 | 真正拆成微服务 | 会引入分布式事务/部署复杂度，稀释当前最强的"本地正确性"叙事；讲清"为什么不拆"反而更值钱 |
 | User / Auth / PII | 引入登录与安全设计，偏离金融一致性主线 |
 | Scala / C# | JD 写的是 "welcome / 望ましい"，不是必须；你的 Java 深度更值得打磨 |

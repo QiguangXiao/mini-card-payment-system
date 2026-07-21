@@ -1,6 +1,6 @@
 # Claimable Job 三大家族：DelayJob / Outbox / StatementJob
 
-> 本文合并自三份旧文档：`claimable-job-families-comparison-claude-cn.md`（三家族对比）、
+> 本文合并自三份旧文档：`claimable-job-families-comparison-cn.md`（三家族对比）、
 > `statement-job-design-cn.md`（StatementJob 单家族深入）、`async-workflows-comparison-cn.md`
 > （异步机制横向对比）。合并时**改正了一处明显过时**：`async-workflows` 把 statement 批处理
 > 描述成"日历驱动、没有 Claimer/Recoverer、不是 claimable job 的 `StatementBatchPoller/Service`"，

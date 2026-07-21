@@ -1,5 +1,9 @@
 # Statement Job 设计与对比说明
 
+> **归档对齐说明（2026-07）**：正文已对齐当前 daily reconciliation、单层
+> `statement_jobs`、账户级 transaction boundary、lease token 和 `application.yml`
+> 配置。历史 parent-batch 结构只保留在“之前实现”对比节，不代表当前代码。
+
 > 关键词：claimable job, DB claim, FOR UPDATE SKIP LOCKED, PROCESSING lease,
 > lease token, recover, sharding, fan-out, idempotency, fault isolation,
 > 請求ジョブ(せいきゅうジョブ)。
@@ -45,8 +49,8 @@
   的新状态。*如果* 不校验 token，一个 lease 过期后才返回的 worker 可能把别人
   正在处理的任务错误地标成 DONE。
 
-`statement` 的 job 现在是这个模式的 **reference 实现**，目标是让 `delayjob`、`outbox`
-之后可以对齐成同样的形状。
+`statement` 的 job 是这个模式的紧凑 **reference implementation**；`delayjob`、`outbox`
+已经采用同样的 claim/lease/recover 语义，但保留四类拆分和轻量 lease 列，不需要机械改成同一份代码。
 
 ---
 
@@ -56,8 +60,8 @@
 
 | 组件 | 职责 |
 | --- | --- |
-| `BillingCycleScheduler` | daily cron（JST），每天醒一次，只判断“今天要不要建本期 job” |
-| `StatementCycleService` | 计算 billing cycle（period / due date）、按账户数算分片数、原子创建 sharded jobs |
+| `BillingCycleScheduler` | daily cron（JST），每天醒一次，触发最近已关闭账期的 reconciliation |
+| `StatementCycleService` | 回看最近 N 个 close cycles，缺 cycle 才计算 period/due date、按待出账账户数算分片并原子创建 jobs |
 | `StatementJobDispatcher` | 一个类完成 poll / claim / 派发 / finalize / recover |
 | `StatementJobHandler` | 处理“一个分片”：取该 shard 的账户，逐个调用 generation |
 | `StatementGenerationService` | 处理“一个账户”：锁账户 → 快照交易 → 出账（独立小事务） |
@@ -73,8 +77,9 @@
 假设关账日（close day）= 月末，支付基准日（payment base day）= 27 日：
 
 1. **6/30 关账，7/1 01:00 JST** `BillingCycleScheduler` 触发
-   → `StatementCycleService.createDueJobs(runDate=7/1)`。
-2. 判断 `periodEnd = 6/30` 是否为关账日 → 是。计算 cycle：
+   → `StatementCycleService.createDueJobs()`，按账务时区取得当天日期。
+2. Reconciliation 回看最近 `reconciliation-lookback-cycles=2` 个已结束 close cycles；
+   若 6 月 cycle 尚无任意 `statement_jobs`，计算：
    `periodStart=6/1, periodEnd=6/30, dueDate=7/27`（27 日落周末则按
    `JapaneseBusinessDayCalendar` 顺延到工作日）。
 3. `countBillableAccounts(...)` = 2500 → `shardCount = ceil(2500 / 1000) = 3`。
@@ -85,12 +90,26 @@
    把 job 交给 `statementJobWorkerExecutor` 线程池。
 6. worker 里 `StatementJobHandler.handle(job)`：用 `job.shardNo / shardCount`
    把账户哈希分片，`findAccountIdsForJob(...)` 拿本片账户，逐个
-   `generate(...)`。单账户失败被隔离（见 2.4）。
+   `generate(...)`。每 100 个已尝试账户检查一次当前 `claim_token`；lease 已被接管时旧 worker
+   提前停止剩余扫描，避免和新 worker 无意义地争抢账户锁。
 7. handler 返回计数后 `dispatch` 在新短事务里 finalize：先 `findByIdForUpdate`
    重新锁 job 并**校验 lease token**（`claim_token` 是否仍是自己 claim 时的值），
    再标 `DONE` 或 `PENDING/DEAD`。
 8. **每 10 秒** `recoverStuckJobs()`：`status=PROCESSING AND claim_until <= now`
    的 job 视为 worker 宕机，按一次失败处理放回 PENDING / DEAD。
+
+当前默认配置锚点（推荐记住含义，不要只背数字）：
+
+| 配置 | 当前值 | 为什么 |
+| --- | ---: | --- |
+| `statement.batch.cron` / `zone` | `0 0 1 * * *` / `Asia/Tokyo` | 业务账务日按 JST，而不是 JVM 默认时区 |
+| `reconciliation-lookback-cycles` | 2 | 错过月初 tick 后仍能补最近账期；不是无限历史修复 |
+| `target-accounts-per-job` | 1000 | 决定初始 shardCount，不是每个 shard 的硬上限 |
+| `statement.jobs.max-per-run` | 8 | 单轮 claim 上限，避免一次把大量 lease 提前放进 queue 燃烧 |
+| dispatch / recovery interval | 1s / 10s | 扫描频率不是 correctness；正确性来自 durable row + lease + 幂等 |
+| processing lease | 300s | 覆盖一个大分片的正常执行；handler 每 100 个账户检查一次 ownership |
+| worker pool / queue | 4 / 100 | 有界并发保护 DB、account row lock 和连接池 |
+| max attempts | 10 | 阻止永久坏 shard 无限热循环；当前没有 retry backoff |
 
 ### 2.3 idempotency（幂等）的三道防线
 
@@ -103,14 +122,15 @@
 
 ### 2.4 fault isolation（故障隔离）
 
-`StatementJobHandler` 对单账户的三类结果分别计数，不让一个坏账户拖垮整片：
+`StatementJobHandler` 对单账户结果分别计数。这里的“隔离”是指每账户独立事务，
+一个失败不会回滚前面已生成的账单；但 job 的最终 retry/DEAD 粒度仍然是整个 shard：
 
 | 单账户结果 | 计入 | 含义 |
 | --- | --- | --- |
 | 成功 | `generated` | 正常出账 |
 | `StatementGenerationException.rejected` | `skipped` | 该账户本期无可出账交易 |
-| `StatementGenerationException.retryable` | `failed` | 可恢复错误（如 ledger 未就绪） |
-| 其他 `RuntimeException` | `failed` | 未预期错误 |
+| `StatementGenerationException.retryable` | `failed` | 预留的显式可重试分类；当前生产代码没有调用该 factory |
+| 其他 `RuntimeException` | `failed` | 当前数据库锁超时、短暂持久化故障和未预期异常实际都走这里 |
 
 只要 `failed > 0`，整片 finalize 成 `PENDING/DEAD`（会重试整片）；否则 `DONE`。
 计数（processed / generated / skipped / failed）落库，作为分片级 observability。
@@ -119,7 +139,9 @@
 
 ## 3. 数据模型（flatten 之后）
 
-`statement_jobs`（见迁移 `0005-flatten-statement-jobs.sql`）核心列：
+`statement_jobs` 当前位于 baseline `0001-initial-schema.sql`；旧的
+`0005-flatten-statement-jobs.sql` 属于 baseline reset 前的历史迁移，已不在 active changelog。
+核心列：
 
 ```
 id            cycle 身份：period_start / period_end / due_date     ← 直接落在 job 上
@@ -269,6 +291,10 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
    和 finalize token。新设计保留 `claimed_by/at/until` 的 observability，但新增
    `claim_token` 作为随机 owner token。这样 `claim_until` 只负责 recover 判断，
    不再承担“证明这次 PROCESSING 属于我”的职责。
+4. **reconciliation 修复的是 missing cycle，不是 late transaction**：daily heartbeat 会补建
+   最近缺失的整套 jobs，但某个 shard 已经 DONE 后才补录进来的 backdated transaction，当前没有
+   account-level repair job 自动接住。生产需要 watermark、账期重开或受控补账流程；不能把
+   `reconciliation-lookback-cycles` 误讲成所有漏账的万能恢复。
 
 ### 6.1 改前 / 改后：为什么加 `claim_token`
 

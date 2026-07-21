@@ -1,22 +1,41 @@
 # 数据库 Migration 与 Liquibase 学习笔记
 
-这份文档记录本项目为什么使用 Liquibase、现在 baseline reset 后的文件结构，以及旧 changelog 里仍然值得学习的经典 migration 案例。
+> **归档对齐说明（2026-07）**：当前 active changelog 是 `0001` 到 `0007`，不是只有 baseline/seed。
+> `0003–0007` 是 forward-only cleanup migrations，依次删除 Ledger、历史 Risk projection、statement/repayment
+> notification 记录，并收紧 Statement status。本文同时保留 baseline reset 与经典 migration 的学习价值。
+
+这份文档记录本项目为什么使用 Liquibase、baseline reset 后如何继续 forward migration，以及现行
+cleanup changeset 与历史模型演进里值得学习的案例。
 
 关键词：Liquibase, baseline reset, schema migration, data backfill, CHECK constraint, unique constraint, online DDL, forward fix, マイグレーション。
 
-## 1. 当前状态：active changelog 已经重置
+## 1. 当前状态：baseline reset 后已追加 `0003–0007`
 
-当前 active changelog 只保留两类文件：
+当前 `db.changelog-master.yaml` 按下面顺序 include：
 
 ```text
 src/main/resources/db/changelog/db.changelog-master.yaml
 src/main/resources/db/changelog/changes/0001-initial-schema.sql
 src/main/resources/db/changelog/changes/0002-seed-local-sample-data.sql
+src/main/resources/db/changelog/changes/0003-remove-ledger-projection.sql
+src/main/resources/db/changelog/changes/0004-remove-historical-risk-projection.sql
+src/main/resources/db/changelog/changes/0005-remove-statement-notification-event.sql
+src/main/resources/db/changelog/changes/0006-remove-repayment-notification-event.sql
+src/main/resources/db/changelog/changes/0007-remove-statement-overdue-status.sql
 ```
 
-- `0001-initial-schema.sql`：当前最终 schema baseline。空库启动时直接创建最终表结构，不再先建旧表再 `ALTER/DROP`。
-- `0002-seed-local-sample-data.sql`：本地学习和手工 API walkthrough 使用的样例账户/卡。
-- 旧的 `0002` 到 `0010` migration 已从 active changelog 移除；它们的历史价值放到本文学习，不再干扰新库初始化。
+- `0001-initial-schema.sql`：reset 时形成的宽 baseline，创建核心表，也仍创建随后会被 cleanup 删除的
+  `ledger_entries`、`card_risk_features` 和旧 notification/status 形态。
+- `0002-seed-local-sample-data.sql`：本地 walkthrough 样例；其中历史 Ledger、Risk、statement/repayment
+  notification 样例会在后续 cleanup 中被删除。
+- `0003`：解除 `statement_lines.ledger_entry_id` 的 FK/unique 后删列，再删除 `ledger_entries`。
+- `0004`：先清旧 Risk consumer 的 Inbox 进度，再删除 `card_risk_features`。
+- `0005`：按 delivery → notification → outbox 顺序清理 `statement.closed` 数据。
+- `0006`：清理 repayment notification 对应 Inbox、delivery、intent 和 `repayment.received` Outbox。
+- `0007`：删除从未有写入方的 `OVERDUE`，收紧 `chk_statements_status/payment_state`。
+
+因此“当前最终 schema”是**顺序执行 `0001–0007` 后的结果**，不能只读 `0001` 就下结论。`0001/0002`
+仍含历史对象是一次明确的迁移链痕迹，不代表这些表、事件或 enum 仍被现行 Java 代码使用。
 
 这次 reset 的前提是：本项目是学习/interview 项目，没有真实生产数据库需要保留旧 Liquibase checksum。如果是生产系统，不能随便改已执行过的 changeset；应该继续 append 新 migration。
 
@@ -31,7 +50,7 @@ src/main/resources/db/changelog/changes/0002-seed-local-sample-data.sql
 
 baseline reset 后，职责更清楚：
 
-- `0001` 负责回答：**当前系统有哪些表、字段、索引、约束，为什么这样设计？**
+- `0001–0007` 的合成结果负责回答：**当前系统有哪些表、字段、索引、约束？**
 - 本文负责回答：**历史上为什么要这样迁移，真实生产迁移要注意什么？**
 
 interview 里可以这样说：
@@ -72,12 +91,12 @@ docker compose exec mysql mysql -uroot -prootpassword mini_card \
   -e "SELECT ID, AUTHOR, FILENAME, DATEEXECUTED, ORDEREXECUTED FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED"
 ```
 
-新增真实 schema 变化时，不再改旧 `0001`，而是新增 `0003-xxx.sql`：
+新增真实 schema 变化时，不再改已执行的 `0001–0007`，而是从 `0008-xxx.sql` 继续追加：
 
 ```sql
 --liquibase formatted sql
 
---changeset mini-card:0003-add-repayment-failure-reason dbms:mysql
+--changeset mini-card:0008-add-repayment-failure-reason dbms:mysql
 --comment: Store bank debit failure reason for retry and support investigation.
 --preconditions onFail:MARK_RAN onError:HALT
 --precondition-sql-check expectedResult:0 SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'repayments' AND column_name = 'failure_reason'
@@ -85,7 +104,7 @@ ALTER TABLE repayments
     ADD COLUMN failure_reason VARCHAR(200) NULL AFTER status;
 ```
 
-然后在 `db.changelog-master.yaml` 末尾 include 新文件。
+然后在 `db.changelog-master.yaml` 末尾 include `0008-add-repayment-failure-reason.sql`。
 
 ## 5. 写 migration 的安全顺序
 
@@ -108,7 +127,9 @@ ALTER TABLE repayments
 
 ## 6. 经典迁移案例
 
-这些案例来自刚刚从 active changelog 移除的历史迁移。它们不需要逐条背 SQL，但非常适合 interview 讲“为什么 schema 会这样演进”。
+前五个案例中，Notification 拆表、Statement job 扁平化、lease token、statement version 和 credit exposure
+已经体现在 `0001` baseline 的现行结构里；Ledger/Risk/冗余通知/OVERDUE 的删除则是 `0003–0007` 的 active
+forward migrations。它们不需要逐条背 SQL，但要能讲清依赖顺序、数据清理、约束变化和 rollback/forward-fix 取舍。
 
 ### 6.1 Notification：从单表生命周期拆成 intent + delivery
 
@@ -218,7 +239,8 @@ interview 重点：
 
 ### 6.4 Statement version：read model cache 需要正式版本
 
-旧思路可能会用业务字段推导缓存版本，例如 `paidAmount`。问题是：不是所有展示变化都会改变金额，将来 overdue 标记、due date 调整、展示字段修复都可能金额不变。
+旧思路可能会用业务字段推导缓存版本，例如 `paidAmount`。问题是：不是所有展示变化都会改变金额；
+即使当前写路径主要由 repayment 推进，未来 due date 调整、争议标记或展示字段修复都可能金额不变。
 
 最终模型：
 
@@ -263,6 +285,23 @@ interview 重点：
 - CHECK 是业务 invariant 的数据库防线。
 - 业务模型变了，数据库约束必须跟着变。
 - 不然 Java 层看似正确，手工 SQL、旧代码、并发 bug 仍可能写出非法金额状态。
+
+### 6.6 现行 `0003–0007`：删除路径也要有依赖顺序
+
+这五个 cleanup changeset 展示了另一类常被忽略的 migration：代码已经删掉旧机制后，如何安全清理 schema
+和 durable work data。
+
+| changeset | 顺序为什么重要 | 如果漏掉会怎样 |
+| --- | --- | --- |
+| `0003-remove-ledger-projection` | 先 drop `statement_lines` 的 FK/unique/column，再 drop parent table | 直接删 `ledger_entries` 会被 FK 拒绝 |
+| `0004-remove-historical-risk-projection` | 先删旧 consumer Inbox 进度，再删 projection table | 运维会误以为仍有 Risk Kafka 下游；残留进度也不能代表现行消费 |
+| `0005-remove-statement-notification-event` | delivery → intent → Outbox | 先删 parent intent 违反 FK；残留 PENDING/DEAD Outbox 会被 worker 重试成 unsupported event |
+| `0006-remove-repayment-notification-event` | Inbox → delivery → intent → Outbox | 只删 Java enum 会使历史 row 在 MyBatis enum restore 时失败；只删 intent 会留下误导的幂等进度 |
+| `0007-remove-statement-overdue-status` | 先确认 DB 无历史 `OVERDUE`，再 drop/recreate CHECK | Java enum 与 DB 允许值不一致时，脏写会拖到读取时才以 `valueOf` 500 暴露 |
+
+这里的 interview 重点不是“会写 DROP”，而是：**删除代码、历史数据、异步工作项、Inbox 进度和 DB constraint
+必须作为一个兼容性窗口来设计。** Durable queue 表不是业务审计 source of truth；旧事件已无 publisher 路由时，
+保留其待处理 row 反而会制造永久失败。
 
 ## 7. Migration interview 问答
 

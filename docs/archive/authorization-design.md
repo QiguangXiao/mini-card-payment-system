@@ -1,14 +1,23 @@
 # Authorization Design
 
+> **Current-code alignment (2026-07):** This archived long-form design note has
+> been checked against the current implementation, not merely prefixed with a
+> historical disclaimer. Current class names, transaction ordering, Redis
+> velocity behavior, Outbox/DelayJob boundaries, and deliberately removed
+> projections are reflected throughout the body. The shorter current reading
+> path remains [`implementation-walkthrough-cn.md`](../implementation-walkthrough-cn.md#14-授权与账户聚合设计决策合并自-authorization-design).
+
 ## Purpose
 
 The Authorization module demonstrates a small but explicit DDD vertical slice.
 It models an issuer-side decision about whether a requested card transaction is
 approved or declined. Approved requests reserve available credit on a
-`CreditAccount`. It now includes a small Risk bounded-context collaboration,
-authorization expiry, presentment posting, and a minimal Ledger projection.
-Refund, reversal, dispute, production-grade double-entry ledger, and
-reconciliation flows remain deliberately deferred learning topics.
+`CreditAccount`. It includes Risk bounded-context collaboration, authorization
+expiry through DelayJob, presentment posting, and reliable event publication
+through Outbox. The former learning-only Ledger and historical-risk Kafka
+projections were deliberately removed in the 2026-07 scope reduction; refund,
+reversal, dispute, production-grade double-entry ledger, and reconciliation
+remain deferred learning topics rather than current code paths.
 
 ## Aggregate Boundary
 
@@ -98,17 +107,23 @@ extra abstractions.
 
 - Local checks run directly inside `RiskAssessmentService`: blocked merchant,
   recent authorization velocity, high amount per currency, and country mismatch.
-- `RiskVelocityCounter` is the application port for the velocity COUNT query;
-  the current adapter is `JdbcRiskVelocityCounter`.
+- `RiskVelocityCounter` is the application port for velocity. The default
+  adapter is `RedisRiskVelocityCounter`, which atomically performs ZADD,
+  window trimming, ZCARD, and EXPIRE in one Lua script. Setting
+  `risk.velocity.store=jdbc` selects `JdbcRiskVelocityCounter` as a comparison
+  adapter, but JDBC is not the default runtime path.
 - `ExternalRiskGateway` is the application port for third-party risk scoring;
   the current adapter is `ExternalRiskGatewayAdapter`, backed by Feign and
-  protected with Resilience4j circuit breaker fallback.
+  protected with a Resilience4j semaphore Bulkhead and CircuitBreaker fallback.
 
-The current fallback is fail-closed: if external risk is unavailable, the
-authorization is declined with `RISK_EXTERNAL_UNAVAILABLE`. That is conservative
-for a learning project. Real issuers may choose a mixed policy, such as
-fail-open only for low-value trusted merchants, but that must be explicit and
-auditable.
+The two degradation policies are deliberately asymmetric. Redis velocity is an
+auxiliary high-frequency signal and fails open with a metric when Redis is
+unavailable; it does not fall back to a database COUNT because that could turn a
+Redis brownout into a MySQL/Hikari brownout. External risk is treated as a final
+decision dependency and fails closed with `RISK_EXTERNAL_UNAVAILABLE` when the
+provider fails, the circuit is open, or the bulkhead is full. A real issuer may
+choose a more nuanced low-value or trusted-merchant policy, but it must be
+explicit, observable, and auditable.
 
 Risk runs after Card eligibility and before the `CreditAccount` row lock. This
 keeps external latency out of the account-lock critical section while still
@@ -118,15 +133,20 @@ avoiding unnecessary risk calls for missing, blocked, or expired cards.
 
 `AuthorizationService` is responsible for the use case and transaction boundary:
 
-1. Atomically claim an idempotency key with a pending Authorization.
-2. Return the original result when another request already owns that key.
-3. Check local preliminary rules such as transaction limits.
-4. Validate the Card and resolve its CreditAccount.
-5. Run local and external risk checks.
-6. Lock the CreditAccount and attempt to reserve available credit.
-7. Approve or decline the Authorization with an explicit reason.
-8. Persist the account reservation, authorization decision, expiry DelayJob, and
-   Outbox event in one transaction.
+1. Build a request fingerprint and a new `PENDING` Authorization.
+2. Atomically INSERT-first claim the idempotency key, then read the claimed row
+   with `SELECT ... FOR UPDATE` and compare the fingerprint.
+3. Return the winner's completed result for an identical duplicate; reject the
+   same key with different request data as `409 Conflict`.
+4. Check the configured single-transaction limit before any account lock.
+5. Read the Card and reject missing, blocked, or expired cards.
+6. Run Redis velocity/local rules and the external risk call before the account
+   lock, so slow I/O does not expand the financial critical section.
+7. Lock the CreditAccount and attempt to reserve available credit.
+8. Approve or decline the Authorization with an explicit reason.
+9. For an approval, persist the account reservation, authorization decision,
+   expiry DelayJob, and Outbox event in one transaction; declines also append
+   their decision event but do not create an expiry job.
 
 The application service coordinates the workflow but does not contain the
 authorization state-transition rules.
@@ -150,13 +170,21 @@ request blocks behind the winner and then reads the completed result with
 `SELECT ... FOR UPDATE`, avoiding duplicate reservations and stale snapshot
 behavior under MySQL's default `REPEATABLE READ` isolation.
 
-All authorization flows acquire locks in the same order:
+The create-authorization path acquires or reads data in this order:
 
 ```text
-Authorization idempotency row -> Card read -> CreditAccount row
+Authorization INSERT-first claim
+-> Authorization row FOR UPDATE
+-> Card read
+-> risk checks (Redis + external HTTP, no account lock held)
+-> CreditAccount row FOR UPDATE
 ```
 
-Consistent lock ordering reduces deadlock risk as more workflows are added.
+The ordering has two purposes: the idempotency winner is decided before any
+side effect, and the potentially slow risk call finishes before the account row
+lock. Other money paths keep the shared financial lock order consistent:
+CreditAccount precedes Statement when both are needed; Posting first locks its
+Authorization, then CreditAccount, before changing balances.
 
 Repeating the same key and request returns the original result. Reusing the key
 for different request data returns `409 Conflict`.
@@ -191,9 +219,11 @@ them into domain objects through constructors and `restore` methods. This keeps
 MyBatis concerns, mutable persistence conventions, and SQL mapping outside the
 domain model.
 
-`JdbcRiskVelocityCounter` intentionally remains a small JdbcTemplate example
-for a simple velocity query behind the `RiskVelocityCounter` port; most other
-database access in the project uses MyBatis.
+`JdbcRiskVelocityCounter` remains a selectable JdbcTemplate comparison adapter
+behind the `RiskVelocityCounter` port. The default Redis implementation is a
+distributed sliding-window log, not a cache of an SQL result; that distinction
+is worth remembering for an interview because every authorization avoids the
+COUNT query instead of depending on cache hit rate.
 
 Database schema is managed by Liquibase changelogs under
 `src/main/resources/db/changelog`. This keeps local schema drift visible and
@@ -207,6 +237,9 @@ instead of relying on `CREATE TABLE IF NOT EXISTS`.
 - Partial presentment and partial hold release.
 - Refund, clearing adjustment, dispute, and chargeback flows.
 - Production-grade double-entry ledger and reconciliation reports.
+- A production DLT monitor and controlled replay workflow; the current Kafka
+  error handler publishes poison messages to a Notification DLT, but no DLT
+  consumer automatically repairs or replays them.
 - Optimistic versioning for later aggregate updates.
 - User/cardholder identity, authentication, authorization, and PII handling.
 - Production-grade migration deployment controls such as online DDL review,

@@ -1,6 +1,9 @@
-# MyBatis 与 SQL 后端interview学习笔记
+# MyBatis 与 SQL 后端 interview 学习笔记
 
-> **归档对齐说明（2026-07）**：`card_risk_features` 表已随 historical risk projection 删除（Liquibase 0004），文中原以该表演示的批量写入示例已改用现行 `statement_lines` 表；其余内容保持原样。现行 MyBatis/SQL 文档以 [mybatis-sql-and-migration-cn.md](../mybatis-sql-and-migration-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文已按当前 13 组 Mapper/XML、INSERT-first claim、四类
+> claimable worker SQL、Statement billing SQL，以及 Liquibase `0001–0007` 的最终 schema 全文校准。
+> `card_risk_features`/Ledger projection 已删除；相关章节已改成现行查询模型或明确的历史对照。
+> 现行统一文档见 [mybatis-sql-and-migration-cn.md](../mybatis-sql-and-migration-cn.md)。
 
 这份文档整理后端工程师interview里需要掌握的 MyBatis 核心使用、SQL 基础与进阶、事务、锁、索引、批处理和金融后端常见追问点。
 
@@ -27,6 +30,10 @@ MyBatis 不是替你设计数据库的 ORM。
 mybatis:
   mapper-locations: classpath:mappers/**/*.xml
 ```
+
+当前 XML mapper 共 13 组：authorization、card、creditaccount、delayjob、inbox、notification intent、
+notification delivery、outbox、repayment、statement billing、statement job、statement、transaction。
+Risk 的 Redis/JDBC velocity 是 repository adapter，不存在 `RiskMapper.xml`；Ledger mapper 也已随 projection 删除。
 
 典型结构：
 
@@ -63,10 +70,7 @@ public interface AuthorizationMapper {
 
     AuthorizationRow findById(@Param("id") String id);
 
-    int insert(
-            @Param("idempotencyKey") String idempotencyKey,
-            @Param("authorization") AuthorizationRow authorization
-    );
+    int insert(@Param("authorization") AuthorizationRow authorization);
 }
 ```
 
@@ -76,7 +80,8 @@ XML：
 <mapper namespace="com.minicard.authorization.infrastructure.mybatis.AuthorizationMapper">
 
     <select id="findById" resultMap="authorizationRowMap">
-        SELECT id, request_fingerprint, card_id, amount, currency, status
+        SELECT id, idempotency_key, request_fingerprint, card_id, amount, currency, status,
+               decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
         FROM authorizations
         WHERE id = #{id}
     </select>
@@ -183,6 +188,11 @@ Database row is persistence detail.
 Domain aggregate is business concept.
 ```
 
+当前还有一个很具体的 constructor mapping 坑：`DelayJobRow`/`StatementJobRow` 的计数字段是 primitive
+`int`，XML 要写 MyBatis 别名 `_int`；`int` 别名对应 `java.lang.Integer`。写错时 SQL 能执行，直到
+result handling 才因找不到匹配构造器抛 `NoSuchMethodException`。这是比“会写 resultMap”更有价值的
+interview 细节。
+
 ## 5. 可复用 SQL 片段
 
 XML 里可以用 `<sql>` 和 `<include>` 避免列清单重复：
@@ -216,16 +226,21 @@ XML 里可以用 `<sql>` 和 `<include>` 避免列清单重复：
 <insert id="insert">
     INSERT INTO authorizations (
         id, idempotency_key, request_fingerprint, card_id, amount, currency,
-        status, created_at
+        status, decline_reason, created_at, decided_at, expires_at, posted_at, expired_at
     ) VALUES (
         #{authorization.id},
-        #{idempotencyKey},
+        #{authorization.idempotencyKey},
         #{authorization.requestFingerprint},
         #{authorization.cardId},
         #{authorization.amount},
         #{authorization.currency},
         #{authorization.status},
-        #{authorization.createdAt}
+        #{authorization.declineReason,jdbcType=VARCHAR},
+        #{authorization.createdAt},
+        #{authorization.decidedAt,jdbcType=TIMESTAMP},
+        #{authorization.expiresAt,jdbcType=TIMESTAMP},
+        #{authorization.postedAt,jdbcType=TIMESTAMP},
+        #{authorization.expiredAt,jdbcType=TIMESTAMP}
     )
 </insert>
 ```
@@ -333,13 +348,14 @@ MyBatis 动态 SQL 使用 OGNL 表达式，常见标签如下。
 
 ### 7.3 `<set>`
 
-`<set>` 适合部分字段更新，并自动处理末尾逗号：
+`<set>` 适合部分字段更新，并自动处理末尾逗号。下面是语法示例，**不是当前 Mapper 的状态推进方式**；
+现行金融状态更新使用显式列清单，避免 patch 绕过 domain state machine：
 
 ```xml
-<update id="patchNotification">
-    UPDATE notifications
+<update id="patchDeliveryForAdminTool">
+    UPDATE notification_deliveries
     <set>
-        <if test="status != null">status = #{status},</if>
+        <if test="providerMessageId != null">provider_message_id = #{providerMessageId},</if>
         <if test="lastError != null">last_error = #{lastError},</if>
         updated_at = #{updatedAt}
     </set>
@@ -395,19 +411,23 @@ MyBatis 动态 SQL 使用 OGNL 表达式，常见标签如下。
 
 ```xml
 <insert id="insertBatch">
-    INSERT INTO statement_lines (
-        statement_id, card_transaction_id, amount, created_at
+    INSERT INTO notification_deliveries (
+        id, notification_id, channel, notification_type, subject_id, recipient_key,
+        status, attempts, next_attempt_at, lease_token, last_error,
+        provider_message_id, sent_at, created_at, updated_at
     ) VALUES
-    <foreach collection="rows" item="row" separator=",">
-        (
-            #{row.statementId},
-            #{row.cardTransactionId},
-            #{row.amount},
-            #{row.createdAt}
-        )
+    <foreach collection="deliveries" item="d" separator=",">
+        (#{d.id}, #{d.notificationId}, #{d.channel}, #{d.notificationType},
+         #{d.subjectId}, #{d.recipientKey}, #{d.status}, #{d.attempts},
+         #{d.nextAttemptAt}, #{d.leaseToken,jdbcType=CHAR},
+         #{d.lastError,jdbcType=VARCHAR}, #{d.providerMessageId,jdbcType=VARCHAR},
+         #{d.sentAt,jdbcType=TIMESTAMP}, #{d.createdAt}, #{d.updatedAt})
     </foreach>
 </insert>
 ```
+
+这是当前 `NotificationDeliveryMapper.insertBatch` 的形状：一条 notification intent 会在同一 SQL 中插入
+APP_PUSH/EMAIL 两条 delivery，`UNIQUE(notification_id, channel)` 再兜底防重复渠道任务。
 
 优点：
 
@@ -435,6 +455,9 @@ try (SqlSession session = sqlSessionFactory.openSession(ExecutorType.BATCH)) {
 }
 ```
 
+这是通用 API 示例，当前项目没有配置专用 `ExecutorType.BATCH` template；现行真实批量写主要使用
+multi-values `insertBatch` 和 `<foreach>`/`CASE WHEN` SQL。
+
 在 Spring Boot 项目里，通常会配置专门的 `SqlSessionTemplate` 或局部使用，避免和普通 mapper 混在一起。
 
 注意：
@@ -450,6 +473,8 @@ MySQL Connector/J 常见优化参数：
 ```text
 rewriteBatchedStatements=true
 ```
+
+当前 `spring.datasource.url` 没有开启这个参数，因此它是生产调优选项，不是现行配置事实。
 
 作用：
 
@@ -470,6 +495,11 @@ rewriteBatchedStatements=true
 1. 多条 update + `ExecutorType.BATCH`。
 2. 用临时表/staging table，再 join update。
 3. 用 `CASE WHEN`，但 SQL 可读性和长度会变差。
+
+当前 `CardTransactionMapper.assignStatement` 使用第 3 种：三个 `CASE id WHEN ... THEN ... END` 分别写
+`statement_id`、`statement_assigned_at`、`updated_at`，并用同一批 id 的 `IN (...)` 限定范围；`WHERE`
+同时要求 `POSTED + UNBILLED + statement_id IS NULL`，避免并发账单任务覆盖已归属交易。service 必须核对
+affected rows，不能只因 SQL 执行成功就假定整批都更新了。
 
 interview回答：
 
@@ -523,8 +553,9 @@ FOR UPDATE
 
 ```text
 begin transaction
--> claim idempotency key
--> lock card/account row
+-> INSERT-first claim idempotency key
+-> local policy + card read + Redis/external risk（不持 account lock）
+-> lock credit account row
 -> validate and change domain state
 -> update rows
 -> commit
@@ -532,7 +563,7 @@ begin transaction
 
 ### 10.2 `FOR UPDATE SKIP LOCKED`
 
-Outbox 和 DelayJob poller 使用：
+Outbox、DelayJob、NotificationDelivery 和 StatementJob 都使用这个 queue-table 模式。以 Outbox 为例：
 
 ```sql
 SELECT id, status, next_attempt_at
@@ -548,7 +579,8 @@ FOR UPDATE SKIP LOCKED
 
 - 多个 worker/pod 同时扫描待处理任务。
 - 已经被别人锁住的 rows 会被跳过。
-- 每条任务只会被一个事务 claim。
+- 每条任务只会被一个短事务 claim 成 `PROCESSING`；事务外执行完成后还必须重新 `FOR UPDATE` 并比较
+  `lease_token`/`claim_token`，否则 lease 超时后的 stale worker 仍可能覆盖新 owner 的结果。
 
 适合：
 
@@ -671,8 +703,8 @@ MySQL InnoDB 常用 B+Tree 索引。
 索引：
 
 ```sql
-CREATE INDEX idx_outbox_pending
-ON outbox_events (status, next_attempt_at, created_at, id);
+CREATE INDEX idx_outbox_publishable
+ON outbox_events (status, next_attempt_at, created_at);
 ```
 
 适合：
@@ -719,13 +751,14 @@ LIMIT 100;
 
 ```sql
 UNIQUE (idempotency_key)
-UNIQUE (event_id, consumer_group)
+PRIMARY KEY (consumer_name, event_id)
 ```
 
 它们分别表达：
 
 - 同一个 idempotency key 只能创建一个 authorization。
-- 同一个 consumer group 只能处理同一个 event 一次。
+- 同一个 logical consumer 只能处理同一个 event 一次；Kafka `group-id` 管 offset，Inbox 的
+  `consumer_name` 是应用幂等命名，两者相关但不是同一列。
 
 interview回答：
 
@@ -854,20 +887,14 @@ GROUP BY card_id;
 
 ### 17.3 读模型 Projection
 
-本项目 Risk feature projection 就是一个例子：
+当前项目已经删除历史 `card_risk_features` Kafka projection：Risk 热路径直接使用 Redis velocity +
+external risk，避免维护一个收益不明确、还要处理 replay/reconciliation 的历史画像表。现行
+`StatementReadModel` 则由 `statements + statement_lines` 组装并放入 Caffeine/Redis cache；它是查询模型，
+但不是额外的 projection table。
 
-```text
-Kafka event
--> Risk consumer
--> update projection table
--> risk check can read local feature quickly
-```
-
-读模型的价值：
-
-- 为查询优化单独建表。
-- 不污染核心交易表。
-- 可以通过事件重放重建。
+projection 的通用价值仍然是为高频查询单独塑形、隔离核心写表，并在事件可重放时重建；代价是 eventual
+consistency、幂等消费、版本兼容和对账。interview 不要把“用了 projection”当成天然加分，能说明为什么删掉
+一个低价值 projection 更成熟。
 
 ## 18. 金额和时间字段
 
@@ -905,7 +932,9 @@ USD 10.25 -> 1025 cents
 常见建议：
 
 - Java 使用 `Instant` 表达时间点。
-- 数据库统一存 UTC。
+- MySQL 使用 `TIMESTAMP(6)` 保存时间点；生产应把 DB/session/connection time zone 统一到 UTC 并验证 round-trip。
+- 当前默认 JDBC URL 没有显式 `connectionTimeZone`/`serverTimezone` 参数，所以不能只凭 Java 用了 `Instant`
+  就宣称所有环境已经强制 UTC；部署配置必须补齐或保证 DB session 默认值。
 - API 层再转换成用户时区显示。
 - 定时任务、过期时间、账单周期要明确 clock 来源，测试中可注入 `Clock`。
 
@@ -1064,7 +1093,9 @@ MyBatis 支持一些关联映射能力，但在interview项目里不建议依赖
 
 推荐回答：
 
-> Outbox 和 DelayJob 是 queue-like table。多个 worker 可以同时扫描 due rows，`FOR UPDATE SKIP LOCKED` 让每个 worker 跳过别人已经 claim 的 rows，再把自己拿到的 rows 改成 PROCESSING。这样可以水平扩展 worker，同时避免重复 claim。
+> Outbox、DelayJob、NotificationDelivery 和 StatementJob 都是 queue-like table。多个 worker 可以同时扫描
+> due/claimable rows，`FOR UPDATE SKIP LOCKED` 让每个 worker 跳过别人已锁的 rows，再在短事务内改成
+> PROCESSING。它解决的是重复 claim；事务外处理后的 stale finalize 还要靠 owner token + 再次 `FOR UPDATE`。
 
 ### 24.4 如何做批量消费或批量入库
 
@@ -1082,9 +1113,10 @@ MyBatis 支持一些关联映射能力，但在interview项目里不建议依赖
 
 可以按这个顺序练：
 
-1. 读 `AuthorizationMapper.xml`，解释 `resultMap`、`<sql>`、`#{}`、`FOR UPDATE`。
+1. 读 `AuthorizationMapper.xml`，解释 constructor `resultMap`、`<sql>`、`#{}`、INSERT-first claim 和 duplicate 的 `FOR UPDATE`。
 2. 读 `CreditAccountMapper.xml`，解释为什么额度更新前要锁 account row。
-3. 读 `OutboxEventMapper.xml` 和 `DelayJobMapper.xml`，解释 `SKIP LOCKED` 如何支持多 worker。
+3. 对比 `OutboxEventMapper.xml`、`DelayJobMapper.xml`、`NotificationDeliveryMapper.xml` 和
+   `StatementJobMapper.xml`，解释 `SKIP LOCKED`、deadline、owner token 与 recovery/finalize。
 4. 自己写一个动态查询 mapper，包含 `<where>`、`<if>`、分页和排序白名单。
 5. 自己写一个 batch insert mapper，并说明 batch size、事务、失败重试策略。
 6. 对一条查询写出预期索引，再用 `EXPLAIN` 验证。

@@ -1,6 +1,11 @@
 # 异步流程横向对比：定时任务、Outbox、Kafka Consumer
 
-> **归档对齐说明（2026-07）**：本文已按收缩后架构清理，移除了对已删组件的描述（ledger projection、historical risk projection、`statement.closed` 与 `repayment.received` Kafka 通知路径）；Kafka 现仅保留 `authorization-events` 与 `transaction-events` 两个 topic、唯一消费组 notification。其余内容为归档原文；现行架构以 [claimable-jobs-cn.md](../claimable-jobs-cn.md) 与 [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文正文已经按当前类、表和配置逐段更新。
+> Statement 不再是“无 durable queue 的日历扫描”，而是 reconciliation planner + sharded
+> claimable jobs；Notification 也有独立的 per-channel delivery queue。Kafka 当前只有
+> authorization/transaction 两个业务 topic 和 notification consumer group。精简入口见
+> [claimable-jobs-cn.md](../claimable-jobs-cn.md) 与
+> [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md)。
 
 这份文档用于横向对比当前项目里的后台调度和 Kafka 消息上下文。它不是替代
 `docs/kafka-learning-cn.md`，而是回答一个更工程化的问题：
@@ -24,19 +29,23 @@
 - 本文：看代码流程、参与方、命名差异、interview解释。
 - `docs/kafka-learning-cn.md`：深入 Kafka 配置、producer/consumer 参数、DLT、partition、consumer group。
 
-## 1. 总览：项目里有三类异步机制
+## 1. 总览：项目里有四类 durable async work
 
 | 机制 | 解决的问题 | 触发方式 | durable state | 典型参与类 |
 | --- | --- | --- | --- | --- |
 | Outbox reliable publication | 已经发生的业务事实要可靠发布给下游 | `OutboxPoller` 定时扫描 | `outbox_events` | `*OutboxAdapter`, `OutboxClaimer`, `OutboxWorker`, `KafkaOutboxMessagePublisher`, `OutboxRecoverer` |
 | DelayJob future business action | 未来某个时间要执行业务动作 | `DelayJobPoller` 定时扫描 | `delay_jobs` | `*DelayJobScheduler`, `DelayJobClaimer`, `DelayJobWorker`, `DelayJobHandler`, `DelayJobRecoverer` |
-| Statement batch scheduler | 到账单日次日批量关账 | `StatementBatchPoller` 定时触发 | 业务表本身，主要是 `statements` / `card_transactions` | `StatementBatchPoller`, `StatementBatchService`, `StatementService` |
+| Statement sharded jobs | 某账期要为大量账户生成账单，并能补漏、分片和恢复 | daily `BillingCycleScheduler` 规划；`StatementJobDispatcher` 高频 claim | `statement_jobs` + `statements` / `statement_lines` | `StatementCycleService`, `StatementJobDispatcher`, `StatementJobHandler`, `StatementGenerationService` |
+| Notification delivery | Notification intent 要 fan-out 到 APP_PUSH / EMAIL，并按渠道独立 retry | `NotificationDeliveryPoller` | `notifications` + `notification_deliveries` | `RequestNotificationService`, `NotificationDeliveryClaimer`, `NotificationDeliveryWorker`, `NotificationDeliveryRecoverer` |
 
 核心区别：
 
 - Outbox 表达的是“事实已经发生，要可靠告诉别人”。例如 `authorization.approved`、`card_transaction.posted`。
 - DelayJob 表达的是“未来要执行一个业务动作”。例如授权到期释放额度、账单到期自动扣款。
-- Statement batch 是日历驱动的批处理入口，不是每条业务动作的 durable queue。它每轮找候选账户，再让 `StatementService` 对每个账户开自己的 transaction boundary。
+- Statement 是两层职责：daily scheduler 做“缺哪个账期就补哪个”的 desired-state reconciliation，
+  生成 durable sharded `statement_jobs`；dispatcher 再用 claim/lease/recover 驱动执行。
+- Notification intent 和 delivery 分开：Kafka consumer 事务只创建通知意图及两条渠道 delivery；
+  provider HTTP 调用由 durable delivery worker 在事务外执行，成功/失败再用短事务 finalize。
 
 ### 1.1 为什么根 `infrastructure` 里也有 async / scheduler / transaction
 
@@ -44,12 +53,12 @@
 
 | 包或类 | 实际含义 | 不应该误解成 |
 | --- | --- | --- |
-| `infrastructure.scheduler.PollingSchedulerConfiguration` | 创建 `outboxTaskScheduler`、`delayJobTaskScheduler`、`statementBatchTaskScheduler` 这些 Spring scheduler thread pool | Outbox/DelayJob/Statement 的业务 scheduler 逻辑 |
-| `infrastructure.async.WorkerExecutorConfiguration` | 创建 `outboxWorkerExecutor`、`delayJobWorkerExecutor` 这些 bounded worker pool | 所有异步业务流程的入口 |
+| `infrastructure.scheduler.PollingSchedulerConfiguration` | 创建 `outboxTaskScheduler`、`delayJobTaskScheduler`、`billingCycleTaskScheduler`、`statementJobTaskScheduler`、`notificationDeliveryTaskScheduler` | Outbox/DelayJob/Statement/Notification 的业务逻辑 |
+| `infrastructure.async.WorkerExecutorConfiguration` | 创建 Outbox、普通 DelayJob、AUTO_REPAYMENT、StatementJob、NotificationDelivery 五个 bounded worker pool | 所有异步业务流程的入口 |
 | `infrastructure.transaction.TransactionOperationsConfiguration` | 把 Spring transaction manager 包装成 `TransactionOperations`，给 worker 显式开短事务 | application service 的业务事务规则 |
 | `messaging/outbox` | Outbox reliable publication 机制，有表、状态、lease、worker、recoverer | 普通 Kafka helper |
 | `delayjob` | future business action 机制，有表、状态、lease、handler dispatch、recoverer | 普通 `@Scheduled` 方法 |
-| `statement.infrastructure.scheduler` | statement 模块的日历批处理触发器 | 通用 scheduler 框架 |
+| `statement.infrastructure.scheduler` | statement 模块的 daily reconciliation 触发器 | 真正生成账单的 worker |
 
 所以当前分法可以解释为：根 `infrastructure` 管线程、事务 helper、cache 等 platform wiring；
 `messaging/outbox` 和 `delayjob` 管可靠性状态机；业务模块自己的 `infrastructure.*` 负责把业务意图接到这些机制上。
@@ -154,32 +163,76 @@ interview 重点：
 - `delay_jobs` 有 `UNIQUE(job_type, aggregate_type, aggregate_id)`，防止同一业务动作重复计划。
 - Handler 要校验 `aggregate_type`，避免把错误聚合的 id 当成业务 id 执行。
 
-### 2.3 Statement batch scheduler
+### 2.3 Statement reconciliation + sharded claimable jobs
 
 代码路径：
 
 ```text
-StatementBatchPoller
--> StatementBatchService.runDueBatch()
--> 判断今天是否是 close day 次日
--> 查询有未出账 posted transactions 的 credit accounts
--> 每个 account 调 StatementService.generate(...)
+BillingCycleScheduler（每天 01:00, Asia/Tokyo）
+-> StatementCycleService.createDueJobs()
+   -> 回看最近 2 个已结束 close cycles
+   -> 缺失 cycle 才统计 POSTED + UNBILLED 账户
+   -> 按 1000 accounts/job 创建 statement_jobs(PENDING)
+
+StatementJobDispatcher（每 1s dispatch；每 10s recover）
+-> FOR UPDATE SKIP LOCKED claim 最多 8 个 shard
+-> PENDING -> PROCESSING + claimed_by/at/until + claim_token
+-> commit claim transaction
+-> statementJobWorkerExecutor（4 threads / queue 100）
+-> StatementJobHandler.handle(...)
+-> per account: StatementGenerationService.generate(...)
+-> finalize DONE / PENDING retry / DEAD（校验 claim_token）
 ```
 
 关键类：
 
 | 角色 | 类 | 责任 |
 | --- | --- | --- |
-| scheduler | `StatementBatchPoller` | 每分钟轻量触发，记录 batch 结果 |
-| batch service | `StatementBatchService` | 计算 billing cycle / due date，查询候选账户，逐个处理 |
-| statement use case | `StatementService` | 对单个账户开事务，锁 account 和待出账交易，生成 statement |
+| reconciliation scheduler | `BillingCycleScheduler` | daily 触发，不执行全量出账，只要求 planner 收敛到“最近 cycle 都有 jobs” |
+| cycle planner | `StatementCycleService` | 计算 billing cycle / due date / shardCount，同事务幂等插入整套 jobs |
+| dispatcher | `StatementJobDispatcher` | claim、提交 worker、recover、finalize；job row lock 不跨账户业务处理 |
+| shard handler | `StatementJobHandler` | 稳定分片查询账户，逐账户调用生成用例，并汇总 generated/skipped/failed |
+| statement use case | `StatementGenerationService` | 每账户独立事务，按 account → transactions → statement 锁顺序生成账单和 DelayJob |
 
-为什么它没有 `StatementBatchClaimer`：
+为什么没有拆出 `StatementJobClaimer` / `StatementJobRecoverer` 四件套：
 
-- 它不是从一张 `statement_jobs` 表领取 durable jobs。
-- 它是日历驱动的 batch，每轮根据业务表现状查询候选账户。
-- 单账户的 idempotency 由 `StatementService.generate(...)` 的自然键保障：同一 `creditAccountId + periodStart + periodEnd` 只能生成一张 statement。
-- 单账户失败不应中断整批。当前用 structured log 记录失败，下一轮 scheduler 仍可重试。
+- 它**确实**从 `statement_jobs` 领取 durable jobs，只是当前把 claim/dispatch/recover/finalize
+  合在一个 `StatementJobDispatcher`，作为更紧凑的 reference implementation。
+- Job 级幂等由 `(period_start, period_end, shard_no)` 唯一键保护；账户级幂等由
+  `statements(credit_account_id, period_start, period_end)` 自然键保护。
+- PROCESSING 用四列 lease metadata，`claim_until` 只回答“何时可回收”，随机
+  `claim_token` 才回答“本轮 owner 是谁”。迟到 worker finalize 时 token 不符会被丢弃。
+- 每账户独立事务提供 fault isolation，但只要一个账户是 retryable failure，该 shard 仍会整体
+  retry/最终 DEAD；账户级自然键让重复扫描已成功账户时安全跳过。
+
+### 2.4 Notification per-channel delivery
+
+代码路径：
+
+```text
+Kafka listener transaction
+-> RequestNotificationService
+-> notifications immutable intent
+-> notification_deliveries(APP_PUSH + EMAIL, PENDING)
+
+NotificationDeliveryPoller（1s，batch 40）
+-> NotificationDeliveryClaimer(PROCESSING, lease_token, 30s deadline)
+-> notificationDeliveryWorkerExecutor（4 threads / queue 100）
+-> channel sender -> provider HTTP（事务外）
+-> finalize SENT / PENDING backoff / DEAD（max 8 durable attempts）
+-> NotificationDeliveryRecoverer 回收超时 PROCESSING
+```
+
+这里有三层失败治理，不能混为一个 retry：
+
+- Resilience4j `notificationDelivery` Retry 在一次 worker attempt 内最多调用 provider 3 次，
+  处理瞬时网络错误；Push/Email 各自有 20 permits/s 的本地 RateLimiter 和独立 CircuitBreaker。
+- durable delivery attempts 跨进程重启存在 MySQL 中，最多 8 次并指数退避；它解决 provider 长时间故障。
+- 本地 RateLimiter 没 permit、或 worker queue 满时 provider 根本没被调用，因此只
+  `rescheduleWithoutAttempt`，不消耗 durable attempts。否则健康消息可能仅因本 pod 容量不足被推入 DEAD。
+
+Provider 调用不能包在 DB transaction 里：网络 timeout 无法随 MySQL rollback 撤销，反而会把连接和
+row lock 长时间钉住。Worker 先短事务 claim，事务外调用 provider，再短事务按 lease token finalize。
 
 ## 3. Outbox 的 producer side：谁产生了哪些事件
 
@@ -203,7 +256,8 @@ Kafka inbound 的公共入口是 `IntegrationEventReader`：
 
 - 反序列化 `IntegrationEvent` envelope。
 - 校验 `eventId`、`eventType`、`eventVersion`、`payload`。
-- 校验 Kafka header 和 payload 的 `eventId/eventType` 一致。
+- 只用 body envelope 做 correctness 和 dispatch；Kafka headers 只用于日志、kcat、DLT 排障，
+  reader 不读取也不校验 header/body 一致性，因此缺 header 的手工 replay 仍可消费。
 - 提供 `requiredText(...)`，让 listener 做字段级 contract check。
 
 Consumer 侧的共同规则：
@@ -224,7 +278,7 @@ Consumer 侧的共同规则：
 - 每个 listener 的 payload 字段不同，`recipientKey` 的来源也不同。
 - 如果合成一个泛泛的 `GenericNotificationListener`，代码会把 source context 混在一起，后续很难解释为什么 `authorization.posted` 不等于用户可见交易入账。
 
-## 5. 四条实际业务流程
+## 5. 五条实际业务流程
 
 ### 5.1 授权批准：同步授权 + Outbox + DelayJob
 
@@ -314,26 +368,30 @@ transaction topic -> CardTransactionNotificationListener
 - `card_transaction.posted` 是用户可见交易流水事实。
 - Notification 使用 `card_transaction.posted`，避免把授权内部状态当成用户交易。
 
-### 5.4 Statement batch：日历批处理 + DelayJob + Outbox
+### 5.4 Statement：reconciliation + claimable job + DelayJob
 
 ```text
-StatementBatchPoller
--> StatementBatchService.runDueBatch()
-   -> 判断 close day 次日
-   -> 查询有 unbilled posted transactions 的 accounts
-   -> per account: StatementService.generate(...)
-      -> creditAccountRepository.findByIdForUpdate(row lock)
-      -> statementRepository.findByCycleForUpdate(idempotency)
-      -> transactionRepository.findUnbilledPostedByCreditAccountForUpdate(...)
-      -> Statement.close(...)
-      -> statementRepository.insert(...)
-      -> transactionRepository.assignStatement(...)
-      -> AutoRepaymentDelayJobScheduler.scheduleAutoRepayment(...)
+BillingCycleScheduler
+-> StatementCycleService.createDueJobs()
+   -> reconcile recent closed cycles
+   -> statement_jobs(PENDING shards; cycle/shard unique)
+-> StatementJobDispatcher claim PROCESSING lease
+-> StatementJobHandler（CRC32 account sharding）
+-> per account: StatementGenerationService.generate(...)
+   -> creditAccountRepository.findByIdForUpdate(row lock)
+   -> statementRepository.findByCycleForUpdate(account idempotency)
+   -> statementBillingRepository.findBillableLineSourcesForUpdate(...)
+   -> Statement.generate(...)
+   -> statementRepository.insert(...)
+   -> statementBillingRepository.markBilled(...)
+   -> StatementDueJobScheduler.schedule(...)
+-> StatementJobDispatcher finalize（claim_token owner check）
 ```
 
 为什么自动扣款是 DelayJob：
 
 - 自动扣款是 due date 的未来业务动作，与账单生成同事务写入 `delay_jobs`，不依赖 Kafka。
+- 当前 Statement 不产生 Outbox/Kafka event；过去的 `statement.closed` 通知路径已经删除。
 
 ### 5.5 到期自动扣款：DelayJob -> Repayment
 
@@ -384,7 +442,7 @@ recoverer 负责宕机/超时恢复
 | `OutboxWorker` 没有 handler dispatch map，`DelayJobWorker` 有 | Outbox worker 的动作永远是 publish message；DelayJob worker 执行的是多种业务动作，需要按 `jobType` dispatch |
 | Outbox final state 是 `PUBLISHED`，DelayJob final state 是 `DONE` | Outbox 完成的是消息发布；DelayJob 完成的是业务动作执行 |
 | Outbox 使用 `eventType` 路由 topic，DelayJob 使用 `jobType` 找 handler | 一个是 integration event contract，一个是内部 delayed business action contract |
-| Statement batch 没有 Claimer/Recoverer | 它不是 queue row 模型，而是日历驱动的候选账户扫描 |
+| StatementJob 不拆四个类 | 它仍是 queue row + lease 模型，只是集中在 `StatementJobDispatcher`，避免机械复制四类结构 |
 | Notification 拆多个 source listener | payload 和业务含义不同，source-specific listener 比一个大 listener 更能表达 bounded context |
 
 这些不同不是命名不统一，而是业务语义不同。
@@ -484,10 +542,12 @@ interview 里不用强行说这些名字完美，可以这样解释：
 
 如果你想对比 Statement 和 repayment，则读：
 
-1. `StatementBatchPoller`
-2. `StatementBatchService`
-3. `StatementService.generate(...)`
-4. `AutoRepaymentDelayJobScheduler`
-5. `AutoRepaymentDelayJobHandler`
-6. `AutoRepaymentService.debitStatement(...)`
-7. `RepaymentService.receive(...)`
+1. `BillingCycleScheduler`
+2. `StatementCycleService.createDueJobs(...)`
+3. `StatementJobDispatcher`
+4. `StatementJobHandler`
+5. `StatementGenerationService.generate(...)`
+6. `AutoRepaymentDelayJobScheduler`
+7. `AutoRepaymentDelayJobHandler`
+8. `AutoRepaymentService.debitStatement(...)`
+9. `RepaymentService.receive(...)`

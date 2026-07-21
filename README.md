@@ -88,7 +88,7 @@ business flow (authorization, presentment/posting, statement, repayment), the
 branch flows (reversal, expiry, refund, clearing adjustment, dispute), the
 ledger-vs-transaction-vs-reconciliation distinction, the issuer engineering
 concerns, and the remaining-domain roadmap (what to build next and why). (Merged
-from the former credit-card-lifecycle and ToDo notes, now archived under
+from the former credit-card-lifecycle and remaining-domain-roadmap notes, now archived under
 docs/archive/.)
 See [Caching & Rate Limiting](docs/caching-and-rate-limiting-cn.md) for the
 statement GET two-level cache (Caffeine L1 + Redis L2, cache-aside, versioned

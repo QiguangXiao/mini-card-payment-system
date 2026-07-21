@@ -1,7 +1,11 @@
 # Statement Read Cache 设计说明
 
-这份文档解释当前项目里恢复后的 statement GET cache：Caffeine L1 + Redis L2、
-cache-aside、TTL jitter、per-key single-flight 和 after-commit eviction。它也保留
+> **归档对齐说明（2026-07）**：正文已对齐当前 `statement-read-model-v3`、
+> `statements.version` + Lua CAS + tombstone、默认开启的跨 pod rebuild lock，以及默认关闭的
+> Redis Pub/Sub L1 广播。历史通用 `SnapshotCache` 和 Card cache 只保留在明确标注的历史章节。
+
+这份文档解释当前 statement GET cache：Caffeine L1 + Redis L2、cache-aside、TTL jitter、
+JVM/跨 pod single-flight、versioned CAS、tombstone 和 after-commit eviction。它也保留
 Card snapshot cache 的删除取舍，方便比较“该缓存”和“不该缓存”的边界。
 
 ## 1. 当前缓存范围
@@ -10,7 +14,7 @@ Card snapshot cache 的删除取舍，方便比较“该缓存”和“不该缓
 
 | cache name | key | value | 用途 | 风险等级 |
 | --- | --- | --- | --- | --- |
-| `statement-read-model-v1` | statement id | `StatementReadModel` | `GET /api/statements/{id}` 查询响应快照 | 中低 |
+| `statement-read-model-v3` | statement id | `<statements.version>\|<StatementReadModel JSON>` | `GET /api/statements/{id}` 查询响应快照 | 中低 |
 
 Card snapshot cache 仍然删除：
 
@@ -25,7 +29,7 @@ Card snapshot cache 仍然删除：
 StatementController.get
 -> StatementReadService.get
    -> Caffeine L1
-   -> Redis L2 JSON
+   -> Redis L2 `<version>|<payload>` envelope
    -> StatementGenerationService.get
    -> MySQL
 ```
@@ -46,6 +50,13 @@ statement:
     local-maximum-size: 1000
     remote-ttl: 5m
     remote-ttl-jitter: 30s
+    tombstone-ttl: 10s
+    rebuild-lock-enabled: true
+    rebuild-lock-ttl: 2s
+    rebuild-lock-wait-attempts: 5
+    rebuild-lock-wait-interval: 20ms
+    broadcast:
+      enabled: false
 ```
 
 ## 2. 为什么只恢复 statement GET cache
@@ -54,9 +65,11 @@ statement:
 
 - Caffeine L1：同 JVM 内低延迟读取，并用 `Cache.get(key, loader)` 做 per-key single-flight。
 - Redis L2：跨实例共享 statement read model。
-- cache-aside：L1/L2 都 miss 时回源 MySQL，成功后写回 Redis 和 L1。
-- after-commit eviction：还款更新 statement 后，事务提交成功再删缓存。
+- cache-aside：L1/L2 都 miss 时回源 MySQL，成功后用 versioned CAS 写回 Redis 和 L1。
+- after-commit eviction：还款更新 statement 后，事务提交成功再写 version tombstone，而不是 DELETE。
 - TTL jitter：Redis TTL 在基础 TTL 上加随机偏移，避免同一批 key 同时过期造成 cache avalanche。
+- Redis rebuild lock：L2 miss 后用 `SET NX PX` 做跨 pod best-effort single-flight，默认开启。
+- Redis Pub/Sub：可选广播让其他 pod 清 L1，默认关闭，漏消息由 30s L1 TTL 兜底。
 
 不恢复 Card snapshot cache 的原因：
 
@@ -125,28 +138,32 @@ Statement 是 read model，Card 是 snapshot。
 2. L1 miss 后查 Redis L2
 3. L2 hit 后回填 L1
 4. L1/L2 都 miss 时调用 loader，从 MySQL/source of truth 重建 snapshot
-5. 成功加载后写 Redis L2；Caffeine 的 `Cache.get` 会保存 loader 返回值
+5. 成功加载后携带 `statements.version` 走 Lua CAS 写 Redis L2；Caffeine 的 `Cache.get` 保存返回值
 ```
 
 失败策略：
 
 - Redis read 失败：记录 warning，回源 MySQL。
 - Redis write 失败：保留 L1，本次请求仍然返回成功。
-- Redis JSON 损坏：删除坏 value，下次从 MySQL 重建。
-- loader 返回 `null`：不写 cache，用于避免 negative cache。
+- Redis JSON 或 envelope 损坏：删除坏 value，下次从 MySQL 重建。
+- statement 不存在时 `StatementGenerationService.get` 抛 not-found，不构造/写入 cache entry；当前没有
+  404 negative cache。
 
 当前失效策略：
 
 - 如果没有事务同步，立即 evict。
 - 如果当前线程有 Spring transaction synchronization，注册 after-commit evict。
-- `RepaymentService` 不直接操作 Redis key，只调用 `StatementReadService.evictAfterCommit(statement.id())`。
+- `RepaymentService` 不直接操作 Redis key，只调用 `StatementReadService.evictAfterCommit(statement)`，把
+  已在 transaction 内推进后的 `statement.version()` 传给失效逻辑。
 
 并发策略：
 
 - `StatementReadService` 通过 Caffeine `Cache.get(key, loader)` 做 per-key single-flight。
 - 同一个 key 在 L1/L2 都 miss 时，同 JVM 内只有一个线程真正回源。
-- 跨 pod 的 cache stampede 主要靠 Redis TTL、TTL jitter 和短期 L1 缓解。
-- 如果以后出现超热点 key，可以再引入 Redis mutex，但当前项目先保持简单。
+- 跨 pod 的 cache stampede 由 Redis rebuild lock 缓解：winner 回源并回填，loser 最多等待
+  `5 × 20ms` 重读 L2，超时或 Redis 故障后 fail-open 自己回源。
+- lock 只保护幂等的“DB read + CAS cache fill”，是性能优化而不是资金正确性闸；释放时用 Lua
+  compare-token-then-delete，避免 stale owner 删除新 owner 的锁。
 
 如果没有这些额外处理：
 
@@ -156,7 +173,8 @@ Statement 是 read model，Card 是 snapshot。
 | Redis JSON 损坏后删除坏值 | 一个旧格式或坏 JSON 会让同一个 key 后续一直解析失败 |
 | per-key single-flight | 热点 statement/card 在 L1/L2 同时 miss 时，多个线程一起打 MySQL，形成 cache stampede |
 | TTL jitter | 一批 key 同秒过期，下一波请求同时回源，制造 cache avalanche |
-| after-commit evict | 事务提交前删 cache 时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis（注意：after-commit 只收敛窗口、不根治竞态，详见 6.1） |
+| after-commit evict | 事务提交前失效时，另一个 GET 可能读旧 DB 值并把 stale snapshot 写回 Redis；当前再用 version + tombstone 关掉迟到写（详见 6.1） |
+| Redis rebuild lock | 多 pod 同时 L2 miss 时会各自回源，热点 key 可能击穿 MySQL |
 
 ## 6. Statement read model cache
 
@@ -181,6 +199,13 @@ statement:
     local-maximum-size: 1000
     remote-ttl: 5m
     remote-ttl-jitter: 30s
+    tombstone-ttl: 10s
+    rebuild-lock-enabled: true
+    rebuild-lock-ttl: 2s
+    rebuild-lock-wait-attempts: 5
+    rebuild-lock-wait-interval: 20ms
+    broadcast:
+      enabled: false
 ```
 
 为什么可以缓存：
@@ -196,7 +221,7 @@ statement:
 - `RepaymentService` 更新 statement 后调用：
 
 ```text
-StatementReadService.evictAfterCommit(statement.id())
+StatementReadService.evictAfterCommit(statement)
 ```
 
 为什么是 after commit：
@@ -204,36 +229,37 @@ StatementReadService.evictAfterCommit(statement.id())
 - 如果事务提交前 evict，另一个 GET 可能读到旧 DB 值并重新写入 Redis，旧值反而被“固化”。
 - after-commit evict 把失效时机排到 commit 之后，避开上面这条最常见的 stale reload。
 
-### 6.1 after-commit evict 不是强一致（重要）
+### 6.1 after-commit + version/CAS/tombstone 的边界（重要）
 
-`evictAfterCommit` 只决定“写侧什么时候删 cache”，它**并不能消除 cache-aside 固有的 read-write 竞态**。
-delete-after-commit 之后仍然存在的 stale window：
+`evictAfterCommit` 只决定“写侧什么时候失效 cache”；当前实现再用 `statements.version`、Lua CAS 和墓碑
+关闭 cache-aside 的 late-write race。时间线如下：
 
 ```text
 时间线（pod 内或跨 pod 都可能发生）：
   t0  GET 线程读 MySQL，拿到旧快照（MySQL RR 下是事务开始时的一致性快照），但后续写 Redis 很慢
   t1  还款事务 commit
-  t2  afterCommit 触发，evict 删掉 Redis key
-  t3  GET 线程“迟到”地 writeRedis(t0 的旧值)  ← 旧 read model 重新落到 Redis
-  ...  旧值一直停留到 remoteTtl 过期才被清掉
+  t2  afterCommit 触发，L2 写入新 version 的墓碑（版本地板）
+  t3  GET 线程“迟到”地回填 t0 的旧值
+      → Lua 发现 incoming.version < stored.version，拒绝旧值
+  t4  新鲜 GET 读到墓碑（按 miss 处理），回源 DB，并以同/新 version 的真值替换墓碑
 ```
 
-也就是说：**写后删 + 短 TTL 只能把不一致窗口收敛到 `remoteTtl`，做不到强一致。** 此外还有第二层 stale：
-evict 只删本 pod 的 L1 + Redis，其他 pod 的 Caffeine L1 仍会服务旧值，最长 `localTtl`（本项目 30s）。
+为什么只加 version 还不够：如果 evict 仍 DELETE，迟到旧值面对空 key 没有版本可比较，仍会成功写回；墓碑
+保留了版本地板，才同时关闭“覆盖新值”和“落入空 key”两条 race。
+
+这仍然不是端到端强一致，剩余窗口是：
 
 | stale 来源 | 最长窗口 | 触发条件 |
 | --- | --- | --- |
-| 跨 pod L1 未失效 | `localTtl`（30s） | 还款在 pod A，pod B 的 L1 还没过期 |
-| 迟到写覆盖 Redis | `remoteTtl`（5m） | GET 读在 commit 前、writeRedis 落在 evict 后 |
-| Redis evict 失败 | `remoteTtl`（5m） | `redisTemplate.delete` 抛异常，仅 L1 被删 |
+| 跨 pod L1 未失效 | `localTtl`（30s） | 广播默认关闭，或开启后某 pod 漏收 Pub/Sub |
+| 墓碑写失败 | `remoteTtl`（5m） | Redis 抖动，仅本 pod L1 被清；旧 L2 留到 TTL |
+| commit 后、afterCommit 前宕机 | `remoteTtl` / `localTtl` | DB 已提交，但墓碑和广播尚未执行 |
+| 墓碑过早过期 | 取决于慢 GET | 从读 DB 到回填的时滞超过 10s tombstone TTL，版本地板先消失 |
 
-工程缓解手段（按成本递增，本项目刻意停在前两项）：
-
-1. **缩短 `remoteTtl`** —— 直接压窗口，最简单。
-2. **文档化并接受窗口** —— 账单查询容忍秒级 stale，要强一致就直接读 DB（本项目选择）。
-3. **delayed double-delete** —— commit 后删一次，延迟数百 ms 再删一次，覆盖“迟到写”。
-4. **read model 版本号 / CAS 写入** —— 旧版本写 Redis 时被拒，根治迟到写。
-5. **Pub/Sub 广播失效** —— Redis Pub/Sub 或 Kafka 通知各 pod 清 L1，压掉跨 pod L1 窗口。
+当前工程手段：短 L1 TTL + L2 TTL/jitter + version/CAS/tombstone + 默认开启的 rebuild lock；需要缩短
+跨 pod L1 窗口时开启 Redis Pub/Sub。若业务要求“commit 成功后失效意图绝不丢”，升级路径是把
+`statement.invalidate(id, version)` 写入同事务 Outbox，再由幂等 relay 至少一次写墓碑和广播；代价是多一次
+DB 写与约 1s poll 延迟。delayed double-delete 只能按经验等待，不能证明覆盖所有慢 reader，当前不采用。
 
 底线口径：**cache 是性能层不是正确性来源**。`paid_amount/status` 的强一致由 `credit_accounts` row lock 和 DB 事务保证；
 cache 只在 GET 展示路径上提速，秒级 stale 是已知且可接受的 tradeoff。
@@ -324,7 +350,7 @@ cache name 建议格式：
 
 当前/历史例子：
 
-- `statement-read-model-v1`
+- `statement-read-model-v3`
 - `card-snapshot-v1`（已删除的 Card snapshot cache）
 
 为什么带版本：
@@ -338,7 +364,7 @@ cache name 建议格式：
 - 当前 statement 查询缓存：`StatementReadService`、`StatementReadModel`、`StatementReadCacheProperties`。
 - 如果以后恢复通用层，再考虑 `SnapshotCache`、`SnapshotCacheFactory`、`TwoLevelSnapshotCache`。
 - 如果以后恢复 reference data cache，再考虑 `CardSnapshot`、`CachedCardRepository`。
-- 写路径失效当前直接调用 `StatementReadService.evictAfterCommit(statementId)`；不再额外拆 invalidator helper。
+- 写路径失效当前直接调用 `StatementReadService.evictAfterCommit(statement)`；不再额外拆 invalidator helper。
 
 命名取舍：
 
@@ -350,8 +376,10 @@ cache name 建议格式：
 
 可以这样回答：
 
-> 当前项目恢复了一个很窄的 statement GET read model cache：Caffeine 做同 JVM L1，
-> Redis 做跨实例 L2，L1/L2 miss 时回 MySQL 重建，repayment commit 后再 evict。
+> 当前项目有一个很窄的 statement GET read model cache：Caffeine 做同 JVM L1，Redis 做跨实例 L2，
+> L1/L2 miss 时回 MySQL 重建；同 JVM 用 Caffeine single-flight，跨 pod 用默认开启的 Redis rebuild lock。
+> repayment commit 后写 `statements.version` 墓碑，读回填走 Lua CAS，挡住迟到旧值。跨 pod L1 广播已实现、
+> 默认关闭，漏消息由 30s L1 TTL 兜底。
 > Card snapshot cache 没有恢复，因为 card 状态会影响 authorization 判断，安全 TTL 太短。
 > 无论是否使用 cache，MySQL 仍然负责状态和一致性，额度、幂等 claim 和还款入账不能放进 cache。
 
@@ -364,10 +392,10 @@ cache name 建议格式：
 - 为什么 Redis TTL 要 jitter？
   - 避免大量 key 同时过期，引发 cache avalanche。
 - 为什么不缓存 404？
-  - 当前更重视新数据可见性和安全边界；需要防攻击流量时可以单独设计短 TTL negative cache。
+  - statement id 是系统生成 UUID，当前没有可猜测的海量不存在 key 攻击面；需要防这类流量时再单独设计
+    短 TTL negative cache，而不是无条件增加一致性状态。
 - after-commit evict 是不是就保证还款后读不到旧账单了？（高频追问，必须答准）
-  - 不是。after-commit 只保证“删 cache 排在 commit 之后”，避开“事务内提前删→提交前的 GET 又写回旧值”这条最常见的坑。
-  - 但它消除不了 cache-aside 固有的 read-write 竞态：一个 GET 在 commit *之前*读到旧 DB 快照、却在 evict *之后*才把旧值写回 Redis，旧值会停留到 `remoteTtl`。
-  - 再加跨 pod 的 L1 不会互相失效，其他实例最长 stale `localTtl`。
-  - 所以写后删 + 短 TTL 只是把不一致**窗口收敛**，不是强一致。要根治可上 delayed double-delete、read model 版本号、或 Pub/Sub 广播失效；本项目刻意停在“收敛窗口 + 文档化”，因为账单查询容忍秒级 stale，强一致路径直接读 DB。
+  - 不是。after-commit 只保证失效排在 commit 之后；version/CAS/tombstone 进一步挡住 commit 前读、commit 后迟到回填的旧值。
+  - 仍剩 commit 后回调前宕机、Redis 墓碑写失败、默认关闭广播时其他 pod 的 L1，以及 tombstone TTL 小于极慢 reader 时滞等窗口。
+  - 所以这仍是可自愈的 performance cache，不是资金正确性来源；强一致路径读 DB，需要 durable invalidation 时用 transaction Outbox 升级。
   - 详见 6.1 节。

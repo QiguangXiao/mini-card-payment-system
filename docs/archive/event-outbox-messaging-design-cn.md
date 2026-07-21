@@ -1,6 +1,9 @@
-# Event / Outbox / Messaging 设计、评价与面试备战（Claude）
+# Event / Outbox / Messaging 设计、评价与 interview 备战
 
-> **归档对齐说明（2026-07）**：文中的 ledger / risk feature 两类 projection consumer、`repayment-events` topic 及"跨 topic 消费"的例子现已移除；Outbox/Inbox/DLT 主干机制不变。文中相关段落已按现行架构清理，其余内容保持原样；现行事件设计以 [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文正文已按当前 Appender、Kafka 配置拆分、
+> envelope-only correctness、Notification Inbox + delivery fan-out 和 group-routed DLT 逐段核对。
+> Ledger/risk/statement/repayment consumer 只作为删除取舍或未来场景出现。精简入口见
+> [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md)。
 
 > 关键词：领域事件, 事务性发件箱, 至少一次, 幂等消费者, 死信, 分区有序,
 > domain event, transactional outbox, at-least-once, idempotent consumer,
@@ -48,7 +51,7 @@
   返回拷贝并清空。事件是“业务事实”的产物，不是 service 临时拼出来的。
 - **同事务写 outbox**。`AuthorizationService.authorize(...)`（`@Transactional`）在更新
   authorization/credit account 之后，把 `pullDomainEvents()` 的事件逐个交给
-  `AuthorizationDomainEventPublisher.append(event)`，由 `AuthorizationOutboxAdapter` 落 `outbox_events`。
+  `AuthorizationDomainEventAppender.append(event)`，由 `AuthorizationOutboxAdapter` 落 `outbox_events`。
   **业务行与 outbox 行在同一个 MySQL commit**——这就是 transactional outbox 的全部要点。
 - **幂等重放不重复发事件**。同 `Idempotency-Key` 的重复请求走 idempotency claim 失败分支
   **提前返回 winner 状态，不 append**。所以一个业务事实只产生一个 `eventId`。
@@ -99,8 +102,13 @@
     fire-and-forget 会在 broker 实际失败时误判已发。
   - `InterruptedException` 恢复 interrupt flag，不吞 shutdown 信号。
   - `topicFor` 按 `eventType` 前缀路由到各 context topic，未知类型 fail-fast。
-- `KafkaMessagingConfiguration`：每个 topic 3 partitions / 1 replica（本地单 broker），
-  partitionKey 用聚合 id 保证**单聚合内有序**。
+- `KafkaTopicsConfiguration`：声明 authorization/transaction 两个业务 topic 和 Notification DLT，
+  都是 3 partitions / 1 replica（本地单 broker）。`KafkaConsumerConfiguration` 只提供统一
+  `DefaultErrorHandler`，Spring Boot 默认 listener factory 自动装入；并发由各 `@KafkaListener`
+  的配置占位符声明。
+- partitionKey 用 source aggregate id 建立 partition affinity，但不能把它简化成端到端严格有序：
+  Outbox 有 4 个并发 publish workers，不同 row 可能以不同顺序拿到 broker ack；consumer 仍应靠
+  状态机/version 防御业务乱序。
 
 ### 1.5 Consumer side：契约校验 + 双层幂等
 
@@ -108,9 +116,11 @@
   group（`AuthorizationNotificationListener`、`CardTransactionNotificationListener`）。
   未来新增下游时互不影响、可独立扩缩和重放。
 - `IntegrationEventReader.read(...)`：反序列化 + 集中校验 transport contract
-  （`eventId/payload` 必填、`eventType` 必填、`eventVersion>=1`、
-  **header 的 eventId 必须等于 payload 的 eventId**、eventType header 一致）。
-  契约错误抛 `EventContractException`（永久失败）。`requiredText/requiredInstant`
+  （`eventId/payload` 必填、`eventType` 必填、`eventVersion>=1`）。
+  **Consumer correctness 只依赖 self-describing body envelope**；Kafka headers 是 kcat/DLT/log
+  排障用 observability metadata，不参与 dispatch，也不做 header/body 一致性校验。因此缺 header 的
+  手工 replay 仍可消费，header 写错只会误导排障，不会改变业务处理。
+  契约错误抛 `InvalidIntegrationEventException`（永久失败）。`requiredText/requiredInstant`
   让坏格式表现为 contract failure，而不是底层 `DateTimeParseException`。
 - **双层幂等**（消费侧最关键的部分）：
   1. **Inbox claim**（第一道）：`ConsumerInboxRepository.claim(consumerName, eventId)`，
@@ -120,18 +130,20 @@
      挡住“绕过 inbox 的手工 replay / 补偿脚本”。
   - **inbox claim 与业务写在同一个 `@Transactional`**（见 `RequestNotificationService.requestNotification`）。
     否则 claim 成功但业务写失败会“假装消费过”，造成丢消费。
-- **错误处理与 DLT**（`KafkaMessagingConfiguration.listenerFactory`）：
+- **错误处理与 DLT**（`KafkaConsumerConfiguration.kafkaListenerCommonErrorHandler`）：
   `DeadLetterPublishingRecoverer`（保留原 partition 便于排查/重放）+
   `DefaultErrorHandler(FixedBackOff(1000ms, 2次))`；
-  **`addNotRetryableExceptions(EventContractException.class)`**——
-  永久契约错误直进 DLT 不空转，瞬时错误才退避重试；`concurrency` 对齐 partition 数。
+  **`addNotRetryableExceptions(InvalidIntegrationEventException.class)`**——
+  永久契约错误直进 DLT 不空转，瞬时错误才退避重试。DLT 目标按失败 groupId 路由；当前
+  Notification concurrency=2，而 topic partitions=3，配置不要求二者相等，只要求并发不要误以为能
+  超过 partition 上限扩容。
 
 ### 1.6 数据模型（已配套索引）
 
 ```sql
 outbox_events(
   id PK, aggregate_type, aggregate_id, event_type, event_version,
-  partition_key, payload JSON, status, attempts, next_attempt_at,
+  partition_key, payload JSON, status, attempts, next_attempt_at, lease_token,
   created_at, published_at, last_error,
   INDEX idx_outbox_publishable (status, next_attempt_at, created_at),  -- 匹配 poller 查询
   CHECK status IN ('PENDING','PROCESSING','PUBLISHED','DEAD'),
@@ -143,8 +155,9 @@ consumer_inbox(
 )
 ```
 
-`idx_outbox_publishable` 的 `status` 做前导列，PENDING 行天然聚簇，PUBLISHED 堆积不拖慢
-poller 的 `WHERE status='PENDING' AND next_attempt_at<=now ORDER BY created_at`。
+`idx_outbox_publishable` 的 `status` 做前导列，让 poller 能先缩小到 PENDING + due range；
+这不等于 InnoDB 物理“按 PENDING 聚簇”（聚簇索引仍是主键），也不等于 PUBLISHED 可无限堆积。
+大量完成行仍会增加存储、B-tree 层级、备份和维护成本，所以 retention/partitioning 仍是 production gap。
 
 ---
 
@@ -158,10 +171,10 @@ poller 的 `WHERE status='PENDING' AND next_attempt_at<=now ORDER BY created_at`
    lease + lease-token 重校验 + recoverer 兜底，指数退避 + DEAD。
 3. **显式 at-least-once + 双层消费者幂等**：Inbox（通用）+ 业务唯一键（兜底），
    且 claim 与业务写同事务。语义自洽。
-4. **envelope/contract 成熟**：稳定 envelope + JsonNode payload + 手工 ObjectNode 解耦 domain；
-   header 与 payload 的 eventId 一致性校验是很多人想不到的防御。
+4. **envelope/contract 边界清楚**：稳定 envelope + JsonNode payload + 手工 ObjectNode 解耦 domain；
+   body 是 correctness source，header 只服务 observability，手工 replay 不必伪造 headers。
 5. **Kafka 层职责干净**：同步等 ack、按聚合 partition、per-context topic/group/DLT、
-   **可重试 vs 不可重试异常分类**、concurrency 对齐 partition。
+   **可重试 vs 不可重试异常分类**、明确 concurrency 的有效上限由 partition 数决定。
 6. **schema 配套**：outbox 复合索引、inbox 去重主键、status/attempts CHECK 约束都到位。
 
 ### 2.2 真实 gap（只列主要的，不硬凑）
@@ -215,14 +228,15 @@ poller 的 `WHERE status='PENDING' AND next_attempt_at<=now ORDER BY created_at`
   recoverer 放回重试。lease-token 防迟到 worker 覆盖新状态（乐观并发的一种）。
 - **Poison message & DLT**：退避重试 N 次仍失败 → 死信；永久错误（坏 JSON、不兼容 schema）
   **不重试直接死信**。死信要可观测、可重放。
-- **Ordering（有序性）**：Kafka 只保证**同 partition 内有序**；partitionKey=聚合 id ⇒ 单聚合有序。
-  跨 partition / 跨 topic 无序；`concurrency>1` 不破坏单 partition 顺序，但 **DLT 会**
-  （失败那条被旁路，同 key 后续继续）。
+- **Ordering（有序性）**：Kafka 只保证**已经进入同一 partition 的 records**按 append 顺序消费；
+  partitionKey=聚合 id 只保证 partition affinity，不自动保证多个 Outbox worker 按业务发生顺序 publish。
+  跨 partition / 跨 topic 无序；`concurrency>1` 不破坏 broker 内单 partition 顺序，但 **DLT 会**
+  造成业务序列缺口（失败那条被旁路，同 key 后续继续）。
 - **Schema evolution & Tolerant Reader**：envelope 稳定 + payload 宽松解析；
   向后兼容加字段、破坏性变更升 `eventVersion` 或新 `eventType`。
-- **Choreography vs Orchestration**：本项目是**编排式 choreography**——主事务只发事实，
-  下游各 context 自己决定怎么反应（ledger 记账、notification 通知、risk 更新特征），
-  没有中心 saga 协调器。优点解耦，代价是流程散落、端到端可观测性更难。
+- **Choreography vs Orchestration**：本项目的 Kafka 路径是 **choreography**——主事务只发事实，
+  当前 Notification context 自己决定如何反应，没有中心 saga coordinator。优点是解耦，代价是
+  流程分散、端到端可观测性更难；不要把 choreography 说成“编排式”。
 - **Anti-Corruption Layer**：outbox adapter 手工映射 domain→integration event，
   domain 改名不破契约。
 
@@ -250,7 +264,8 @@ poller 的 `WHERE status='PENDING' AND next_attempt_at<=now ORDER BY created_at`
 
 ### Q3. 消费者幂等具体怎么做？有了 Inbox 为什么还要业务唯一键？
 **答**：Inbox（`consumer_inbox` 唯一键 INSERT-claim）是**通用第一道**：同一
-`(consumer_name, eventId)` 只处理一次。业务唯一键（ledger 分录、notification）是**第二道**，
+`(consumer_name, eventId)` 只处理一次。业务唯一键（当前是 `notifications.source_event_id`，
+以及 delivery 的 `(notification_id, channel)`）是**第二道**，
 挡住绕过 Inbox 的手工 replay / 补偿脚本。
 - **硬核追问：Inbox claim 和业务写不在一个事务会怎样？**
   claim 成功但业务写失败/回滚 → 下次重投时 Inbox 认为“已消费”直接跳过 → **丢消费**。
@@ -281,8 +296,10 @@ Java `Instant` vs MySQL `TIMESTAMP(6)` 精度边界。
   消费者 Inbox 去重。**lease 解决的是“卡死可见性”，不是“绝不重复”。**
 
 ### Q6. 顺序性怎么保证？什么情况下会乱序？
-**答**：partitionKey = 聚合 id（如 `creditAccountId`），保证**同一聚合的事件进同一 partition、有序**。
-- **硬核追问：consumer `concurrency=3` 会破坏顺序吗？**
+**答**：partitionKey = source aggregate id（Authorization 用 authorizationId，CardTransaction 用
+cardTransactionId），让同一 key 进入同一 partition。Kafka 只保证 broker 中单 partition 的 append/consume
+顺序；Outbox 并发 publish 仍可能让业务产生顺序在到达 broker 前发生变化。
+- **硬核追问：consumer `concurrency=2` 会破坏 partition 内顺序吗？**
   不会。concurrency 只是同 group 内多线程**各吃不同 partition**，单 partition 仍单线程有序。
 - **硬核追问：那 DLT 呢？**
   会**局部乱序**：某条重试耗尽进 DLT 后，同 key 的后续消息继续处理（跳过了失败那条）。
@@ -293,7 +310,7 @@ Java `Instant` vs MySQL `TIMESTAMP(6)` 精度边界。
 
 ### Q7. outbox 表越来越大，poller 会不会变慢？
 **答**：`idx_outbox_publishable(status, next_attempt_at, created_at)`，`status` 前导让
-PENDING 行聚簇，PUBLISHED 堆积不影响 PENDING 扫描。
+查询先定位 PENDING + due range，避免全表扫；但它不是主键聚簇，也不能让完成行“零成本”。
 - **硬核追问：那存储无限涨呢？**（gap #1）
   需要归档 job：把 PUBLISHED 行按 `published_at` 滚动迁到冷表/删除。这是当前缺的工程化部分。
 - **强补充**：也可以给 outbox 表做时间分区（按天），直接 `DROP PARTITION` 比 `DELETE` 更省。
@@ -302,7 +319,7 @@ PENDING 行聚簇，PUBLISHED 堆积不影响 PENDING 扫描。
 **答**：envelope 稳定 + payload 灵活（Tolerant Reader）。避免为每种事件建一组 payload class、
 也避免版本演进僵化、避免 consumer 耦合自己不关心的字段。
 - **硬核追问：那字段写错/缺失谁来兜？**
-  `IntegrationEventReader.requiredText/requiredInstant` 显式校验，缺字段抛 `EventContractException`
+  `IntegrationEventReader.requiredText/requiredInstant` 显式校验，缺字段抛 `InvalidIntegrationEventException`
   → 直接 DLT（不重试）。把“契约错误”和“瞬时错误”分开处理。
 - **强补充**：代价是没有编译期类型安全；规模再大时应上 schema registry（Avro/Protobuf）兼顾灵活与约束。
 
@@ -321,9 +338,12 @@ CDC 低延迟、不轮询、不侵入业务表查询，但要运维 connector、
   换成“CDC 拖 outbox 表”，**消费者侧完全不用改**（envelope/幂等不变）。这就是分层抽象的价值。
 
 ### Q11. 为什么 topic / listener 按 source context 拆，而不是一个大 topic？
-**答**：每个 bounded context 独立 group + 独立 DLT + 独立 concurrency，**故障与扩缩互不影响**，
-也便于“只重放某个投影”。一个大 topic 会让 ledger 的失败和 notification 的扩缩互相牵连。
+**答**：topic 先按上游业务事实拆成 authorization 和 card-transaction；Notification 再用两个
+source-specific listener 翻译各自 payload，但共享 notification group/DLT，因为它们属于同一个下游职责。
+这样不会把 `authorization.posted` 误当成用户可见交易通知，也不需要一个巨型 listener 同时理解所有 payload。
 - **强补充**：路由放在 Kafka adapter（`topicFor` 按 eventType 前缀），outbox 本体保持通用、不知道 topic。
+  如果未来新增真正独立的 consumer context，再给它单独 group、DLT route、Inbox identity 和容量配置；
+  当前不能把不存在的 ledger/risk group 当作已经实现的隔离证据。
 
 ---
 
@@ -331,5 +351,6 @@ CDC 低延迟、不轮询、不侵入业务表查询，但要运维 connector、
 
 这套 messaging 把 **Transactional Outbox + claim-lease-recover 投递 + at-least-once 与双层幂等 +
 envelope 版本化 + per-context DLT 与可重试分类** 全部做对且自洽，是项目里最“可面试”的部分。
-真正待补的工程化只有三点：**(1) outbox/inbox 数据保留清理、(2) producer 侧 DEAD 的可观测与重放、
-(3) eventVersion 的消费侧强制协商**。把这三块补上即生产级。
+当前最明显的工程化缺口包括：**(1) outbox/inbox 数据保留清理、(2) producer 侧 DEAD 与 Kafka DLT
+的可观测/受控重放、(3) eventVersion 的消费侧强制协商**。补齐这三项仍不等于自动“生产级”；
+还需要安全认证、容量/lag SLO、审计、灾备、schema rollout 和真实运维演练。

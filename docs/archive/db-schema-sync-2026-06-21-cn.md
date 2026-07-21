@@ -1,12 +1,17 @@
 # 2026-06-21 本地 DB Schema 同步记录
 
+> **归档对齐说明（2026-07）**：这是一份 2026-06-21 的一次性现场记录，不是现行 schema 手册。
+> 当时验证过的 Ledger/Risk/statement notification 相关投影后来已由 `0003–0006` 删除，`OVERDUE`
+> 也由 `0007` 从 Statement status 中移除。排查当前结构必须看 `DATABASECHANGELOG` 和 `0001–0007`
+> 的合成结果，不能重复执行本文中的临时 SQL。
+
 这份记录说明本次把本地 Docker MySQL 里的旧表结构同步到当时 schema 快照的过程。
 它不是通用 migration 工具，而是一次 local schema drift 修复记录，方便之后排查
 “代码已经改了字段，但本地 DB 还是旧表”的问题。
 
 后续项目已引入 Liquibase；通用操作请看
-`docs/database-migration-liquibase-cn.md`，当前 changelog 入口是
-`src/main/resources/db/changelog/db.changelog-master.yaml`。
+[`mybatis-sql-and-migration-cn.md`](../mybatis-sql-and-migration-cn.md)，当前 changelog 入口是
+`src/main/resources/db/changelog/db.changelog-master.yaml`，active include 已推进到 `0007`。
 
 ## 1. 背景
 
@@ -94,14 +99,21 @@ WHERE recipient_key IS NULL
 
 ### 2.5 card_transactions
 
-已补齐：
+当时补齐：
 
-- `idx_card_transactions_billing_batch (status, statement_id, posted_at, credit_account_id)`
+- `idx_card_transactions_billing_batch (status, statement_id, posted_at, credit_account_id)`（当时形状）
 
 业务含义：
 
 - statement batch 会扫描 `POSTED AND statement_id IS NULL` 的交易。
 - 该索引用于支持账单批处理按状态、账单归属、入账时间和账户聚合查询。
+
+当前 `0001` 已把它演进为
+`idx_card_transactions_billing_batch(status, billing_status, posted_at, credit_account_id)`，并增加更贴合
+单账户出账锁定查询的
+`idx_card_transactions_statement_candidates(credit_account_id, status, billing_status, statement_id, posted_at, id)`。
+前者服务批量扫描/聚合，后者服务 `StatementBillingMapper.findBillableLineSourcesForUpdate`；不要把 2026-06-21
+的旧列顺序复制到当前 migration。
 
 ## 3. 本次验证
 
@@ -119,6 +131,11 @@ WHERE recipient_key IS NULL
 - `idx_notifications_recipient` 已存在。
 - `idx_card_transactions_billing_batch` 已存在。
 - `chk_notifications_subject_type`、`chk_outbox_status`、新的 credit account 金额约束已存在。
+
+这里的 `chk_notifications_subject_type` 也是历史现场事实。当前 baseline 刻意不对白名单做 DB CHECK：
+Notification 属于扩展型外围能力，现行类型由 Java enum/listener 控制，避免每增加 subject 都被迫迁 schema。
+类似地，现行 authorization CHECK 允许 `posted_at > expires_at`，因为 late presentment 是否接受是业务策略，
+不能用旧约束把它一刀切拒绝。
 
 真实请求验证：
 
@@ -143,7 +160,7 @@ Content-Type: application/json
 
 - API 返回 `APPROVED`。
 - Outbox event `authorization.approved` 变为 `PUBLISHED`。
-- Risk feature projection 成功。
+- Risk feature projection 成功（**仅代表 2026-06-21 当时的历史架构**；该 projection 现已由 `0004` 删除）。
 - Notification consumer 成功写入新模型通知：
   `subject_type = AUTHORIZATION`、`subject_id = <authorizationId>`、`recipient_key = card-123`。
 

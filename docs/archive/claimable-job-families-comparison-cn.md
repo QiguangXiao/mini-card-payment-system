@@ -1,4 +1,9 @@
-# Claimable Job 三大家族对比：DelayJob / Outbox / StatementJob（Claude）
+# Claimable Job 三大家族对比：DelayJob / Outbox / StatementJob
+
+> **归档对齐说明（2026-07）**：正文已按当前 claim/lease/recover 实现、Statement
+> reconciliation heartbeat、独立 AUTO_REPAYMENT worker pool 和现行配置重新核对；下文的
+> gap 也只描述当前确实尚未实现的能力。精简入口见
+> [claimable-jobs-cn.md](../claimable-jobs-cn.md)。
 
 > 关键词：可领取任务, 数据库队列, 租约, 竞争消费者, 退避重试, 死信, 分片扇出,
 > claimable job, database-backed queue, lease, competing consumers,
@@ -58,7 +63,7 @@
 
 - **一个 job = 一个聚合的一次未来动作**（point action at time T）。`DelayJob` 带
   `jobType / aggregateType / aggregateId / scheduledAt`。
-- **当前两种 jobType**：`AUTHORIZATION_EXPIRY`（7 天未 capture 自动释放额度）、`AUTO_REPAYMENT`（到期口座振替）。
+- **当前两种 jobType**：`AUTHORIZATION_EXPIRY`（7 天未收到 presentment，自动释放额度 hold）、`AUTO_REPAYMENT`（到期口座振替）。
 - **业务方创建**：如 `AutoRepaymentDelayJobScheduler.scheduleAutoRepayment` 在账单生成同事务里
   `insertIfAbsent`，`scheduledAt = dueDate`。
 - **创建幂等**：`uk_delay_jobs_aggregate UNIQUE (job_type, aggregate_type, aggregate_id)` —— 一张
@@ -86,7 +91,7 @@
 - **轻量 lease**：同样用 `next_attempt_at` 表达时间语义，用 `lease_token` 表达本轮 owner identity。
 - **退避**：与 delayjob 完全对称 `min(2^(n-1), 60s)`。
 - **终态是 `PUBLISHED`**（不是 DONE）。
-- 详见姊妹篇 `event-outbox-messaging-design-claude-cn.md`。
+- 详见姊妹篇 `event-outbox-messaging-design-cn.md`。
 
 ### 1.4 家族 C：`statement` job（账单分片批处理）
 
@@ -95,13 +100,14 @@
 | 类 | 职责 |
 |---|---|
 | `BillingCycleScheduler` | `@Scheduled(cron, zone=Asia/Tokyo)` 每天触发一次 |
-| `StatementCycleService` | **planner**：判断是否关账日，按 `ceil(账户数/targetAccountsPerJob)` 算 shardCount，`INSERT IGNORE` 建 N 个分片 |
+| `StatementCycleService` | **reconciliation planner**：每天回看最近已结束的账期，缺 cycle 才按 `ceil(待出账账户数/targetAccountsPerJob)` 算 shardCount，`INSERT IGNORE` 建 N 个分片 |
 | `StatementJobDispatcher` | **1 个类**完成 poll→短事务 claim→提交 `statementJobWorkerExecutor`→finalize→recover |
 | `StatementJobHandler` | 处理一个 shard：`findAccountIdsForJob`(CRC32 % shardCount) 取账户，**逐账户各开小事务**生成账单，统计 generated/skipped/failed |
 
 - **一个 job = 一个分片，覆盖很多账户（fan-out）**。`StatementJob` 带 cycle 身份
   `period_start/period_end/due_date` + `shard_no/shard_count` + 结果计数器。
-- **daily cron 触发创建**，执行靠 claimable job 并发跑。
+- **daily cron 触发 reconciliation**，当前回看最近 2 个已关闭 cycle；它不是依赖单次 tick 的
+  edge-triggered cron。执行仍靠 claimable job 并发跑。
 - **创建幂等**：`uk_statement_jobs_cycle_shard UNIQUE (period_start, period_end, shard_no)`。
 - **lease 多列（更丰富）**：`claimed_by / claimed_at / claim_until / claim_token`；
   `claim_until` 作 lease deadline，`claim_token` 作 finalize owner token。比 delay/outbox
@@ -117,7 +123,7 @@
 | **一个 job 的粒度** | 1 聚合 1 动作 | 1 条消息 | 1 分片 N 账户（fan-out） |
 | **类拆分** | 4 类（Claimer/Poller/Worker/Recoverer） | 4 类（同构） | **1 类 dispatcher** + planner + handler |
 | **谁创建** | 业务方 `insertIfAbsent` | 业务方同事务 insert | daily cron → planner `INSERT IGNORE` |
-| **触发时机** | `scheduledAt`（未来时刻） | 立即 | 关账日（日历） |
+| **触发时机** | `scheduledAt`（未来时刻） | 立即 | daily reconciliation 补建已结束账期 |
 | **创建幂等键** | uk(job_type,agg_type,agg_id) | eventId（消费侧去重） | uk(period_start,period_end,shard_no) |
 | **lease 列** | `next_attempt_at` + `lease_token` | `next_attempt_at` + `lease_token` | **多列** `claimed_by/at/until` + `claim_token` |
 | **退避** | 指数 min(2^(n-1),60s) | 指数（对称） | **无退避**，立即回 PENDING |
@@ -134,8 +140,11 @@
 ### 1.6 平台执行资源（为什么 scheduler 池 ≠ worker 池）
 
 - `PollingSchedulerConfiguration`：每种机制一个 `ThreadPoolTaskScheduler`，**只跑 poll/claim/recover**。
-  outbox 用单线程（发布保序更简单），其余 pool=2（poll 与 recover 各一）。
-- `WorkerExecutorConfiguration`：每种机制一个 `ThreadPoolTaskExecutor`（core=max=有界），**跑真正业务**。
+  outbox 用单线程（poll/recover 调度简单，不代表 publish 严格保序），delay/statement-job pool=2
+  （poll 与 recover 可并行）；billing-cycle daily scheduler 另有 pool=1。
+- `WorkerExecutorConfiguration`：每种机制一个 `ThreadPoolTaskExecutor`（core=max=有界），**跑真正业务**；
+  DelayJob 还把外部银行调用型 `AUTO_REPAYMENT` 隔离到 `autoRepaymentDelayJobWorkerExecutor`，
+  避免银行 brownout 占满普通授权过期 job 的线程。
   `queueCapacity` 满 → `TaskRejectedException` → 放回 retry；`waitForTasksToCompleteOnShutdown=true`。
 - **为什么分开**：`@Scheduled` 线程若直接跑长业务/等 broker，会拖住下一轮调度；三机制各用各的池，
   一种 backlog 不会饿死另一种。命名前缀让 thread dump / metrics 一眼区分。
@@ -204,7 +213,10 @@
 - **Time-triggered vs Event-triggered**：cron（billing daily）负责**何时开始**，claimable job 负责
   **并发执行 + 重试 + 恢复**——两者组合，不互相替代。
 - **Scheduler thread ≠ Worker thread**：调度线程只触发，业务在 worker 池，防止慢任务饿死调度。
-- **Single-writer for ordering**：outbox scheduler 单线程，发布更易保序（虽 SKIP LOCKED 也不会重复）。
+- **Ordering 不能靠 scheduler 线程数承诺**：outbox scheduler 单线程只让 poll/recover 调度更简单；
+  真正 publish 在 4 个 worker 上并发等待 ack，所以跨 event 不保证严格发布顺序。Kafka 只能保证
+  同一 partition 内 broker append 顺序；需要业务顺序时还要稳定 partition key、consumer 按 partition
+  串行处理，并用版本/状态机防御乱序。
 - **可注入 `Clock`**：时间是依赖，便于测试固定 now、统一 billing 时区（Asia/Tokyo）。
 - **Framework vs one-off 的分解判断**：复用的框架值得拆类（可测/复用），一次性领域批值得合类（可读）。
 
@@ -270,9 +282,11 @@ statement 是**分片 fan-out**，需要 `claimed_by/claimed_at/claim_until` 这
 `CRC32(account_id) % shardCount` 扇出并行，每片再按账户开**小事务**隔离失败。
 shardCount = `ceil(账户数 / targetAccountsPerJob)`，在建 job 时算一次并**存到 job 上**。
 - **硬核追问：建 job 后又来了新账户（补录 backdated 交易）怎么办？**
-  周期已关账，账户集合基本稳定；即便有新账户，它用 job 上**已存的 shardCount** 做 hash，
-  仍**恰好落到某一个 shard**，不会漏也不会重。
-- **强补充**：分片数固定在创建时，避免“处理中途 shardCount 变化导致同账户落到不同片”的重复出账。
+  job 上固化的 shardCount 确保它只会映射到一个 shard，但这不自动保证“永远不会漏”：
+  如果 backdated 交易在对应 shard 执行前到达，会被该 shard 扫到；如果 shard 已经 DONE，当前系统
+  没有账户级补账 job，会暂时漏到人工修复/后续 reconciliation。这是 production gap。
+- **强补充**：分片数固定可避免处理中途 hash 空间变化导致重复或漏扫，但 late-arriving data 仍需
+  watermark、补账任务或账期重开政策解决，不能把 sharding 当成完整性证明。
 
 ### Q8. 怎么防止同一周期/同一聚合被重复建 job？
 **答**：唯一键 + 幂等插入。delay：`uk(job_type, aggregate_type, aggregate_id)` + `insertIfAbsent`；
@@ -282,11 +296,13 @@ statement：`uk(period_start, period_end, shard_no)` + `INSERT IGNORE`。schedul
   effectively-once，两段分别治理。
 
 ### Q9. 为什么 outbox 的 scheduler 是单线程，其他是 2？
-**答**：outbox 只发消息，单线程 poll 更易保持发布顺序，且发布本身轻。delay/statement 的 poll 与
-recover 想并行一点，用 pool=2。
+**答**：outbox 的 poller/recoverer 共用单线程 scheduler，是因为调度动作很短、模型更简单；
+delay/statement 的 poll 与 recover 用 pool=2，允许两个调度动作并行。这里不是严格顺序保证：
+Outbox 领取后由多 worker 并发 publish，ack 顺序仍可能变化。
 - **硬核追问：单线程 poll 会不会成为发布瓶颈？**
-  poll 只做“领取 + 提交 worker”，真正发 Kafka 在 `outboxWorkerExecutor` 多线程里；
-  单线程调度足够喂饱 worker 池。要再扩就加 worker 线程，不必加 scheduler 线程。
+  poll 只做“领取 + 提交 worker”，真正发 Kafka 在 `outboxWorkerExecutor` 4 个线程里；
+  当前单轮领取 50 条、queue 100，单线程调度足够喂饱 worker 池。扩容要联合观察 Kafka ack latency、
+  backlog oldest age、queue reject 和 DB claim 压力，不能只加 worker 线程。
 
 ### Q10. job 进了 DEAD 之后呢？
 **答**：（这是当前 gap）三家族 DEAD 都只是停在表里，**缺指标/告警/重放入口**。生产应有

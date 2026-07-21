@@ -1,7 +1,7 @@
 # 事件、Outbox、Inbox 与 Kafka 统一说明
 
 > 本文合并自三份旧文档：`kafka-outbox-design.md`（英文设计说明）、
-> `kafka-learning-cn.md`（Kafka 配置详解）、`event-outbox-messaging-design-claude-cn.md`
+> `kafka-learning-cn.md`（Kafka 配置详解）、`event-outbox-messaging-design-cn.md`
 > （实现走读 + 评价 + 面试问答）。合并时删除三者大量重复（dual-write、at-least-once、
 > envelope、DLT、消费者幂等在三份里各讲一遍），保留各自的独特价值：设计动机、**Kafka 配置参考**、
 > 逐类实现走读、真实 gap、硬核 Q&A。原三份已归档在 `docs/archive/`。

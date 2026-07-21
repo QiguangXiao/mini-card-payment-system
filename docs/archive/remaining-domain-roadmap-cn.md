@@ -1,6 +1,9 @@
 # 剩余领域学习路线图
 
-> **归档对齐说明（2026-07）**：本文成文于收缩重构之前。文中提到的 `ledger_entries` 复式记账表与 `repayment.received` Kafka 通知路径现已移除。文中相关段落已按现行架构清理，其余内容保持原样；现行领域路线以 [credit-card-domain-cn.md](../credit-card-domain-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文正文已按当前代码重新校准。Ledger 和
+> `repayment.received` Kafka 路径是已经删除的历史实现，不在路线中标成“已完成能力”；
+> Ledger 只保留为 production concept。现行领域入口见
+> [credit-card-domain-cn.md](../credit-card-domain-cn.md)。
 
 这份文档不是普通 TODO 清单，而是服务 PayPay Card / 金融后端 interview 准备的
 remaining domain roadmap。
@@ -10,9 +13,10 @@ remaining domain roadmap。
 ```text
 Authorization
 -> Presentment Posting
+-> BillingCycleScheduler reconciliation + sharded StatementJob
 -> Statement
 -> Repayment
--> Notification / Risk / Ledger
+-> Notification / Redis velocity / External Risk
 -> Outbox / Inbox / DelayJob
 ```
 
@@ -76,7 +80,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 ## 2. 最值得补的领域排名
 
-### 最小 Ledger（曾实现，2026-07 收缩中移除）
+### Concept only：Ledger（曾有 learning projection，2026-07 已移除）
 
 曾实现为最小 learning projection（`ledger_entries` 表 + Kafka 消费两类事件记 DEBIT/CREDIT 分录），后为聚焦主线整体移除；概念仍值得口头掌握。
 
@@ -88,12 +92,18 @@ Reconciliation 是内部账和外部资料是否对得上。
 注意：
 
 ```text
-最小 Ledger 是学习 projection，不是生产级总账。
+当前仓库没有 Ledger。
+被删除的最小 projection 不是生产级总账，也不应在 interview 中说成“实现了 double-entry ledger”。
 ```
+
+推荐记住：真正的 production ledger 至少要回答 account/chart、balanced journal、
+append-only correction、fee/interest/refund adjustment、币种与会计日期、审计和 reconciliation；
+只把两条 Kafka 事件翻译成 DEBIT/CREDIT 行，不足以证明这些能力。
 
 ### P1: 最小 Reconciliation
 
-适合在最小 Ledger 后做。
+不要求先重新实现 Ledger。当前稳定 internal records（`card_transactions`、`repayments`、
+`statements`）已经足够支撑一个最小“外部资料 vs 内部事实”对账练习。
 
 推荐范围：
 
@@ -110,7 +120,7 @@ Reconciliation 是内部账和外部资料是否对得上。
 
 不建议先做的原因：
 
-- 如果没有 ledger 或至少稳定的 internal records，对账会变成普通列表 diff。
+- 如果没有稳定的 internal records、业务匹配键和 exception ownership，对账会退化成普通列表 diff。
 - interview 价值来自“为什么对不上、如何处理 exception”，不是 CSV 解析本身。
 
 ### P2: Authorization Reversal
@@ -189,9 +199,8 @@ interview可以讲概念，但不建议现在实现。
 
 ```text
 先消化现有主链路
--> 修文档过期点
--> 做最小 Ledger（已完成）
--> 再做最小 Reconciliation
+-> 理解 Ledger 概念边界，但不恢复伪总账 projection
+-> 最小 Reconciliation 或 Authorization Reversal 二选一
 -> 停下来复盘 interview 表达
 ```
 
@@ -210,5 +219,6 @@ interview可以讲概念，但不建议现在实现。
 如果时间有限：
 
 ```text
-Ledger 已经足够作为概念入口；Reconciliation 可以先只讲概念，不急着继续补代码。
+现有 Authorization / Posting / StatementJob / Repayment / Outbox / DelayJob 已足够作为代码主线；
+Ledger 与 Reconciliation 先做到概念边界清楚，不急着继续加代码。
 ```

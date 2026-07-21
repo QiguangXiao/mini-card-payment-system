@@ -1,6 +1,6 @@
 # 本工程线程运行模型与生产排查学习笔记
 
-> **归档对齐说明（2026-07）**：文中的 `StatementNotificationListener` / `RepaymentNotificationListener`、risk-feature 与 ledger consumer 线程现已移除；现行 Kafka 消费线程只有 notification 组消费 `authorization-events` 与 `transaction-events`。其余线程模型仍与现行实现对应。文中相关段落已按现行架构清理，其余内容保持原样；现行线程文档以 [jvm-threads-runtime-cn.md](../jvm-threads-runtime-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文已按当前配置和线程创建点重做线程地图。现行 Kafka 只有 authorization/transaction 两个通知 listener container（各 `concurrency=2`）；后台有五组 scheduler pool（合计 8 线程）和五组 worker pool（各 4 线程、queue 100）。`StatementNotificationListener`、`RepaymentNotificationListener`、Risk/Ledger projection consumer 及旧 statement batch 线程均已移除。2026-06-21 的 thread dump 保留为历史样本，不能当作当前线程数量。现行线程文档以 [jvm-threads-runtime-cn.md](../jvm-threads-runtime-cn.md) 为准。
 
 这份文档只讲本工程启动后的线程结构、线程池、生命周期、常见状态和生产排查。通用 Java 并发基础，例如 `volatile`、CAS、AQS、`synchronized`、`ReentrantLock`、`ThreadPoolExecutor` 原理，建议单独放到另一份文档。
 
@@ -10,9 +10,9 @@
 - Web 容器是 Spring Boot 内嵌 Tomcat。
 - 状态变更主要通过 MySQL transaction、unique constraint、`SELECT ... FOR UPDATE` row lock 保证正确性。
 - 异步可靠性机制包括 Outbox、Consumer Inbox、DelayJob 和 Kafka listener。
-- 本次已在本机用 IntelliJ IDEA 启动应用并采集 `jcmd Thread.print` / Actuator 快照，下面的线程数量既包含配置推断，也包含 2026-06-21 的本地实测结果。
+- 本文把“当前静态配置”和“2026-06-21 历史实测”分开描述，避免把旧进程快照误当成当前容量。
 
-## 0. 本地实测运行快照
+## 0. 历史本地运行快照（旧拓扑）
 
 采集时间：2026-06-21 12:43-12:46 JST。
 
@@ -21,7 +21,7 @@
 - Spring Boot 3.5.14，Java 21.0.11，PID `47626`，由 IntelliJ IDEA 启动，内嵌 Tomcat 监听 `localhost:8080`。
 - `/actuator/health` 返回 `UP`。
 - 实测 `/actuator/metrics` 暴露了 `jvm.*`、`executor.*`、`hikaricp.*`、`spring.kafka.listener`、`tomcat.sessions.*`，没有暴露 `tomcat.threads.*`。
-- 完整 thread dump 已保存到 `build/diagnostics/idea-jvm-2026-06-21-1243/thread-dump-after-authorization.txt`，共 1914 行。
+- 当时完整 thread dump 写到未纳入版本控制的 `build/diagnostics/idea-jvm-2026-06-21-1243/thread-dump-after-authorization.txt`，共 1914 行；当前工作区已没有该文件，下面只能作为历史摘要，不能逐栈复验。
 
 Actuator 线程状态：
 
@@ -56,6 +56,9 @@ Thread dump 线程类别：
 | G1/JVM GC 相关线程 | 16 | GC worker、G1 concurrent/refine/service 等 |
 | JIT compiler | 1 | IDEA 启动参数含 `-XX:TieredStopAtLevel=1`，本次 dump 里只有 `C1 CompilerThread0` |
 
+> [!IMPORTANT]
+> 这张表记录的是当时进程：15 个 listener/heartbeat 等数量包含后来删除的 consumer container，`statement-batch-scheduler-*` 也已被 BillingCycle + StatementJob 两阶段替代。当前数量必须看第 1、2 节，不能用 97 个 live threads 或这里的分类做生产 sizing。
+
 实际请求观察：
 
 - 使用新的 `Idempotency-Key` 发起 `POST /api/authorizations`，HTTP 200，curl 端到端耗时约 229ms。
@@ -67,7 +70,7 @@ Thread dump 线程类别：
 采样限制：
 
 - thread dump 是采样，不是录屏。本次 dump 采集在请求和异步链路完成后，所以没有刚好截到 `/api/authorizations` 的业务栈、`/external-risk/assess` 的 `Thread.sleep(100ms)` 栈，或者 Outbox worker 等 Kafka ack 的瞬间。
-- 这不是采集失败，而是 thread dump 的正常限制。请求耗时和 external-risk 调用用 HTTP metrics/Resilience4j 观察，异步成功用 Outbox/Inbox/业务 projection 表确认。
+- 这不是采集失败，而是 thread dump 的正常限制。请求耗时和 external-risk 调用用 HTTP metrics/Resilience4j 观察，异步成功用 Outbox、Inbox、notification intent/delivery 等 durable state 确认。
 
 本次 thread dump 里的典型状态：
 
@@ -118,10 +121,15 @@ mini-card JVM process
 ├── Spring scheduler pools
 │   ├── outbox-scheduler-*
 │   ├── delay-job-scheduler-*
-│   └── statement-batch-scheduler-*
+│   ├── billing-cycle-scheduler-*
+│   ├── statement-job-scheduler-*
+│   └── notif-delivery-scheduler-*
 ├── Business worker pools
 │   ├── outbox-worker-*
-│   └── delay-job-worker-*
+│   ├── delay-job-worker-*
+│   ├── auto-repay-worker-*
+│   ├── statement-job-worker-*
+│   └── notif-delivery-worker-*
 ├── Kafka threads
 │   ├── consumer listener threads
 │   ├── producer network thread
@@ -141,22 +149,25 @@ mini-card JVM process
 
 ## 2. 线程清单
 
-下面是本工程最核心的线程类别。数量里的“当前配置”来自 `application.yml` 和配置类；
-Tomcat 默认值因为本工程没有显式配置，所以以本次 thread dump 看到的 `http-nio-8080-exec-*`
-数量作为本地实测参考。生产环境仍建议显式配置 Tomcat max threads / accept count，并用
-Actuator、thread dump 和压测结果一起确认。
+下面是本工程最核心的线程类别。数量里的“当前配置”来自 `application.yml`、
+`PollingSchedulerConfiguration` 和 `WorkerExecutorConfiguration`。它们是上限或池大小，不等于所有线程启动即忙，更不等于 TPS。
 
 | 线程类别 | 线程名通常类似 | 当前数量/并发 | 来源 | 主要职责 | 常见状态 |
 | --- | --- | --- | --- | --- | --- |
 | JVM internal | `GC Thread`, `G1 Conc#`, `C2 CompilerThread`, `Reference Handler`, `Common-Cleaner` | JVM 自行决定 | JDK | GC、JIT、引用清理、信号处理 | `RUNNABLE`, `WAITING`, `TIMED_WAITING` |
-| Tomcat acceptor/poller | `http-nio-8080-Acceptor`, `http-nio-8080-Poller` | Tomcat 默认 | Embedded Tomcat | 接收 TCP 连接、NIO 事件轮询 | 多数时间等待 I/O，Java dump 里常见 `RUNNABLE` 或等待状态 |
-| Tomcat request worker | `http-nio-8080-exec-*` | 未显式配置，使用 Tomcat/Spring Boot 默认 | `spring-boot-starter-web` | 处理 controller、filter、service、MyBatis、Feign 调用 | 空闲等待任务；处理请求时 `RUNNABLE`；阻塞外部 I/O 时也可能显示 `RUNNABLE` |
+| Tomcat acceptor/poller | `http-nio-8080-Acceptor`, `http-nio-8080-Poller` | connector 内部 | Embedded Tomcat | 接收 TCP 连接、NIO 事件轮询 | 多数时间等待 I/O，Java dump 里常见 `RUNNABLE` 或等待状态 |
+| Tomcat request worker | `http-nio-8080-exec-*` | max 80, min-spare 10 | `spring-boot-starter-web` | 处理 controller、filter、service、MyBatis、Feign 调用 | 空闲等待任务；处理请求时 `RUNNABLE`；阻塞外部 I/O 时也可能显示 `RUNNABLE` |
 | Outbox scheduler | `outbox-scheduler-*` | pool size 1 | `outboxTaskScheduler` | 每 1s poll/claim publishable events，每 5s recover stuck events | 空闲 `TIMED_WAITING`；执行 SQL 时多为 `RUNNABLE` |
 | DelayJob scheduler | `delay-job-scheduler-*` | pool size 2 | `delayJobTaskScheduler` | 每 1s poll due jobs，每 5s recover stuck jobs | 空闲 `TIMED_WAITING`；执行 SQL 时多为 `RUNNABLE` |
-| Statement scheduler | `statement-batch-scheduler-*` | pool size 1 | `statementBatchTaskScheduler` | 每 60s 检查是否到关账批处理日 | 空闲 `TIMED_WAITING`；批处理中 `RUNNABLE` / DB I/O |
+| Billing cycle scheduler | `billing-cycle-scheduler-*` | pool size 1 | `billingCycleTaskScheduler` | 每天 01:00 JST 规划补跑窗口内的 statement jobs | 空闲 `TIMED_WAITING`；规划时短暂 DB I/O |
+| Statement job scheduler | `statement-job-scheduler-*` | pool size 2 | `statementJobTaskScheduler` | 每 1s dispatch、每 10s recover statement jobs | 空闲 `TIMED_WAITING`；claim/recover 时 DB I/O |
+| Notification delivery scheduler | `notif-delivery-scheduler-*` | pool size 2 | `notificationDeliveryTaskScheduler` | 每 1s dispatch、每 5s recover delivery rows | 空闲 `TIMED_WAITING`；claim/recover 时 DB I/O |
 | Outbox worker | `outbox-worker-*` | pool size 4, queue 100 | `outboxWorkerExecutor` | 发布 Kafka，等待 broker ack，finalize Outbox 状态 | 空闲 `WAITING`；等待 ack 常见 `TIMED_WAITING`；DB/Kafka I/O 可能 `RUNNABLE` |
-| DelayJob worker | `delay-job-worker-*` | pool size 4, queue 100 | `delayJobWorkerExecutor` | 执行授权过期、自动还款等业务 job，finalize job 状态 | 空闲 `WAITING`；执行业务时 `RUNNABLE`；DB row lock 等待常见 JDBC I/O 栈 |
-| Notification Kafka listener | Spring Kafka consumer thread | 每个 listener container concurrency 2；当前 2 个 listener | `notificationKafkaListenerContainerFactory` | 消费 authorization / transaction events 并创建 notification | poll 时等待；处理 record 时 `RUNNABLE`；retry backoff 时 `TIMED_WAITING` |
+| DelayJob worker | `delay-job-worker-*` | pool size 4, queue 100 | `delayJobWorkerExecutor` | 执行授权过期等纯 DB job，finalize job 状态 | 空闲 `WAITING`；DB row lock 等待常见 JDBC I/O 栈 |
+| Auto repayment worker | `auto-repay-worker-*` | pool size 4, queue 100 | `autoRepaymentDelayJobWorkerExecutor` | 调 bank debit provider 并推进自动还款 | provider I/O 可能长期占用，但不阻塞普通 DelayJob pool |
+| Statement job worker | `statement-job-worker-*` | pool size 4, queue 100 | `statementJobWorkerExecutor` | 每个 job 最多处理 1000 个账户的分片出账 | DB/row lock 密集，lease 300s |
+| Notification delivery worker | `notif-delivery-worker-*` | pool size 4, queue 100 | `notificationDeliveryWorkerExecutor` | 调 push/email provider 并按 lease finalize | 受每渠道 RateLimiter、Retry、CircuitBreaker 保护 |
+| Notification Kafka listener | Spring Kafka consumer thread | 2 containers × concurrency 2 | `notificationKafkaListenerContainerFactory` | 消费 authorization / transaction events，在本地事务写 Inbox、intent、delivery rows | poll 时等待；处理 record 时 `RUNNABLE`；retry backoff 时 `TIMED_WAITING` |
 | Hikari helper | `HikariPool-* housekeeper` | 连接池内部 | HikariCP | 连接池维护 | 多数时间 `TIMED_WAITING` |
 | Kafka producer/network | `kafka-producer-network-thread` 等 | Kafka client 内部 | Spring Kafka / Kafka client | 网络发送、metadata、broker ack | 网络 I/O 等待常见 `RUNNABLE` |
 
@@ -165,6 +176,8 @@ Actuator、thread dump 和压测结果一起确认。
 - `notificationKafkaListenerContainerFactory` 设置 `concurrency=2`。
 - 当前有 2 个 notification listener：authorization、card transaction。
 - 因此它不是“整个 Notification bounded context 总共 2 个线程”，而是每个 listener container 最多 2 个 consumer thread。
+- 两个 topic 各 3 partitions；单个 container 把 concurrency 提到 3 以上不会再增加有效 partition 并行度。
+- 所有 DB 路径共享 Hikari `maximum-pool-size=10`。即使 Tomcat 80、Kafka 4、worker 20 全部可运行，也不代表能同时执行 104 个 DB 操作。
 
 ## 3. Java 线程状态在本工程里怎么理解
 
@@ -236,15 +249,21 @@ jcmd <pid> Thread.print -l
 
 ## 5. Tomcat 线程：同步 HTTP 请求从哪里来
 
-本工程使用 Spring MVC 和内嵌 Tomcat。因为 `application.yml` 没有配置：
+本工程使用 Spring MVC 和内嵌 Tomcat，当前显式配置是：
 
 ```yaml
 server:
   tomcat:
     threads:
+      max: 80
+      min-spare: 10
+    accept-count: 50
+    max-connections: 2048
+    connection-timeout: 3s
+    keep-alive-timeout: 30s
 ```
 
-所以 request worker 数、accept count 等使用 Spring Boot/Tomcat 默认值。生产不要靠记忆默认值，应该显式配置并用 Actuator 确认。
+`max=80` 是 request worker 上限，不是 80 TPS。`max-connections=2048` 是 connector 可接受的连接数，`accept-count=50` 只在连接数已满时控制等待 accept 的连接，不是 controller 前面的业务任务队列。生产仍要把 80 与 Hikari 10、external risk bulkhead 4、provider quota 和目标 latency 一起压测。
 
 ### 5.1 启动生命周期
 
@@ -343,13 +362,15 @@ synchronized (someObject) {
 
 ## 6. Scheduler 线程：轻量 poll/claim，不做长业务
 
-本工程有三个显式 scheduler pool：
+本工程有五个显式 scheduler pool，共 8 个调度线程：
 
 | Scheduler bean | 线程名前缀 | pool size | 执行任务 | fixed delay |
 | --- | --- | --- | --- | --- |
 | `outboxTaskScheduler` | `outbox-scheduler-` | 1 | `OutboxPoller.pollPublishableEvents`, `OutboxRecoverer.recoverStuckEvents` | 1s / 5s |
 | `delayJobTaskScheduler` | `delay-job-scheduler-` | 2 | `DelayJobPoller.pollDueJobs`, `DelayJobRecoverer.recoverStuckJobs` | 1s / 5s |
-| `statementBatchTaskScheduler` | `statement-batch-scheduler-` | 1 | `StatementBatchPoller.closeDueBillingCycles` | 60s |
+| `billingCycleTaskScheduler` | `billing-cycle-scheduler-` | 1 | `BillingCycleScheduler.createDueStatementJobs` | 每天 01:00 JST；lookback 2 天 |
+| `statementJobTaskScheduler` | `statement-job-scheduler-` | 2 | `StatementJobDispatcher.dispatch`, `recoverStuckJobs` | 1s / 10s |
+| `notificationDeliveryTaskScheduler` | `notif-delivery-scheduler-` | 2 | `NotificationDeliveryPoller.pollDispatchableDeliveries`, `NotificationDeliveryRecoverer.recoverStuckDeliveries` | 1s / 5s |
 
 ### 6.1 为什么 scheduler 要薄
 
@@ -414,7 +435,8 @@ DelayJobPoller.pollDueJobs
 -> SELECT ... FOR UPDATE SKIP LOCKED
 -> PENDING -> PROCESSING lease
 -> commit
--> delayJobWorkerExecutor.execute(...)
+-> AUTHORIZATION_EXPIRY: delayJobWorkerExecutor.execute(...)
+-> AUTO_REPAYMENT: autoRepaymentDelayJobWorkerExecutor.execute(...)
 
 每 5s:
 DelayJobRecoverer.recoverStuckJobs
@@ -427,42 +449,54 @@ DelayJobRecoverer.recoverStuckJobs
 
 - poller 继续领取新 due jobs。
 - recoverer 同时修复超时 lease。
-- 真正业务仍在 `delay-job-worker-*`。
+- 真正业务按 job type 在 `delay-job-worker-*` 或 `auto-repay-worker-*`。
 
 状态判断和 Outbox scheduler 类似。大量 `delay-job-scheduler-*` 长时间在 JDBC 栈上，优先查 delay_jobs 表索引、DB 连接、锁等待。
 
-### 6.4 Statement scheduler 的生命周期
+### 6.4 BillingCycle 与 StatementJob scheduler
 
-`statement-batch-scheduler-*` 每 60s 醒来：
+当前 statement 不是“一个 scheduler 扫账户并直接出账”，而是两阶段：
 
 ```text
-StatementBatchPoller.closeDueBillingCycles
--> StatementBatchService.runDueBatch
--> 判断是否到关账日次日
--> 扫描候选 account
--> 每个 account 独立事务生成 statement
+billing-cycle-scheduler-1（每天 01:00 JST）
+-> BillingCycleScheduler
+-> 在 lookback=2 天窗口内补规划账期
+-> 按 target-accounts-per-job=1000 创建 durable statement_jobs
+
+statement-job-scheduler-N（每 1s / 10s）
+-> claim 最多 8 个 PENDING jobs / recover 超过 300s 的 PROCESSING jobs
+-> submit 到 statementJobWorkerExecutor
 ```
 
-它和 Outbox/DelayJob 不同：
+规划线程只决定“有哪些分片要做”，不逐账户完成重业务。dispatcher 的 `max-per-run=8` 约为 worker 数的 2 倍：claim 后 lease 已开始计时，若一次领取远多于可执行线程，队尾 job 可能尚未启动就被 recover，造成幂等安全但无意义的重复工作。
 
-- `@Scheduled` 方法会进入 batch service。
-- 但批处理内部按账户拆事务，避免一个大事务锁住过多数据。
-- `statement.batch.max-accounts-per-run=100` 控制单轮规模。
+### 6.5 NotificationDelivery scheduler
 
-生产风险：
+Kafka listener 只创建 durable delivery rows，实际 provider I/O 由另一套调度/worker 处理：
 
-- 如果候选账户很多，单线程 batch 可能跑很久。
-- fixed delay 是“上一次执行结束后再等 60s”，不是固定时刻并发启动下一轮。
-- thread dump 里看到 `statement-batch-scheduler-*` 长时间跑，要结合 batch 日、候选数、DB 慢查询判断。
+```text
+notif-delivery-scheduler-N
+-> 每 1s claim 最多 40 条 PENDING/retry-due delivery
+-> PENDING -> PROCESSING + lease_token（30s）
+-> submit 到 notificationDeliveryWorkerExecutor
+
+另一个 scheduler thread 每 5s recover 超时 PROCESSING
+-> 校验 lease 后回 PENDING 或到 8 次后 DEAD
+```
+
+如果去掉这层而在 Kafka listener 里直接发 push/email，provider brownout 会占住 consumer threads、推高 lag，并把“DB 已写但 offset 未提交”的重复窗口扩大到外部副作用。
 
 ## 7. Worker 线程：真正执行后台业务
 
-本工程有两个显式 worker pool：
+本工程有五个显式 worker pool，共 20 个业务 worker 上限：
 
 | Worker executor | 线程名前缀 | core/max | queue | 执行业务 |
 | --- | --- | --- | --- | --- |
 | `outboxWorkerExecutor` | `outbox-worker-` | 4 / 4 | 100 | Kafka publish + Outbox finalize |
-| `delayJobWorkerExecutor` | `delay-job-worker-` | 4 / 4 | 100 | Authorization expiry、Auto repayment 等 DelayJob |
+| `delayJobWorkerExecutor` | `delay-job-worker-` | 4 / 4 | 100 | Authorization expiry 等纯 DB DelayJob |
+| `autoRepaymentDelayJobWorkerExecutor` | `auto-repay-worker-` | 4 / 4 | 100 | Auto repayment + bank debit provider |
+| `statementJobWorkerExecutor` | `statement-job-worker-` | 4 / 4 | 100 | Statement job 分片出账 |
+| `notificationDeliveryWorkerExecutor` | `notif-delivery-worker-` | 4 / 4 | 100 | Push/email provider 投递 |
 
 `core=max` 表示固定上限，不会因为突发 backlog 无限创建线程。`queue=100` 是显式背压边界。
 
@@ -472,14 +506,14 @@ StatementBatchPoller.closeDueBillingCycles
 
 - 应用启动时 executor bean 初始化。
 - 第一次有任务提交时开始创建 worker thread。
-- 最多创建到 4 个。
+- 每个 pool 最多创建到 4 个；五个 pool 彼此独立。
 - 因为 core=max，创建后通常长期保留，空闲时等待 queue task。
 - shutdown 时配置了 `waitForTasksToCompleteOnShutdown=true` 和 `awaitTerminationSeconds=10`。
 
 如果进程在 worker 执行中宕机：
 
-- Outbox event 或 DelayJob 已经是 `PROCESSING`。
-- recoverer 会在 lease timeout 后重新放回 retry 或转 DEAD。
+- Outbox event、DelayJob、StatementJob 或 NotificationDelivery 已经是 `PROCESSING`。
+- 各自 recoverer 会在 lease timeout 后重新放回 retry 或转 DEAD；迟到旧 worker finalize 时还要因 lease token 不匹配而放弃写入。
 - 这就是 PROCESSING lease 的意义。
 
 ### 7.2 Outbox worker 典型生命周期
@@ -531,7 +565,7 @@ delay-job-scheduler-N
 -> claim job as PROCESSING
 -> submit lambda to delayJobWorkerExecutor
 
-delay-job-worker-N
+delay-job-worker-N 或 auto-repay-worker-N
 -> DelayJobWorker.handleClaimedJob
 -> dispatch by jobType
    -> AuthorizationExpiryDelayJobHandler
@@ -549,21 +583,28 @@ delay-job-worker-N
 | --- | --- | --- |
 | 空闲等任务 | `WAITING` | worker 在 queue 上等待 |
 | handler dispatch | `RUNNABLE` | 很短 |
-| 执行业务 service | `RUNNABLE` / JDBC I/O | 可能锁 authorization、account、statement |
+| 执行业务 service | `RUNNABLE` / JDBC I/O / provider I/O | 可能锁 authorization、account、statement，或等待 bank debit |
 | 等 MySQL row lock | 常见 JDBC socket 栈，Java 状态未必是 `BLOCKED` | row lock 在 DB 内，不是 Java monitor |
 | finalize job | `RUNNABLE` / JDBC I/O | 重新锁 delay_jobs row，防旧 worker 覆盖新 lease |
 
 典型业务：
 
 - `AUTHORIZATION_EXPIRY`：锁 authorization row，必要时锁 credit account row，释放 reserved amount，写 expired event。
-- `AUTO_REPAYMENT`：先模拟 bank debit result，再复用 `RepaymentService.receive`，进入 repayment 的 idempotency、row lock 和 transaction boundary。
+- `AUTO_REPAYMENT`：在专用 `auto-repay-worker-*` 调 bank debit；成功后推进 repayment 事务。bank client connect/read timeout 为 300/2000ms，并受 circuit breaker 保护，durable retry 仍由 DelayJob 状态机负责。
 
-如果看到 `delay-job-worker-*` 长时间忙：
+如果看到 `delay-job-worker-*` 或 `auto-repay-worker-*` 长时间忙：
 
 - 查是否有大量 due jobs。
 - 查是否有 DB row lock 等待。
 - 查失败重试是否让同一批坏 job 反复执行。
 - 查 `delay_jobs` 是否出现大量 `PROCESSING` 或 `DEAD`。
+- 先区分普通池与自动扣款池：只有后者忙，通常是 bank gateway/自动还款积压；两个池都忙且 Hikari pending 高，才更像共享 DB 瓶颈。
+
+### 7.4 Statement 与 Notification worker
+
+`statement-job-worker-*` 处理重量级 DB 分片，每个 job 最多覆盖 1000 个账户，正常 lease 为 300s；诊断时要同时看 job 处理时长、账户 row lock、Hikari pending 和 `statement_jobs` 的 `PENDING/PROCESSING/DEAD`。不能仅因 queue 为空就判断没有 backlog，因为 durable backlog 留在表中。
+
+`notif-delivery-worker-*` 每次只处理一条带 `lease_token` 的 delivery。单次 provider 调用内部最多 3 次短 retry（指数退避 200ms 起），外层还有每渠道 RateLimiter（APP_PUSH/EMAIL 各 20/s、单 Pod）、CircuitBreaker 和 durable `next_attempt_at` retry。短 retry 解决瞬时网络抖动，durable retry 解决进程重启和长故障；两层若不区分，会把同一次 delivery 的尝试次数和 provider 调用次数混为一谈。
 
 ## 8. Kafka listener 线程：consumer poll 和业务处理在一起
 
@@ -608,17 +649,17 @@ spring.kafka.listener.ack-mode: record
 | poll broker 等消息 | `RUNNABLE` / `TIMED_WAITING` | Kafka native/network poll 栈，不一定吃 CPU |
 | 反序列化/读 event contract | `RUNNABLE` | `IntegrationEventReader` 解析 header/payload |
 | 写 Consumer Inbox | `RUNNABLE` / JDBC I/O | 幂等 claim |
-| 写 notification 表 | `RUNNABLE` / JDBC I/O | 本地事务 |
+| 写 notification + deliveries | `RUNNABLE` / JDBC I/O | intent 与各渠道 work rows 在同一本地事务 |
 | listener 失败 backoff | `TIMED_WAITING` | `FixedBackOff(1000ms, 2)` |
 | 发送 DLT | Kafka producer/network I/O | 保留 original partition |
 
 ### 8.3 Kafka listener 和 partition 顺序
 
-本工程 topics 都建 3 个 partitions。代码注释里明确：
+本工程两个业务 topics 都建 3 个 partitions。当前 producer 明确：
 
-- authorization event key 使用 authorizationId，保证同一 authorization 进入同一 partition。
-- statement event key 使用 creditAccountId，保证同一账户账单顺序。
-- repayment event key 使用 creditAccountId，方便同账户还款通知/对账投影按顺序处理。
+- authorization event 使用 `authorizationId`，transaction event 使用 `cardTransactionId` 作为 key，使同一聚合在**各自 topic 内**稳定落到同一 partition。
+- authorization topic 与 transaction topic 是两个独立顺序域；当前 key 也不提供同一卡片维度的串行或跨 topic 全局先后关系。
+- 当前 statement/repayment 不再发布 Kafka 通知事件，因此不要用已删除事件的 key 解释现行拓扑。
 
 interview重点：
 
@@ -633,7 +674,7 @@ listener thread 慢会带来：
 - error handler retry/backoff 占住 consumer thread。
 - 如果处理时间超过 consumer group 心跳/轮询相关阈值，可能触发 rebalance。
 
-本项目里 listener 做的是本地 DB 投影，不调用外部 provider，这是好的边界。通知真正发送 push/email 的能力未来如果加入，不应该直接塞进当前 listener transaction。
+本项目里 listener 只在本地 DB transaction 中写 Inbox、notification intent 和 delivery rows，不调用外部 provider。push/email 已由 `notif-delivery-worker-*` 实现；如果把 provider 调用塞回 listener transaction，会把外部 timeout/retry 放大为 consumer lag、DB connection 占用和重复外发窗口。
 
 ## 9. MySQL connection、row lock 和线程状态
 
@@ -642,6 +683,7 @@ listener thread 慢会带来：
 在 Java 侧：
 
 - request/worker/listener thread 从 HikariCP 借 connection。
+- 当前 Hikari `maximum-pool-size=10`、`minimum-idle=5`、connection timeout `1000ms`；这是 HTTP、Kafka、scheduler claim 与 worker finalize 共享的单进程资源。
 - 当前 Java thread 使用这个 connection 执行 SQL。
 - SQL 返回后 connection 归还池。
 
@@ -655,6 +697,8 @@ listener thread 慢会带来：
 
 - `AuthorizationService.authorize` 的 transaction 在 Tomcat request thread 上。
 - `DelayJobWorker` 里 handler transaction 在 `delay-job-worker-*` 上。
+- 自动扣款 handler 在 `auto-repay-worker-*` 上；线程隔离不等于另有 DB pool，它仍共享 Hikari 10。
+- StatementJob 和 NotificationDelivery 的 claim/finalize transaction 分别在 scheduler/worker thread 上，provider I/O 则应保持在短事务之外。
 - Kafka listener service 的 transaction 在 Kafka consumer thread 上。
 - 如果你在一个 `@Transactional` 方法里手动开新线程，新线程不会自动继承原 transaction。
 
@@ -720,7 +764,7 @@ http-nio-8080-exec-N
 状态点：
 
 - CPU 计算很短，多数延迟来自 DB 和外部 HTTP。
-- 外部风控在 account row lock 之前，避免拿着 account lock 等慢调用。
+- 外部风控在 account row lock 之前，避免拿着 account lock 等慢调用；但 winner authorization row、事务和 Hikari connection 已经绑定在该 request thread 上。
 - 同一账户并发授权会在 account row lock 串行。
 - 相同 idempotency key 的并发请求，loser 会等 winner 的 authorization row。
 
@@ -758,9 +802,11 @@ outbox-worker-N
 ```text
 delay-job-scheduler-N
 -> claim due jobs with FOR UPDATE SKIP LOCKED
--> submit to delay-job-worker queue
+-> route by job type:
+   AUTHORIZATION_EXPIRY -> delay-job-worker queue
+   AUTO_REPAYMENT       -> auto-repay-worker queue
 
-delay-job-worker-N
+delay-job-worker-N / auto-repay-worker-N
 -> dispatch jobType
 -> execute business service
 -> lock job row
@@ -771,7 +817,7 @@ delay-job-worker-N
 
 - Outbox worker 的长等待主要是 Kafka ack。
 - DelayJob worker 可能进入业务 service，锁 authorization、credit account、statement、repayment 等业务表。
-- 自动还款未来接真实银行 API 时，还可能等待外部银行结果。
+- 自动还款已经通过 Feign 调模拟 bank debit provider；生产替换 base URL 后仍由专用池承受外部等待。
 
 ### 10.4 Kafka listener 线程路径
 
@@ -782,7 +828,7 @@ Kafka consumer thread
 -> event type/version check
 -> application service @Transactional
    -> Consumer Inbox claim
-   -> write notification
+   -> write notification intent + per-channel delivery rows
 -> listener returns
 -> commit/ack record
 ```
@@ -794,6 +840,7 @@ Kafka consumer thread
 - listener 可能在 DB 写成功后、offset commit 前崩溃。
 - 重启后 record 会被重复投递。
 - Consumer Inbox 用 `(consumerName, eventId)` 防重复副作用。
+- listener 返回只代表 durable work 已创建，不代表 push/email 已送达；后者由 delivery worker 推进到 `SENT/DEAD`。
 
 ## 11. 启动后如何采集真实线程状态
 
@@ -841,7 +888,7 @@ curl "http://localhost:8080/actuator/metrics/tomcat.threads.busy"
 快速过滤线程名：
 
 ```bash
-rg 'http-nio|outbox-|delay-job-|statement-batch|kafka|Hikari|GC Thread|CompilerThread' threads.txt
+rg 'http-nio|outbox-|delay-job-|auto-repay-|billing-cycle-|statement-job-|notif-delivery-|kafka|Hikari|GC Thread|CompilerThread' threads.txt
 ```
 
 如果要排 CPU：
@@ -919,7 +966,7 @@ jcmd <pid> Thread.print -l
 
 - `delay-job-scheduler-*` 是否正常醒来。
 - `delay-job-worker-*` 是否都忙。
-- busy worker 是在 authorization expiry、repayment、还是 finalize job。
+- `auto-repay-worker-*` 是否因 bank provider timeout/circuit breaker 独立积压。
 
 看数据：
 
@@ -933,7 +980,12 @@ jcmd <pid> Thread.print -l
 - worker 全忙且 DB pending 高：业务 SQL/row lock 问题。
 - worker 全忙且失败重试：坏 job 或外部依赖失败。
 
-### 12.5 Kafka consumer lag 上升
+### 12.5 Statement/Notification durable work backlog 上升
+
+- Statement：分别看 `billing-cycle-scheduler-*` 是否创建 jobs、`statement-job-scheduler-*` 是否 claim/recover、`statement-job-worker-*` 是否被账户锁或 SQL 占住。`statement_jobs` 是主 backlog，JVM queue 只是最多 100 个临时 Runnable。
+- Notification：Kafka lag 低但 `notification_deliveries.PENDING` 高，瓶颈在 provider worker/RateLimiter/provider latency，不应继续加 Kafka concurrency；若 `PROCESSING` 超过 30s，检查 recoverer、provider timeout 与 stale lease；若 `DEAD` 增长，进入人工补偿而不是无界重试。
+
+### 12.6 Kafka consumer lag 上升
 
 看：
 
@@ -950,7 +1002,7 @@ jcmd <pid> Thread.print -l
 - 调整 listener concurrency，但不能超过 partition/DB/CPU 承载。
 - 对坏消息进入 DLT，不要无限阻塞 partition。
 
-### 12.6 大量线程 `BLOCKED`
+### 12.7 大量线程 `BLOCKED`
 
 先别看 DB。Java `BLOCKED` 主要是 monitor lock。
 
@@ -962,7 +1014,7 @@ jcmd <pid> Thread.print -l
 
 本项目正常路径不应该大量 `BLOCKED`，因为并发正确性靠 DB row lock 和 idempotency，不靠 JVM 大锁。
 
-### 12.7 大量线程 `WAITING` / `TIMED_WAITING`
+### 12.8 大量线程 `WAITING` / `TIMED_WAITING`
 
 不一定是坏事。
 
@@ -986,7 +1038,7 @@ jcmd <pid> Thread.print -l
 
 回答：
 
-> 同步入口是 Tomcat request threads，处理 controller/service/MyBatis。异步机制有三类 scheduler：Outbox、DelayJob、Statement batch。Outbox 和 DelayJob 又各自有 worker pool，scheduler 只做短事务 claim，worker 做 Kafka publish 或业务 job。Kafka listener container 还有 consumer threads，负责消费事件并在本地事务里写 Inbox 和 notification。除此之外还有 Hikari、Kafka client 和 JVM internal threads。
+> 同步入口是 Tomcat request threads，当前上限 80。异步机制有 Outbox、DelayJob、BillingCycle、StatementJob、NotificationDelivery 五组 scheduler，共 8 个调度线程；Outbox、普通 DelayJob、AutoRepayment、StatementJob、NotificationDelivery 五个 worker pool 各 4 线程。两个 Kafka notification listener container 各 concurrency 2，在本地事务写 Inbox、intent 和 delivery rows。它们仍共同竞争 Hikari 10，所以线程数不能直接解释成吞吐。
 
 ### Q2：Tomcat request thread 和 OS thread 什么关系？
 
@@ -1004,19 +1056,19 @@ jcmd <pid> Thread.print -l
 
 回答：
 
-> 因为 scheduler thread 应该短小稳定。Outbox/DelayJob 先用短事务 claim，把 row 改成 PROCESSING lease，commit 后交给 worker pool。Kafka ack、业务 row lock、银行扣款这些慢动作都在 worker 中。worker 挂了有 lease recoverer，queue 满了可以 retry/DEAD，不会让 scheduler 卡死或无限堆 heap。
+> 因为 scheduler thread 应该短小稳定。Outbox、DelayJob、StatementJob、NotificationDelivery 都先用短事务 claim，把 row 改成带 token/deadline 的 PROCESSING lease，commit 后交给 worker。Kafka ack、业务 row lock、银行扣款和通知 provider 这些慢动作都在 worker 中。worker 挂了有 recoverer，queue 满则释放 lease或进入 retry/DEAD，不会让 scheduler 卡死或无限堆 heap。
 
 ### Q5：Outbox worker 和 DelayJob worker 有什么区别？
 
 回答：
 
-> Outbox worker 主要是 reliable publication，等待 Kafka broker ack，然后 finalize Outbox row。DelayJob worker 是未来业务动作执行器，比如授权过期释放额度、自动还款，它会进入具体 application service 和业务表 row lock。两者都是 bounded worker pool，但风险不同：Outbox 更关注 Kafka ack/backlog，DelayJob 更关注业务锁和 retry/DEAD。
+> Outbox worker 做 reliable publication，等待 Kafka broker ack 后 finalize Outbox row。DelayJob 执行未来业务动作：普通池跑授权过期等 DB 工作，AutoRepayment 专用池隔离 bank provider brownout。StatementJob 是重 DB 分片，NotificationDelivery 是 provider I/O。五个池都 bounded，但各自的瓶颈、lease 与补偿语义不同，不能只看一个总 active-thread 数。
 
 ### Q6：Kafka listener concurrency 怎么理解？
 
 回答：
 
-> Kafka listener concurrency 是每个 listener container 的 consumer thread 数。它提高不同 partition 的并行处理能力，但同一个 partition 内仍保持顺序。要保证同一 aggregate 顺序，关键是 partition key，例如 authorizationId 或 creditAccountId，而不是让所有事件单线程消费。
+> Kafka listener concurrency 是每个 listener container 的 consumer thread 数。当前两个通知 container 各为 2、topic 各 3 partitions，所以单进程最多 4 个 consumer threads。它提高不同 partition 的并行处理能力，但同一 partition 仍顺序处理；authorization event 以 `authorizationId`、transaction event 以 `cardTransactionId` 为 key，只保证各自聚合在各自 topic 内稳定分区，不保证同一卡片或跨 topic 全局顺序。
 
 ### Q7：为什么本项目不使用 `synchronized` 保证授权并发？
 
@@ -1028,7 +1080,7 @@ jcmd <pid> Thread.print -l
 
 回答：
 
-> 本项目 worker queue 是 bounded。Outbox/DelayJob poller submit 被拒绝时，不是无限扩容线程或无限堆积内存，而是把 event/job 标记为失败并进入 retry/DEAD 策略。生产上这属于 backpressure，需要同时看 backlog、worker busy、DB/Kafka latency，再决定扩容、限流或优化慢依赖。
+> 本项目五个 worker queue 都 bounded。submit 被拒绝后，Outbox/DelayJob/Statement 会持久化 retry/DEAD，NotificationDelivery 因 provider 尚未调用会释放 lease、延后重领且不消耗 delivery attempts。生产上应先看 durable backlog、worker busy、Hikari、Kafka/provider latency，再决定扩容、限流或优化依赖；不能把队列无限加大来隐藏拥塞。
 
 ### Q9：Virtual threads 适合这里吗？
 

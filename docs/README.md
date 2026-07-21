@@ -11,7 +11,7 @@
 ## 约定
 
 - **新合并文档**：放在 `docs/` 根下，命名直白（如 `caching-and-rate-limiting-cn.md`）。
-- **归档原文档**：移入 `docs/archive/`，内容保持原样不改，方便回溯。
+- **归档原文档**：移入 `docs/archive/` 后保留完整技术细节，但仍要随当前代码修正类名、配置、流程和明显错误；历史事实必须明确标注，不能把 archive 当作过时代码的保护区。
 - 选择"扁平文件 + 本索引分类"而不是物理子文件夹，是为了减少跨文档链接的路径维护成本；
   分类由本索引承担。如需改成子文件夹，是一次低成本的后续调整。
 
@@ -23,7 +23,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `ToDo` 路线图；对齐 statement claimable job 类名（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobHandler`/`StatementGenerationService`） |
+| [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `remaining-domain-roadmap` 路线图；对齐 statement claimable job 类名（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobHandler`/`StatementGenerationService`） |
 | [`domain-state-flow-cn.md`](domain-state-flow-cn.md) | ✅ | **保留不归档**；已把 statement 批处理类名对齐到 claimable job（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobDispatcher`/`StatementGenerationService`），账户级出账锁逻辑未变 |
 
 ### 2. 项目实现（Implementation）
@@ -93,19 +93,20 @@
 
 ## 归档（Archive）
 
-[`docs/archive/`](archive/) 保存被合并掉的原文档，仅供回溯。
-2026-07 收缩重构删除了部分文中描述的组件（ledger / historical risk projection、
-`statement.closed` 与 `repayment.received` Kafka 路径等）；受影响的归档文档已清理
-对应段落，并在 H1 下方加"归档对齐说明"指向现行文档，其余内容保持原样。当前已归档：
+[`docs/archive/`](archive/) 保存被合并掉的长篇文档，定位是“可检索的技术档案”，不是当前主学习路径。
+2026-07 已逐篇按当前代码重新校准：删除或明确标注 ledger / historical risk projection、
+`statement.closed` 与 `repayment.received` Kafka 路径等历史实现，同步现行类名、配置、表结构、线程池、
+缓存和可靠性语义，并在 H1 下方用“归档对齐说明”指向现行文档。归档保留技术深度和 interview 追问，
+但当前架构结论仍以代码和 active docs 为准。当前已归档：
 
 - `cache-snapshot-design-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `cache-invalidation-broadcast-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `distributed-cache-cn.md` → 合并进 `caching-and-rate-limiting-cn.md`
 - `kafka-outbox-design.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
 - `kafka-learning-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
-- `event-outbox-messaging-design-claude-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
+- `event-outbox-messaging-design-cn.md` → 合并进 `events-outbox-inbox-kafka-cn.md`
 - `async-workflows-comparison-cn.md` → 合并进 `claimable-jobs-cn.md`
-- `claimable-job-families-comparison-claude-cn.md` → 合并进 `claimable-jobs-cn.md`
+- `claimable-job-families-comparison-cn.md` → 合并进 `claimable-jobs-cn.md`
 - `statement-job-design-cn.md` → 合并进 `claimable-jobs-cn.md`
 - `mybatis-sql-learning-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
 - `database-migration-liquibase-cn.md` → 合并进 `mybatis-sql-and-migration-cn.md`
@@ -115,5 +116,5 @@
 - `high-traffic-system-design-cn.md` → 合并进 `traffic-rate-limiting-and-capacity-cn.md`
 - `production-runtime-sizing-cn.md` → 合并进 `traffic-rate-limiting-and-capacity-cn.md`
 - `credit-card-lifecycle-cn.md` → 合并进 `credit-card-domain-cn.md`
-- `ToDo.md` → 合并进 `credit-card-domain-cn.md`（剩余领域路线图）
+- `remaining-domain-roadmap-cn.md` → 合并进 `credit-card-domain-cn.md`（剩余领域路线图）
 - `authorization-design.md` → 合并进 `implementation-walkthrough-cn.md`（§14 设计决策）

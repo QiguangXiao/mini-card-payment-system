@@ -1,6 +1,12 @@
 # Kafka and Transactional Outbox Design
 
-> **Archive note (2026-07)**: this document has been aligned with the slimmed architecture — sections describing the removed ledger projection, historical risk projection, and `statement.closed` / `repayment.received` event paths were taken out. The current Kafka surface is `authorization-events` + `transaction-events`, consumed by the single notification group. See [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) for the current design.
+> **Current-code alignment (2026-07):** The full body has been checked against
+> the current Kafka configuration, Outbox lease model, two source-specific
+> Notification listeners, and per-channel delivery workflow. Removed Ledger,
+> historical-risk, statement, and repayment event paths are described only as
+> historical scope decisions. See
+> [events-outbox-inbox-kafka-cn.md](../events-outbox-inbox-kafka-cn.md) for the
+> shorter primary reading path.
 
 ## Purpose
 
@@ -8,20 +14,22 @@ Authorization is a synchronous financial decision, but several follow-up
 activities across the issuer backend should not increase API latency or share
 the main money-changing transaction:
 
-- Cardholder notification
-- Risk-feature and fraud analytics updates
-- Statement-ready and repayment notifications
-- Operations, audit, and reporting projections
+- Authorization-decision and posted-transaction cardholder notification
+- Future operations, audit, reconciliation, or reporting consumers
 
-The current implementation includes the Notification consumer; the other
-activities above remain motivation for the event contract rather than
-implemented consumers.
+The current implementation includes only the Notification consumer group. The
+former Ledger, historical-risk, statement-ready, and repayment-notification
+consumers were removed to keep one representative Kafka side-effect path. They
+must not be presented as current features; future consumers would need their
+own group identity, DLT route, Inbox identity, and replay ownership.
 
 ## Why Transactional Outbox
 
 Publishing directly to Kafka inside `AuthorizationService` creates a dual-write
-problem. The same problem appears in posting, statement generation, repayment,
-and any future money-changing workflow:
+problem. The current Posting flow has the same problem because it emits
+Authorization and CardTransaction events. Statement generation and Repayment
+currently emit no Kafka events; the problem would apply there only if a future
+workflow adds reliable publication:
 
 ```text
 MySQL commits, Kafka fails -> business state exists but event is lost
@@ -105,10 +113,12 @@ financial precision across JSON storage and prevents consumers from accidentally
 using binary floating-point arithmetic.
 
 The Kafka key is the Outbox row's `partition_key`. Authorization events use
-`authorizationId`, CardTransaction events use `cardTransactionId`, and
-Statement/Repayment events use `creditAccountId`. Kafka guarantees ordering only
-within one partition, so the key should represent the aggregate or account scope
-where order matters.
+`authorizationId`, and CardTransaction events use `cardTransactionId`. Kafka
+guarantees ordering only within one partition, so the key should represent the
+aggregate scope where order matters. The current Outbox publisher has four
+workers, so a single scheduler thread and `ORDER BY created_at` do not guarantee
+global publish order; consumers must still validate state/version when ordering
+matters.
 
 ## Publisher Concurrency
 
@@ -185,19 +195,26 @@ Consumer group:
 mini-card-notification-v1
 ```
 
-Notification is modeled as an independent bounded context. `Notification` is an
-aggregate root that owns its `PENDING -> SENT` or `PENDING -> FAILED` lifecycle,
-delivery-attempt count, and transition rules. Kafka is only an inbound adapter:
-the listener translates the integration event into an application command and
-does not appear in the domain model.
+Notification is modeled as an independent bounded context. `Notification` is
+now an immutable intent: who should be notified, about which subject, and with
+which template type. Delivery lifecycle does **not** live on that aggregate.
+Each `NotificationDelivery` owns its per-channel
+`PENDING -> PROCESSING(lease) -> SENT / PENDING retry / DEAD` state, attempts,
+provider receipt, and lease token. This allows APP_PUSH to succeed while EMAIL
+is still retrying.
 
-The current use case creates durable `notifications` rows for authorization
-and card transaction events. The `source_event_id` unique
-constraint prevents duplicate aggregate creation when Kafka redelivers an event.
+The two source-specific listeners translate authorization and card-transaction
+contracts into `RequestNotificationCommand`. In one MySQL transaction,
+`RequestNotificationService` claims
+`consumer_inbox(notification-v1, eventId)`, inserts the immutable
+`notifications` row, and fans out APP_PUSH and EMAIL
+`notification_deliveries`. `notifications.source_event_id` and
+`(notification_id, channel)` unique constraints provide second-line idempotency.
 
-A future notification sender can independently retry provider calls and track
-delivery status without blocking Kafka partitions or replaying the original
-authorization event.
+The current `NotificationDeliveryPoller/Claimer/Worker/Recoverer` already retries
+provider calls outside the Kafka listener. Provider calls use a stable delivery
+id as the provider idempotency key, so Kafka replay is not used as a delivery
+retry mechanism and a slow provider does not block the source partition.
 
 Notification subscribes to the authorization and transaction topics. Kafka
 delivers each event once per consumer group, so an additional consumer group
@@ -213,17 +230,23 @@ mini-card.notification.dlt.v1
 ```
 
 Transient exceptions are retried twice with a one-second fixed backoff. Contract
-errors such as malformed JSON, a mismatched `eventId` header, or an unsupported
-event version are permanent and go directly to the appropriate DLT.
+errors such as malformed JSON, a missing required envelope/payload field, or an
+invalid UUID/decimal/time value are permanent and go directly to the appropriate
+DLT. Headers are observability metadata and are not compared with the body;
+unknown positive event versions are also not rejected yet, which is a schema
+evolution gap rather than an implemented guarantee.
 
-Separate DLTs matter because a message can be valid for one consumer while the
-other consumer fails due to its own database or business rule. Operations can
-inspect and replay one consumer without disturbing the other consumer group.
+DLT selection follows the failing consumer group rather than the source topic.
+There is currently one mapping—Notification group to Notification DLT—but the
+shape is ready for future groups. An unknown group fails loudly and leaves the
+source offset uncommitted instead of guessing a destination.
 
 DLT messages retain the original payload, key, partition relationship, and
 Spring Kafka exception headers. Production operations should alert on DLT
 growth, inspect the root cause, deploy a fix, and replay messages deliberately
 rather than automatically looping DLT messages back into the source topic.
+The current repository has no DLT listener, alerting pipeline, or replay tool;
+publishing the DLT record is implemented, operating it is still an explicit gap.
 
 ### Future Projections
 

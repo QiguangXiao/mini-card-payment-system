@@ -1,6 +1,10 @@
 # 信用卡刷卡到还款全流程学习笔记
 
-> **归档对齐说明（2026-07）**：文中的 `statement.closed` / `repayment.received` Kafka 通知与 `ledger_entries` 复式记账 projection 现已移除；信用卡业务生命周期本身（授权 → 入账 → 账单 → 还款）不受影响。文中相关段落已按现行架构清理，其余内容保持原样；现行领域文档以 [credit-card-domain-cn.md](../credit-card-domain-cn.md) 为准。
+> **归档对齐说明（2026-07）**：本文正文已逐段对齐当前代码。现行主链路是
+> Authorization → Presentment Posting → sharded StatementJob → Repayment；已删除的
+> `statement.closed` / `repayment.received` Kafka 通知、Ledger projection 和 historical
+> risk projection 只作为明确标注的历史取舍或生产概念出现，不再冒充当前实现。精简阅读入口见
+> [credit-card-domain-cn.md](../credit-card-domain-cn.md)。
 
 这份文档用最基础、最典型的信用卡消费例子，解释从刷卡、授权、入账、账单、还款到退款/冲正分支的完整链路。
 
@@ -276,7 +280,8 @@ Issuer account / statement domain
 
 ```text
 每月月末关账
-次日由 StatementBatchPoller 跑 billing batch
+每天 01:00（Asia/Tokyo）由 BillingCycleScheduler 做最近账期的 reconciliation
+缺少哪个账期的 statement_jobs，就幂等补建该账期的 sharded jobs
 次月 27 日作为扣款基准日；如果 27 日不是日本营业日，则顺延到之后第一个营业日
 ```
 
@@ -321,12 +326,25 @@ dueDate = 7 月 27 日
 
 当前项目已经实现基础 statement generation：
 
-- `StatementBatchPoller` 每分钟轻量检查一次，只有关账日次日才真正跑 batch。
-- `StatementBatchService` 计算 billing cycle 和 dueDate，并逐个账户调用 `StatementService.generate(...)`。
-- `StatementService.generate(...)` 按 billing cycle 汇总未出账的 `POSTED` transactions。
-- `statements` 保存账单汇总，`statement_items` 保存交易快照。
-- `card_transactions.statement_id` 记录交易已经进入哪期账单，防止重复出账。
-- `StatementService` 在同一事务里写 `AUTO_REPAYMENT` DelayJob，计划 dueDate 自动扣款。
+- `BillingCycleScheduler` 每天按 `statement.batch.cron` 和 `Asia/Tokyo` 唤醒，不直接生成账单。
+- `StatementCycleService.createDueJobs()` 回看最近 `reconciliation-lookback-cycles=2`
+  个已结束账期；这是一条 level-triggered 对账式补建控制环，服务错过月初 cron 后恢复仍可补建，
+  不再依赖“关账日次日那一次 tick 必须成功”。
+- 它只统计本账期 `POSTED + UNBILLED` 交易涉及的账户，并按
+  `target-accounts-per-job=1000` 计算分片；即使没有候选账户也创建一个空分片保留账期执行记录。
+- `statement_jobs` 是单层 durable sharded claimable job。唯一键
+  `(period_start, period_end, shard_no)` 防止多 pod 或补跑重复建同一分片。
+- `StatementJobDispatcher` 每秒 claim 最多 8 条 `PENDING` job，写完整
+  `PROCESSING` lease（`claimed_by/claimed_at/claim_until/claim_token`），提交短事务后才交给
+  4-thread bounded worker pool；每 10 秒回收超时 lease，最长尝试 10 次。
+- `StatementJobHandler` 用 `CRC32(credit_account_id) % shard_count` 找到分片账户，逐账户调用
+  `StatementGenerationService.generate(...)`。每个账户一个小 transaction boundary，单个坏账户不会
+  把整个账期包进一个超长事务；每处理 100 个账户还会检查一次 `claim_token`，及时停止已经失去 lease 的旧 worker。
+- `StatementGenerationService` 固定按 `credit account row -> candidate transaction rows -> statement row`
+  的顺序加锁，读取 `POSTED + UNBILLED` 交易并生成 `statements` 与 `statement_lines` 快照，随后把交易标为 `BILLED`。
+- `statements` 的 `(credit_account_id, period_start, period_end)` 自然键是账户级幂等防线；
+  `statement_jobs` 的 cycle/shard 唯一键解决的是任务规划幂等，二者不能混为一个问题。
+- 同一账单生成事务还会写 `AUTO_REPAYMENT` DelayJob，计划 dueDate 自动扣款；Statement 当前不再发布 Kafka 事件。
 
 账单生成只固定金额，不恢复信用额度；当前项目已经通过简化的 `Repayment` 领域处理还款入账。
 
@@ -386,7 +404,9 @@ statement 标记为 paid
 
 - `AUTO_REPAYMENT` DelayJob 到期后由 `AutoRepaymentDelayJobHandler` 调用 `AutoRepaymentService`。
 - 当前不建 `bank_accounts` 表，先假设客户已有默认银行扣款授权。
-- `SimulatedBankDebitGateway` 默认返回 `SUCCESS`；配置成 `FAILED` 时不会入账，失败交给 DelayJob retry/DEAD 路径记录。
+- `BankDebitGatewayAdapter` 通过 Feign 调用本地 `SimulatedBankController`。当前配置默认成功；
+  业务拒绝、timeout、5xx 或 circuit open 不会入账，而是交给 DelayJob durable retry/backoff；
+  4xx 契约错误会被翻译成 permanent failure，直接进入 `DEAD`，不会无意义地烧完重试次数。
 - 自动扣款成功后用确定性幂等键 `auto-debit:{statementId}` 调用 `RepaymentService.receive(...)`。
 - `POST /api/repayments` 通过 `Idempotency-Key` 防止重复还款。
 - `RepaymentService.receive(...)` 在同一 transaction boundary 内更新 `repayments`、`credit_accounts.posted_balance` 和 `statements.paid_amount/status`。
@@ -838,7 +858,9 @@ CardTransaction PENDING -> POSTED
 
 ### 16.5 Eventual consistency
 
-通知、风控投影、运营报表可以异步。
+当前 Notification 通过 Outbox/Kafka/Inbox 最终一致地创建并投递；未来运营报表、对账读模型也可以异步。
+当前 Risk 不是 Kafka projection：Redis velocity 和 external risk 都在授权决策链中同步完成，且放在
+credit account row lock 之前，避免慢外部调用扩大锁持有时间。
 
 授权、入账、还款等资金/额度核心路径要在明确 transaction boundary 内完成。
 
@@ -863,12 +885,18 @@ Authorization
 -> Credit hold
 -> Presentment Posting
 -> CardTransaction
--> Statement
+-> BillingCycleScheduler reconciliation
+-> sharded StatementJob claim/lease/recover
+-> Statement + StatementLine
 -> Repayment
--> Minimal Ledger
 -> Authorization Expiry
--> Outbox/Kafka notification and risk projection
+-> Outbox/Kafka authorization + card-transaction notification
+-> Redis velocity + external risk decision
 ```
+
+明确没有实现：Ledger、historical risk projection、statement/repayment Kafka notification。
+这些路径在 2026-07 收缩中删除，用来保留“一种机制只留一个代表实现”的 interview ROI；
+这不等于生产 issuer 不需要 ledger/reconciliation，而是本学习仓库不再用半成品 projection 冒充总账。
 
 当前项目还没覆盖：
 
@@ -884,9 +912,12 @@ Dispute / chargeback
 ```text
 1. Reconciliation：对比外部清算/资金文件
 2. Refund / reversal：围绕 CardTransaction、Statement 和 Ledger adjustment 扩展
-3. Statement due/overdue：处理到期、逾期和最低还款判断
-4. Settlement cash movement / dispute：补齐资金移动和争议处理分支
+3. Settlement cash movement / dispute：补齐资金移动和争议处理分支
 ```
+
+`StatementStatus.OVERDUE` 已在 2026-07 删除：当前没有逾期识别 scheduler、罚息、催收或 DPD
+规则，单独保留一个永远不会进入的枚举值只会制造虚假能力。若未来实现 overdue，应连同业务触发、
+状态转换、minimum payment/DPD 语义和恢复流程一起加入，而不是只补一个状态名。
 
 ## 18. interview一句话总结
 

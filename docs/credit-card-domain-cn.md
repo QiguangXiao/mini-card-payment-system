@@ -1,7 +1,7 @@
 # 信用卡发卡方业务领域：全流程、分支与剩余领域路线图
 
 > 本文合并自两份旧文档：`credit-card-lifecycle-cn.md`（刷卡到还款的业务全流程 + 分支）与
-> `ToDo.md`（剩余领域学习路线图）。合并时把两者重复的 "Ledger vs Reconciliation 区别" 与
+> `remaining-domain-roadmap-cn.md`（剩余领域学习路线图）。合并时把两者重复的 "Ledger vs Reconciliation 区别" 与
 > "后续领域优先级" 统一讲一次，并**对齐代码**：旧文档把账单批处理描述成 `StatementBatchPoller`/
 > `StatementBatchService`/`StatementService.generate`，但 PR #1 已改成 claimable job
 > （`BillingCycleScheduler` → `StatementCycleService` → `StatementJobDispatcher` →
