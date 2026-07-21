@@ -31,3 +31,4 @@ out/
 
 # Logs
 *.log
+.codex/environments/environment.toml
