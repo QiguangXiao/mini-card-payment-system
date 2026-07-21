@@ -21,6 +21,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.mock;
 
+/**
+ * Billing cycle reconciliation 与 statement job 分片规划测试。
+ *
+ * <p>关键词：账单周期, 漏跑补偿, 分片规划, billing cycle,
+ * reconciliation, sharded jobs, 請求締め処理(せいきゅうしめしょり)。</p>
+ *
+ * <p>这些测试保护 scheduler 的 level-triggered 语义：应用错过某次 cron 后仍能补建缺失 cycle，
+ * 并按候选账户数计算 shardCount。它不执行单账户出账，避免把 planner 和 worker 职责混在一起。</p>
+ */
 class StatementCycleServiceTest {
 
     private static final Clock CLOCK =

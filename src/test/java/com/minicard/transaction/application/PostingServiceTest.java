@@ -42,6 +42,15 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Presentment posting use case 的状态转换和副作用边界测试。
+ *
+ * <p>关键词：交易入账, 授权结转, 锁顺序, presentment posting,
+ * idempotency, row lock order, 売上確定(うりあげかくてい)。</p>
+ *
+ * <p>重点不是只断言返回 POSTED，而是同时验证 reserved → posted balance、authorization/transaction
+ * 双聚合状态、两个 Outbox event，以及 duplicate presentment 不重复资金动作。</p>
+ */
 class PostingServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-06-19T00:00:00Z");

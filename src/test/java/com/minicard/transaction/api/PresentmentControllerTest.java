@@ -24,6 +24,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * Presentment HTTP adapter 的 MVC slice 测试。
+ *
+ * <p>关键词：入账 API, 清算请求, 输入校验, presentment API,
+ * posting contract, MVC slice, 売上データAPI(うりあげデータエーピーアイ)。</p>
+ *
+ * <p>本类只验证 HTTP JSON 到 PostPresentmentCommand 的边界；networkTransactionId 幂等、
+ * authorization/account row lock 和 posting 状态转换由 PostingServiceTest 负责。</p>
+ */
 @WebMvcTest(PresentmentController.class)
 @Import(GlobalExceptionHandler.class)
 class PresentmentControllerTest {
@@ -35,6 +44,7 @@ class PresentmentControllerTest {
     private PostingService postingService;
 
     @Test
+    // 测试目的：固定 presentment 成功后的交易响应，尤其是外部 networkTransactionId 与 POSTED 时间。
     void postsPresentment() throws Exception {
         CardTransaction transaction = postedTransaction();
         when(postingService.post(any())).thenReturn(transaction);
@@ -58,6 +68,7 @@ class PresentmentControllerTest {
     }
 
     @Test
+    // 测试目的：币种大小写属于 HTTP contract，非法输入必须在开启 posting transaction 前被拦住。
     void rejectsLowercaseCurrencyAtHttpBoundary() throws Exception {
         mockMvc.perform(post("/api/presentments")
                         .contentType(MediaType.APPLICATION_JSON)

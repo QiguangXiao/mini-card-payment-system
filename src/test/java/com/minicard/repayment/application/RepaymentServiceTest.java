@@ -36,6 +36,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Repayment 写路径的幂等、锁顺序和金额状态测试。
+ *
+ * <p>关键词：还款入账, 幂等 claim, 锁后重校验, repayment service,
+ * row lock, after-commit eviction, 入金処理(にゅうきんしょり)。</p>
+ *
+ * <p>核心不变式是同一还款只减少一次 posted balance，并在锁住 account/statement 后用最新 remaining
+ * amount 再校验。缓存断言只验证注册 after-commit eviction，不能替代 StatementReadService 的缓存竞态测试。</p>
+ */
 class RepaymentServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-07-10T00:00:00Z");

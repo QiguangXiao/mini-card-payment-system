@@ -18,6 +18,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * DelayJob handler 执行与 lease-aware finalize 测试。
+ *
+ * <p>关键词：延迟任务, 重试退避, 永久失败, delay job worker,
+ * lease token, stale worker, 遅延ジョブ(ちえんジョブ)。</p>
+ *
+ * <p>测试把 handler 副作用和 finalize 短事务分开观察：普通异常回 PENDING，确定性异常直接 DEAD，
+ * 成功才 DONE；无论 handler 结果如何，过期 worker 都不能覆盖新 owner。</p>
+ */
 class DelayJobWorkerTest {
 
     private static final Instant NOW = Instant.parse("2026-06-08T00:00:00Z");

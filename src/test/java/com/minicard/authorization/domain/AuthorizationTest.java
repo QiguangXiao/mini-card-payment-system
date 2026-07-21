@@ -14,12 +14,19 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * Authorization aggregate 的生命周期、不变式和 domain event 测试。
+ *
+ * <p>关键词：授权状态机, 领域事件, 非法状态转换, authorization aggregate,
+ * state transition, domain event, オーソリ状態遷移(オーソリじょうたいせんい)。</p>
+ */
 class AuthorizationTest {
 
     private static final Instant CREATED_AT = Instant.parse("2026-06-07T00:00:00Z");
     private static final Instant DECIDED_AT = Instant.parse("2026-06-07T00:00:01Z");
 
     @Test
+    // 新请求必须从 PENDING 开始，不能在尚未决策时带 decline/decision 数据。
     void newAuthorizationStartsPending() {
         Authorization authorization = authorization();
 
@@ -29,6 +36,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // approve 同时推进状态、写决定/过期时间并产生一次性 APPROVED event。
     void approvesPendingAuthorization() {
         Authorization authorization = authorization();
 
@@ -46,6 +54,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // 到达 expiresAt 后才能进入 EXPIRED，并产生供释放额度/通知使用的业务事实。
     void expiresApprovedAuthorizationAtOrAfterDeadline() {
         Authorization authorization = authorization();
         authorization.approve(DECIDED_AT);
@@ -62,6 +71,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // presentment 只能消费仍有效的 APPROVED authorization，成功后进入不可再次入账的 POSTED。
     void postsApprovedAuthorizationBeforeDeadline() {
         Authorization authorization = authorization();
         authorization.approve(DECIDED_AT);
@@ -78,6 +88,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // 过期时间未到不能提前释放 reservation，否则仍有效的授权可能失去额度保证。
     void rejectsExpiryBeforeDeadline() {
         Authorization authorization = authorization();
         authorization.approve(DECIDED_AT);
@@ -88,6 +99,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // decline 必须保存机器可读原因并只发布一次 DECLINED event。
     void declinesPendingAuthorizationWithReason() {
         Authorization authorization = authorization();
 
@@ -106,6 +118,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // 授权只能决策一次；APPROVED 后再 DECLINE 会制造互相矛盾的资金状态。
     void rejectsSecondDecision() {
         Authorization authorization = authorization();
         authorization.approve(DECIDED_AT);
@@ -119,6 +132,7 @@ class AuthorizationTest {
     }
 
     @Test
+    // 金额正数不变式放在 aggregate factory，保护非 HTTP 的 scheduler/test/restore 调用路径。
     void rejectsZeroAuthorizationAmount() {
         assertThatThrownBy(() -> Authorization.request(
                 "fingerprint-1",

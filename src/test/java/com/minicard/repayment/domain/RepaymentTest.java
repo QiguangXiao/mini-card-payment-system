@@ -10,11 +10,18 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Repayment aggregate 最小状态转换测试。
+ *
+ * <p>关键词：还款状态, 入账完成, repayment aggregate,
+ * PENDING to RECEIVED, 入金状態(にゅうきんじょうたい)。</p>
+ */
 class RepaymentTest {
 
     private static final Instant NOW = Instant.parse("2026-07-10T00:00:00Z");
 
     @Test
+    // winner 完成资金入账后，repayment 必须同时记录 accountId 和 receivedAt，形成可审计结果。
     void marksRepaymentReceived() {
         UUID statementId = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();

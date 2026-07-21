@@ -10,9 +10,19 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * CreditAccount 的额度守恒和资金余额不变式测试。
+ *
+ * <p>关键词：可用额度, 额度预占, 已入账余额, credit account,
+ * reservation, posted balance, 利用可能枠(りようかのうわく)。</p>
+ *
+ * <p>核心公式是 {@code available = limit - reserved - posted}；每个状态转换都必须保持金额不为负、
+ * 不超过授信额度，并区分业务拒绝结果与真正的非法状态异常。</p>
+ */
 class CreditAccountTest {
 
     @Test
+    // 额度充足时 reserve 只增加 reserved，不应提前增加 posted balance。
     void reservesAvailableCredit() {
         CreditAccount account = account("1000.00", "200.00", CreditAccountStatus.ACTIVE);
 
@@ -24,6 +34,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // 超过 available credit 返回业务拒绝，并保持原余额完全不变。
     void rejectsReservationExceedingAvailableCredit() {
         CreditAccount account = account("1000.00", "950.00", CreditAccountStatus.ACTIVE);
 
@@ -35,6 +46,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // BLOCKED account 不能新增 reservation，即使数值额度充足。
     void rejectsReservationForBlockedAccount() {
         CreditAccount account = account("1000.00", "0.00", CreditAccountStatus.BLOCKED);
 
@@ -44,6 +56,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // 不同币种不能参与同一个额度公式，避免把 JPY 与 USD 数字直接相加减。
     void rejectsReservationInDifferentCurrency() {
         CreditAccount account = account("1000.00", "0.00", CreditAccountStatus.ACTIVE);
         Money usd = new Money(new BigDecimal("100.00"), Currency.getInstance("USD"));
@@ -54,6 +67,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // authorization expiry 会释放 reserved，并恢复同等 available credit。
     void releasesPreviouslyReservedCredit() {
         CreditAccount account = account("1000.00", "300.00", CreditAccountStatus.ACTIVE);
 
@@ -64,6 +78,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // presentment posting 是 reserved → posted 的内部搬移，不能重复占用总额度。
     void postsAuthorizedAmountFromReservedToPostedBalance() {
         CreditAccount account = account("1000.00", "300.00", CreditAccountStatus.ACTIVE);
 
@@ -75,6 +90,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // repayment 只减少 posted balance，从而恢复 available credit，不影响仍有效的 reservation。
     void appliesRepaymentToPostedBalance() {
         CreditAccount account = accountWithPosted("1000.00", "100.00", "300.00");
 
@@ -85,6 +101,7 @@ class CreditAccountTest {
     }
 
     @Test
+    // 还款不能把 posted balance 扣成负数；上层锁后校验之外，aggregate 仍保留最后防线。
     void rejectsRepaymentAbovePostedBalance() {
         CreditAccount account = accountWithPosted("1000.00", "0.00", "100.00");
 

@@ -18,6 +18,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Outbox publish、broker ack 后状态推进和 stale lease 防护测试。
+ *
+ * <p>关键词：事务发件箱, 发布确认, 重试退避, outbox worker,
+ * broker ack, lease token, トランザクションアウトボックス。</p>
+ *
+ * <p>{@code PUBLISHED} 只表示 publisher 正常返回（生产实现等待 Kafka ack），不表示 consumer 已完成。
+ * 本类验证 publish 失败可持久化重试，以及旧 worker 的结果不会越过 lease ownership 检查。</p>
+ */
 class OutboxWorkerTest {
 
     private static final Instant NOW = Instant.parse("2026-06-16T00:00:00Z");

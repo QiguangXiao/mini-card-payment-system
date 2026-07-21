@@ -26,6 +26,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Integration event 转 Notification intent 和多渠道 delivery 的事务内编排测试。
+ *
+ * <p>关键词：通知意图, Inbox 去重, 渠道扇出, notification request,
+ * consumer idempotency, fan-out, 通知要求(つうちようきゅう)。</p>
+ *
+ * <p>本类固定两道幂等边界：consumer_inbox 挡 Kafka redelivery，notifications.source_event_id
+ * 唯一键挡重复业务意图；只有新 Notification 才能 fan-out delivery rows。</p>
+ */
 class RequestNotificationServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-06-14T00:00:00Z");

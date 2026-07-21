@@ -29,6 +29,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionOperations;
 
+/**
+ * Notification delivery 的 sender wiring、节流和 durable retry 语义测试。
+ *
+ * <p>关键词：通知投递, 渠道路由, 不消耗重试次数的节流, notification delivery,
+ * durable retry budget, provider throttling, 通知配信(つうちはいしん)。</p>
+ *
+ * <p>核心边界是“是否已经调用 provider”：HTTP 前拿不到 RateLimiter permit 只延后 nextAttemptAt，
+ * 不能增加 attempts；真实 provider timeout/5xx 才消耗 durable retry budget。</p>
+ */
 class NotificationDeliveryWorkerTest {
 
     private static final Instant NOW = Instant.parse("2026-07-10T00:00:00Z");
@@ -44,6 +53,8 @@ class NotificationDeliveryWorkerTest {
     }
 
     @Test
+    // 测试目的：本地出站 RateLimiter 在 HTTP 前拒绝时，只释放 lease 并延期，不消耗 delivery attempts。
+    // 反事实：若每次本地节流都 attempts+1，provider 尚未收到请求，delivery 却可能被提前推进 DEAD。
     void throttlingReschedulesWithoutConsumingAttempts() {
         NotificationDeliveryRepository repository = mock(NotificationDeliveryRepository.class);
         TransactionOperations transactions = executingTransactions();

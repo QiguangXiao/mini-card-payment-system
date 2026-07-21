@@ -39,6 +39,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Authorization application use case 的快速单元测试。
+ *
+ * <p>关键词：授权决策, 幂等 claim, 额度预占, authorization service,
+ * idempotency, credit reservation, オーソリ判定(オーソリはんてい)。</p>
+ *
+ * <p>本类用 mock 精确验证 policy/card/risk/account 的短路顺序，以及 duplicate loser 不重复预占、
+ * 不重复计划 expiry job、不重复追加 Outbox 意图。真实 MySQL row lock 的并发正确性另由
+ * AuthorizationConcurrencyIT 证明，二者不能互相替代。</p>
+ */
 class AuthorizationServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-06-07T00:00:00Z");

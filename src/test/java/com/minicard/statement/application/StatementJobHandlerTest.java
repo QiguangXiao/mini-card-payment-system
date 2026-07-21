@@ -23,6 +23,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Statement job 分片 fan-out 与账户级失败隔离测试。
+ *
+ * <p>关键词：账单任务处理, 账户小事务, lease 中途检查, statement job handler,
+ * failure isolation, stale worker, 請求ジョブ処理(せいきゅうジョブしょり)。</p>
+ *
+ * <p>handler 不负责 claim/finalize；它只按 shard 找账户、逐账户调用 generation use case 并诚实统计结果。
+ * 测试特别区分 skipped 与 failed，因为这个分类会决定整个 shard 是否消耗 retry budget。</p>
+ */
 class StatementJobHandlerTest {
 
     private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
@@ -55,6 +64,8 @@ class StatementJobHandlerTest {
     }
 
     @Test
+    // 测试目的：确定性“无候选交易”计入 skipped，瞬态故障计入 failed，成功账户计入 generated。
+    // 反事实：若把 rejected 也算 failed，空账户会让整个 shard 反复 retry；反过来则会吞掉真实故障。
     void countsRejectedAccountsAsSkippedAndRetryableAccountsAsFailed() {
         // job 自带 cycle 信息；handler 用它推导分片账户的 JST 账期边界，不再读取 parent batch。
         StatementJob job = StatementJob.pending(PERIOD_START, PERIOD_END, DUE_DATE, 0, 4, NOW);

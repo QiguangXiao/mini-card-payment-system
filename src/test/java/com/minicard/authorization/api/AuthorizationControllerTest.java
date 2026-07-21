@@ -29,6 +29,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * Authorization HTTP contract 的 MVC slice 测试。
+ *
+ * <p>关键词：授权 API, Bean Validation, 错误契约, authorization API,
+ * idempotency conflict, MVC slice, オーソリAPI, 入力検証(にゅうりょくけんしょう)。</p>
+ *
+ * <p>这里 mock application service，刻意只验证 controller adapter、JSON DTO、HTTP status、
+ * request-id filter 和 GlobalExceptionHandler 的组合；额度锁和幂等 claim 由 application/IT 测试负责。</p>
+ */
 @WebMvcTest(AuthorizationController.class)
 @Import(GlobalExceptionHandler.class)
 class AuthorizationControllerTest {
@@ -40,6 +49,8 @@ class AuthorizationControllerTest {
     private AuthorizationService authorizationService;
 
     @Test
+    // 测试目的：固定成功授权的 request/response JSON contract，并确认请求链生成 X-Request-Id。
+    // variant：application 返回 APPROVED aggregate，HTTP 层应拆出金额/币种/时间，不能暴露内部 Money/Optional。
     void createsAuthorization() throws Exception {
         when(authorizationService.authorize(any())).thenReturn(approvedAuthorization());
 
@@ -67,6 +78,8 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：DECLINED 是正常业务结果而不是 HTTP 异常，仍返回 200 并携带稳定 declineReason。
+    // 反事实：若把拒绝统一映射成 4xx，调用方会把发卡决策误当成请求格式失败。
     void returnsDeclinedAuthorizationWithReason() throws Exception {
         when(authorizationService.authorize(any())).thenReturn(declinedAuthorization());
 
@@ -90,6 +103,7 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：金额为 0 在 HTTP boundary 被 Bean Validation 拒绝为 400 INVALID_REQUEST。
     void rejectsInvalidAmount() throws Exception {
         mockMvc.perform(post("/api/authorizations")
                         .header("Idempotency-Key", "key-1")
@@ -109,6 +123,8 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：同 Idempotency-Key 代表不同请求时，专用异常必须稳定映射成 409。
+    // 客户端应依赖 IDEMPOTENCY_CONFLICT code，而不是解析可能变化的 message。
     void returnsConflictWhenIdempotencyKeyIsReusedForDifferentRequest() throws Exception {
         when(authorizationService.authorize(any())).thenThrow(new IdempotencyConflictException());
 
@@ -130,6 +146,7 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：GET 查询只暴露 AuthorizationResponse contract，不触发任何状态推进。
     void getsAuthorization() throws Exception {
         Authorization authorization = approvedAuthorization();
         when(authorizationService.get(authorization.id())).thenReturn(authorization);
@@ -141,6 +158,7 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：application 的明确资源不存在信号映射成 404 RESOURCE_NOT_FOUND。
     void returnsNotFoundForUnknownAuthorization() throws Exception {
         UUID id = UUID.fromString("8f2d8907-0471-4209-9862-73e09f62cd1f");
         when(authorizationService.get(id))
@@ -152,6 +170,7 @@ class AuthorizationControllerTest {
     }
 
     @Test
+    // 测试目的：未预期异常只返回通用 500，数据库/stack trace 等内部细节只能留在 server log。
     void hidesUnexpectedInternalErrorDetails() throws Exception {
         when(authorizationService.authorize(any()))
                 .thenThrow(new RuntimeException("database connection details"));

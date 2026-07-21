@@ -35,6 +35,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Statement cache-aside 读路径和并发失效协议测试。
+ *
+ * <p>关键词：两级缓存, 版本墓碑, 热点重建锁, statement read cache,
+ * cache-aside, late write prevention, 請求照会キャッシュ(せいきゅうしょうかいキャッシュ)。</p>
+ *
+ * <p>本类用 mock Redis 精确验证 L1/L2 路由、版本化 CAS、after-commit tombstone、跨 Pod L1 广播和
+ * rebuild lock 的 winner/loser/fail-open 分支。它证明 Java 协议顺序，不证明 Lua 在真 Redis 的原子性。</p>
+ */
 class StatementReadServiceTest {
 
     private static final Duration REMOTE_TTL = Duration.ofMinutes(5);

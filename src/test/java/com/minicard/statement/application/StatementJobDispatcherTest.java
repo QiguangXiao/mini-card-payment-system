@@ -24,6 +24,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Statement job claim、worker dispatch 与 finalize ownership 测试。
+ *
+ * <p>关键词：任务领取, finalize, claim token, statement job dispatcher,
+ * stale worker protection, processing lease, 請求ジョブ所有権(せいきゅうジョブしょゆうけん)。</p>
+ *
+ * <p>测试使用同步 executor 和立即执行的 TransactionOperations，把异步调度压缩成确定性流程；
+ * 它验证控制顺序，不验证 MySQL {@code SKIP LOCKED}，后者属于 repository integration test。</p>
+ */
 class StatementJobDispatcherTest {
 
     private static final Instant NOW = Instant.parse("2026-07-01T00:00:00Z");
@@ -50,6 +59,8 @@ class StatementJobDispatcherTest {
     );
 
     @Test
+    // 测试目的：handler 返回后 finalize 必须重新锁 DB row 并校验 claim token。
+    // variant：recoverer 已把 lease 交给新 worker，旧 worker 只能保留首次 claim update，不能再写 DONE。
     void staleWorkerDoesNotFinalizeWhenClaimTokenChanged() {
         StatementJob claimed = StatementJob.pending(PERIOD_START, PERIOD_END, DUE_DATE, 0, 1, NOW);
         when(jobRepository.findClaimableBatchForUpdate(any(), anyInt())).thenReturn(List.of(claimed));

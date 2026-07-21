@@ -30,6 +30,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
+/**
+ * GlobalExceptionHandler 的真实 MVC 分派和稳定 ErrorResponse contract 测试。
+ *
+ * <p>关键词：全局异常处理, HTTP 状态码, 业务错误码, exception handler,
+ * error contract, MVC dispatch, 例外ハンドラー(れいがいハンドラー)。</p>
+ *
+ * <p>既直接测试 handler 返回，也用 standalone MockMvc 验证 Spring 的异常选择顺序；后者能发现
+ * malformed JSON、UUID conversion 或数据库异常被 catch-all 500 抢走的问题。</p>
+ */
 class GlobalExceptionHandlerTest {
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
