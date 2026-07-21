@@ -1,0 +1,927 @@
+你给我再生成一个新的doc，硬核面试的QA，你知道我的目标公司，要求有问有答，重要的问题还要有追问和追答，要保证问答质量和回答长度，
+问题要高质量而且可能实际面试会涉及，可以是domain知识，也可以是系统设计，行为面试，心理/团队/人际/国际化，你能想到的可能出现的各种主题，
+也就是所有种类面试都可能出现的问题，不需要数量太多，但是要优质，保证doc的长度。之后我会根据各种范围，各自拓展。
+
+I need to create a comprehensive interview Q&A document for PayPay Card Java backend positions in Japan,
+focusing on realistic questions with detailed follow-ups and answers that cover technical domain knowledge,
+system design, behavioral aspects, and team dynamics—making sure the content is substantive and well-developed throughout.
+
+Since the user writes in Chinese and existing docs are in Chinese, I should write this new doc in Chinese as well.
+I also need to check the existing docs structure to see if there's already a QA bank I should integrate with or
+if this should be a standalone document, and understand what's already been covered to avoid duplication.
+我先看一下现有 docs 结构和已有的 QA bank，避免重复并保持风格一致。
+
+Listed markdown docs and project root
+I should first review the existing interview-qa-bank-cn.md file to understand what's already documented,
+ then check the docs README to see the naming conventions, so I can make sure the new document fills gaps rather than repeating
+ what's already there.
+Inspected existing QA bank structure
+The user needs a comprehensive interview prep document that goes beyond the existing technical Q&A bank—this new one should
+ cover domain knowledge, system design, behavioral questions, and interpersonal dynamics across all interview formats they might encounter
+ at PayPay Card. It'll complement rather than duplicate the existing resource, focusing on realistic interview scenarios with follow-up questions.
+Listed remaining headers of QA bank and related docs
+I see the existing QA bank is deep on project-specific technical topics like idempotency, Kafka, caching, and system design,
+ but the new document needs to be broader—covering domain knowledge, system design, behavioral, and psychological aspects
+ across all interview types.
+
+I'm planning to create a comprehensive seed document called `hardcore-interview-qa-cn.md` that covers gaps in the existing bank,
+structured by interview category with high-quality questions, full answers, and follow-ups for the most important ones. Starting
+with domain knowledge questions about credit card issuer fundamentals like the four-party model, interchange fees, and PayPay Card's
+revenue structure. 还要考虑积分发放系统的设计——需要处理营销活动驱动的高并发场景、事件驱动架构、幂等性保证和预算上限控制。对账系统也很关键，要对标清算网络的文件和内部记录。
+另外可以考虑大规模营销活动（比如超还元祭）的瞬时流量尖峰设计，或者遗留系统迁移的问题——PayPay Card 从之前的系统演进过来。
+
+对于遗留系统迁移到微服务的设计，这涉及双写、绞杀者模式和数据迁移策略，在实际面试中很可能出现。
+
+行为面试会有 4-5 个问题，通常围绕生产事故处理、与团队意见分歧、紧急交付下的权衡、失败经历和快速学习能力展开，需要根据实际工作经历准备具体案例。
+
+我应该提供一个框架和完整的示例答案，用准备项目或真实的后端场景来演示，同时标注用户应该替换为自己真实经历的地方。
+
+还有关于如何处理代码审查冲突和接受严厉反馈的人际沟通问题。
+
+接下来要覆盖与QA/PM在压力下的协作、优先级冲突时的处理方式，以及如何指导初级工程师。
+
+对于日本工作环境和国际化部分，需要准备为什么选择日本和PayPay Card的动机问题、多语言环境中的沟通挑战，以及如何应对文化差异如根回合和共识构建。
+还要考虑加入逆质问环节和可能的薪资流程讨论，以及离职原因的说明。
+
+现在要补充5年规划和为什么选择金融/支付领域这两个问题。用户强调质量优于数量但要保证文档长度，所以目标是18-24个主要问题，重点问题配2-3个后续追问和答案框架。
+语言上用中文为主，技术术语和日语短语自然穿插，考虑到PayPay采用英文作为官方语言，可以提供英文版本的答案骨架。 I'll include concise English summaries
+for the key behavioral questions since PayPay's engineering teams work primarily in English. Now I'm thinking through the documentation
+structure — aiming for a comprehensive guide around 900-1300 lines with concrete examples and detailed traces, then I'll check the docs
+README to add an entry and wrap up with a ready-to-paste commit message.
+我看到现有的技术问答文档已经很全面了，所以我会创建新文档来补充它没有覆盖的维度，比如深度技术领域、系统设计、行为问题和团队动态等。先检查一下 docs/README.md 的索引格式。
+Read
+README.md
+I'm planning to create a new document focused on deeper domain knowledge that goes beyond what's already covered—things like the
+four-party payment model and money flows, interchange mechanics, the full auth/clearing/settlement lifecycle, and the nuances of
+revolving credit and installment plans including interest calculations and relevant regulations.
+
+I'll also include system design questions they haven't seen before, like building a large-scale points and campaign system or
+designing a reconciliation system, plus behavioral questions using the STAR framework around production incidents and disagreements.
+I want to cover team dynamics and interpersonal challenges, questions about working in Japan and the fintech space, and their career
+motivations. The format will be question → answer → follow-up → follow-up answer, with behavioral questions including STAR-structured
+ model answers and real examples, plus English key-sentence versions for the most important questions.
+
+I need to be careful about factual accuracy regarding PayPay Card. From what I know, PayPay Card Corporation (formerly Yahoo! Japan Card)
+is part of the SoftBank/Z Holdings group and issues the PayPay Card, which serves as the credit backbone for PayPay あと払い. PayPay has
+over 67 million users and PayPay Card has around 13 million members. The regulatory landscape includes the Installment Sales Act governing
+credit card shopping, the Money Lending Business Act for cashing, and interest rate caps under the Interest Rate Restriction Act, with
+revolving shopping interest typically around 15-18%.
+
+Now I'm working through the specifics on interchange rates—Japan published standard interchange rates for Visa and Mastercard around 2022,
+with average rates around 2.3%, though I want to be precise about whether that's the interchange fee itself or the merchant fee average.
+
+For the interview, I should focus on explaining the mechanism rather than getting bogged down in exact percentages, and note that the specific
+figures should be verified against the latest public data. Then there's 3DS (3-D Secure) authentication—the frictionless versus challenge flow
+distinction, and how liability shifts to the issuer when 3DS is used. Japan's making 3DS mandatory for EC merchants by end of March 2025 under
+the credit card security guidelines.
+
+Beyond that, there's stand-in processing where the network approves transactions on the issuer's behalf if their system goes down, the chargeback
+flow moving through dispute, chargeback, representment, and arbitration stages, and the installment sales law requirements around payment capacity surveys, credit card number handler registration, and PCI DSS compliance.
+
+Now I'm thinking through potential system design questions—a points redemption campaign system with event-driven processing and budget controls,
+or a reconciliation system that matches clearing files against internal records.
+
+There's also the legacy migration challenge: moving from a monolithic card core to a new platform without downtime, which PayPay Card is actually facing with their older Yahoo-era systems. That would involve a strangler fig pattern, dual-run with shadow traffic, data backfill using change data capture, and a careful cutover with reconciliation checks and rollback plans.
+
+For each design question I'd need to cover requirements, capacity estimates, data models, flows, failure modes, and follow-ups. On the behavioral side, since I don't know the user's actual work history, I'll anchor answers on plausible generic backend experiences and have them swap in their real details where applicable.
+
+For production incidents specifically, I should provide a worked template with structure and a sample story clearly marked as an example, with explicit guidance on what to replace with their own experience. I'm also thinking through team dynamics questions like code review conflicts, receiving critical feedback, disagree-and-commit situations, handling ambiguity, supporting struggling teammates, and managing on-call pressure.
+
+For the international angle, I'd explore why PayPay Card matters—the largest cashless ecosystem in Japan, card and QR integration, scale, modernization challenges—plus how to work in English environments, navigate Japanese consensus-building (nemawashi), communicate with non-native speakers, and address relocation questions. I should also prepare 6-8 strong reverse questions with clear reasoning for why they're valuable, and sketch out the interview format itself.
+
+I'm planning this as a substantial guide around 1000-1400 lines, organized with category codes like D1, S1, B1, T1, I1, R1 for future expansion. I'll include short English versions for key questions like motivation and self-intro, cross-reference existing docs like the interview-qa-bank and jd-fit guide, and update the README table with this new resource. I'll also prepare a commit message once the doc is ready.
+
+Now I'm deciding on the filename and structure — going with `hardcore-interview-qa-cn.md` to match the user's phrasing, and organizing it with a positioning section first, then moving into the Q&A content by interview round.
+
+I'm setting up a categorization system using letter codes to distinguish between different question types: domain knowledge, system design, behavioral questions, team dynamics, and reverse questions the candidate should ask. For the technical rounds, I'll focus on English preparation with about 30 key questions as a baseline.
+
+Now I'm mapping out the typical interview flow and which sections address each stage, then diving into the domain fundamentals starting with payment ecosystems—specifically the four-party model, money flows, and how different players like issuers and acquirers generate revenue. I'm also preparing for follow-up questions about regional variations in merchant fees and how companies like PayPay operate across multiple roles.
+
+Moving deeper, I need to explain why authorization, clearing, and settlement are separate phases rather than one atomic operation, then cover installment payment mechanics (リボ払い) including interest calculations, legal frameworks around lending caps, and the distinction between credit products and cash advances. Finally, I'm addressing fraud prevention through 3DS2 authentication flows, liability shifts, and the regulatory changes coming in March 2025 for e-commerce transactions.
+
+Now I'm looking at chargeback lifecycles and how they differ from refunds, plus what issuers must handle internally when disputes arise. Then there's the compliance layer — how regulations like the Installment Sales Act and PCI DSS constraints shape system architecture, particularly around cardholder data handling and tokenization strategies. I should keep this to six core domain questions and potentially fold PayPay's postpaid offerings into the broader discussion of why PayPay matters strategically.
+
+For the systems design section, I'm tackling three major problems: first, a points redemption system that fires on every transaction during peak promotions with budget caps and idempotency guarantees; second, a clearing and reconciliation system that matches network settlement files against internal records to identify discrepancies and determine when money actually moves; and third, a legacy card system migration using strangler patterns, dual-run validation, and careful cutover planning with rollback safeguards.
+
+Now moving into behavioral interviews with a 40-minute timeline and STAR framework. I'm preparing a story matrix covering five key experiences that address common questions: a major production incident with root cause analysis and personal accountability, a technical disagreement with a colleague or manager, scope cuts under deadline pressure, a failed project or significant mistake, and rapid learning of new technologies. Then I'm covering team dynamics and interpersonal skills, starting with how to handle harsh code review feedback and how to give constructive criticism to others. 现在我需要补充文化适应部分，涵盖日本职场的根回し决策流程、会议文化以及如何在保持自己风格的同时融入。然后是五年规划和转职理由的准备，这在日本面试中很关键。我还要整理逆质问的好问题清单，以及考前的检查清单。最后补充一些具体数据——PayPay 的用户规模约 6900 万，PayPay Card 会员超过 1300 万，年交易笔数约 80 亿次。
+
+我需要在面试前查证最新的 IR 数据，并在答案中标注这些是准备时的公开资料。关于 PayPay Card 的分期付款手续费率，我要确认是否为 18.0%，因为日本大多数信用卡的分期费率通常在 15.0% 左右。
+
+利息制限法对现金借款有明确的分级（10万以下 20%、10-100万 18%、100万以上 15%），但购物分期属于割販法范畴，实际费率通常在 15%-18% 之间，所以我会解释这个机制而不是声称 PayPay 的具体费率。关于收单手续费，我会说明商户手续费如何分解为发卡行的收益、品牌费和收单机构的利润，并提到日本 Visa/Mastercard 的公开标准。
+
+对于 3DS 义务化，经产省和信用卡交易安全对策协议会的指南要求所有电商商户在 2025 年 3 月底前引入 EMV 3-D Secure 认证。现在我要开始用现实的后端工程师案例来演示这些概念。
+
+我会用明确标记的骨架示例来替换，根据用户的代码库和职位描述文档，他们的背景可能包括 Java 后端工作经验，所以我会保留「◯◯系统」这样的占位符。我需要确保每个问题都有完整的答案，重要问题还要有 2-3 个追问和追答，并在设计讨论中加入分阶段的追踪、具体的模拟追踪和反事实分析。
+现有 QA bank 专注项目技术深挖，新文档将覆盖其他所有面试维度。现在开始写。
+Created
+hardcore-interview-qa-cn.md
++1030
+-0
+I need to fix the numbering in D5 where "架构含义" has entries 1, 3, 4 but skips 2, then update the table in docs/README.md section 8 to include the new document.
+我发现 D5 的列表中有编号笔误（1、3、4 跳号），现在将修正这个问题并在 docs/README.md 中登记新文档。
+
+Edited 2 files
+I'll wrap up with a summary and commit message, then check the line count to report back.
+Counted lines of new doc
+新文档已建好：hardcore-interview-qa-cn.md（1030 行），并已登记进 README.md 第 8 节索引。定位是全类型问答种子库，专门覆盖 qa bank（Q1–Q80，纯项目技术）之外的所有面试维度，编号按类预留，方便你之后按范围各自拓展。
+
+结构一览：
+
+编号	类别	内容
+D1–D6	Domain 深水区	四方模型钱流与 issuer 收入结构、授权/清分/结算三阶段与 STIP、リボ利息算法与割販法/貸金業法分界、3DS2 与 liability shift、chargeback 生命周期、PayPay 生态里卡的位置（あと払い的架构含义）、合规（支払可能見込額調査 / PCI DSS / tokenization）
+S1–S3	独立系统设计题	大促积分发放（预算热点分片 + 幂等 + 对账）、清分对账系统（三方匹配 + 差异池工作流）、遗留发卡系统不停服迁移（strangler + shadow 双跑 + 回切）——刻意避开 qa bank 第 11 节已有的授权系统设计题
+B1–B5	行为面试	先给「5 个故事覆盖 20 种问法」的素材矩阵，再逐题给 STAR 骨架 + 完整示例（生产事故、技术分歧、deadline 取舍、真失败、快速学习——最后一题直接用本 repo 作素材）
+T1–T5	团队/心理/人际	review 被严厉批评、接手无文档烂代码、队友 struggle、on-call 压力、需求模糊
+G1–G5	国际化/动机	Why PayPay Card（含 30 秒英文短版）、为什么在日本、英语环境沟通、根回し文化、转职理由与 5 年规划的三点一线自查
+R1–R8	逆质问	按面试官角色（工程师/EM/HR）分组，每问附「为什么这是好问题」，外加不要问清单
+几个设计决策：
+
+重要题都有追问+追答：如 D1 追问 STIP、S1 追问预算烧完瞬间/个人上限/对账证明、S3 追问「为什么不停机割接」和「shadow diff 怎么定位」、B1 追问「你个人的错误是什么」。
+处处挂回本项目：D 节和 S 节的答案主动把行业机制连回你项目里的 outbox/inbox、claimable job、statement 快照等，形成「行业知识 → 项目证据」的闭环，文末清单也提醒交叉验证 qa bank 对应深挖题。
+行为题示例标注了【替换】：骨架和方法可直接用，但事实必须换成你的真实经历，我在 B0 里说明了原因（追问三层后借来的故事会露馅）。
+外部数字全部标注「锚点数字」：用户数、interchange 料率、cashless 比率等注明面试前一周用最新 IR 刷新，机制性内容则不会过时。
+需要注意：G2（为什么在日本）和 G5（转职理由）是骨架模板，因为涉及你的真实履历，占位处（在日时长、日语水平、现职情况）需要你填充后我再帮你打磨。
+
+commit message：
+
+docs: add all-round hardcore interview QA seed bank (domain/design/behavioral/culture)
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+
+技术问题，不局限于信用卡，再想几个general后端重要的问题
+然后迁移到新平台的部分，详细拓展一下
+
+The user is asking for two additions: general backend interview questions beyond the credit card domain in the same Q&A format with follow-ups,
+and a detailed expansion of the legacy migration section covering S3 and platform migration. I'm thinking through what high-quality backend
+questions would be most relevant and likely to appear in interviews, building on what's already covered like idempotency, transactions, locks,
+Kafka, and caching. I'm seeing more backend topics to round out the list: deployment strategies with schema migrations, N+1 query problems,
+password storage and authentication patterns, cache design tradeoffs, production troubleshooting scenarios, connection pooling, database
+selection criteria, distributed ID generation, and schema evolution. The user asked for a few more high-quality questions in Chinese,
+so I'm thinking about how to organize these—maybe adding a new section with a different prefix like "E" or "J" rather than extending
+the existing categories, to keep things clean and distinct. bers are letter-based so they won't break if I insert a new section.
+
+I should also add a row to the encoding conventions table and update the README to mention the new E1–E8 range. For the practice questions,
+ I'm thinking about seven high-probability general backend topics that complement what's already in the qa bank — things like MySQL indexing
+  fundamentals, B+ trees versus other structures, covering indexes, leftmost prefix matching, and how to read EXPLAIN output.
+  The first one would cover InnoDB indexes with a follow-up on why UUID primary keys cause problems.
+
+For E2, I'm going deeper into MVCC and isolation levels — how InnoDB actually implements repeatable read using undo logs and read views,
+phantom
+reads, and gap locks. The qa bank touches on isolation levels but from a project angle, so this general version can dig into the internals.
+E3 tackles distributed transactions by comparing 2PC, TCC, Saga, and the outbox pattern — the qa bank covers outbox but not the
+ full comparison. E4 is about sharding: when to shard, choosing a shard key, handling resharding, cross-shard queries, and distributed
+ ID generation like Snowflake.
+
+For E5, I'm covering JVM memory and GC — how to pick the right garbage collector, troubleshoot memory leaks and full GC storms,
+ comparing G1 versus ZGC, and how to investigate OOM issues in production using heap dumps and tools like MAT. E6 dives into
+ Java concurrency with ConcurrentHashMap, thread pool tuning, CompletableFuture, and the memory model — volatile semantics,
+ happens-before relationships, why double-checked locking requires volatile, ThreadLocal leaks, and virtual threads from
+ Java 21 Loom which is a hot topic. E7 starts on API design and evolution — REST principles, versioning strategies, backward compatibility,
+ and pagination approaches like cursor-based versus offset-based.
+
+For E8, I'm thinking about observability — designing metrics, logs, and traces, RED and USE frameworks, SLOs and error budgets,
+with follow-ups on cardinality issues and sampling strategies. E9 could cover authentication and authorization — sessions versus JWT,
+OAuth2 flows, and handling token leaks, which feels important for a fintech backend. I'm settling on eight topics total: indexing and MVCC,
+distributed transactions, sharding, JVM and GC, concurrency with the memory model and virtual threads, API design, and observability,
+with security possibly folded in depending on depth. Observability is already covered in the QA bank scenarios and troubleshooting guide,
+so I'll skip it. For each of the eight core questions, I'll structure answers with layered depth, concrete examples and numbers,
+plus follow-up questions and responses — maintaining the style of leading with conclusions, explaining mechanisms, considering counterarguments,
+and tying back to project experience where it fits naturally.
+
+Now I need to expand the S3 migration section substantially as requested, turning it into a much more detailed breakdown.
+还要详细展开数据双写的写路径设计，包括谁作为真实数据源、四种失败组合的处理方式、为什么避免分布式事务以及修复通道的实现。同时需要考虑分期中、争议中等长尾状态的双轨运行设计，
+以及切流时的灰度策略选择和粘性路由一致性保证。最后补充 cutover 检查清单、回滚演习计划、组织协作模式和常见问题解答。 我需要把整个 S3 部分重写成扩展版本，保留改进后的
+ 40 分钟主答案，然后加入深度专题挖掘（数据管道、对比引擎、切流与回切、双写失败场景、长尾问题、组织协调）和更多追问追答。这是一个大规模编辑，用完整的旧 S3 文本做替换会很长，
+ 但为了保证逻辑连贯性，直接重写整个部分比较好。
+
+我有当前的文件状态，可以精确复现内容，所以用定位插入会更安全——在追问 2 的答案后面、"## 4. 行为面试"之前插入新的"S3 深挖"小节，这样既保留了现有的 1-4 阶段和追问作为主答，
+又能无缝添加深度内容。
+
+不过这样做的话，后续的行为面试、技术广度等章节都要往下顺延编号，从 3 改成 4、4 改成 5，以此类推，总共需要六处编号调整。我先更新编号约定表格加入 E 行，
+再在第 1 节的说明文字里补充提及 E 节的使用场景，最后在 Domain 部分后面插入新的"## 3. 通用后端技术深水区"完整章节。
+
+现在开始写 E 部分的内容。先从 E1 开始，讲 MySQL 的 B+ 树索引设计原理和失效场景，分三个层面展开：为什么选择 B+ 树而不是哈希表、二叉树或 LSM 树，然后说明怎样充分利用它，
+最后列举索引失效的常见情况。核心思路是磁盘 IO 按页读取（每页 16KB），B+ 树能把树的高度控制在 3-4 层，每个非叶节点可以存储约 1200 个键值对。
+
+对比其他数据结构：哈希索引虽然查询是 O(1) 但不支持范围查询和排序，二叉树的高度太高导致 IO 次数多，LSM 树虽然写入优化但读放大严重，
+而 InnoDB 选择 B+ 树是为了在读写性能和事务支持之间找到平衡。还要提到聚簇索引和二级索引的区别，以及 covering index 如何避免回表。使用上要注意最左前缀原则、
+联合索引的列顺序安排，还有如何通过索引优化 ORDER BY 避免文件排序。
+
+索引失效的常见场景包括对索引列做函数运算或隐式类型转换、LIKE 的前导通配符、选择性太低导致优化器放弃使用索引、OR 条件混合以及隐式的字符集转换。通过 EXPLAIN 可以观察执行计划中的 type、rows 和 Extra 字段来判断索引是否被有效利用。
+
+关于为什么不建议用随机 UUID 做主键：因为聚簇索引按主键有序存储，随机主键会导致插入位置随机，频繁触发页分裂，降低缓冲池的局部性，造成写放大。而且二级索引的叶子节点存储主键值，UUID 占用 16 字节会增加索引大小。
+
+应该用有序 ID 方案如 Snowflake、ULID 或 UUID v7，并在表设计中分离自增主键和业务唯一键。
+
+当 SQL 突然变慢且 EXPLAIN 显示走了错误索引时，可能是统计信息过期或数据倾斜导致优化器成本估算失真。短期可用 FORCE INDEX 或优化器 hint 止血，长期需要调整索引设计或改写 SQL 逻辑，同时强调生产环境需要慢查询监控和发布前后的执行计划对比。
+
+现在来讲 MVCC 在 InnoDB Repeatable Read 隔离级别下如何实现无锁读：每行记录有隐藏字段 trx_id 和 roll_pointer 指向 undo log 版本链。
+快照读时事务建立 Read View 记录活跃事务列表和高低水位，沿版本链找到对当前事务可见的版本。RR 隔离级别下一个事务维持一个 Read View，而 RC 隔离级别每条语句都建立新的 Read View。当前读操作如 UPDATE 和 DELETE 则需要加锁。
+
+RR 下当前读使用 next-key lock 同时锁定记录和间隙来防止幻读。所以 RR 的防幻读机制是快照读依靠 MVCC、当前读依靠 gap lock 的组合，混用两种读方式会产生幻象现象。
+没有 MVCC 的话读写就会互斥，吞吐量会大幅下降。
+
+长事务很危险因为 Read View 会钉住 undo 版本链导致无法清理，造成 undo 日志膨胀和历史版本遍历变慢，最终引发慢查询雪崩，同时 purge 进程也会滞后。需要监控 information_schema.innodb_trx 中的长事务，应用层要缩小事务边界。
+
+在生产环境中很多互联网公司默认用 RC 隔离级别因为 gap lock 更少导致死锁和并发冲突减少，但 binlog 必须用 ROW 格式。RR 的价值在于单个事务内多次读取需要一致性的场景，比如对账或批处理快照。我的项目采用 RR 加显式 FOR UPDATE，关键的资金路径通过显式锁而不是依赖隔离级别来保证，隔离级别只是默认行为，重要路径需要明确声明意图。
+
+现在考虑分布式事务的选型，首先要遵循的原则是优先重新划分边界让
+
+系统不需要分布式事务。然后根据不同方案的特点来权衡：2PC/XA 提供强一致性但是同步阻塞、协调者是单点、吞吐量差、跨异构系统困难，只适合数据库内部或极少数场景。
+TCC 通过业务层实现预留资源来达到一致性和低延迟，但业务侵入非常大，每个操作要写三个接口还要处理空回滚、悬挂、幂等这三大坑，适合资金类的短流程。
+
+Saga 把长事务拆成本地事务序列加补偿，是最普及的方案，关键是理解补偿不是回滚——中间状态已经对外可见所以隔离性丢失了，补偿是真实的业务动作比如退款而不是删除支付记录。
+在编排和协同之间选择时，超过三步的流程用编排会更清晰，否则逻辑散在各个服务里没人能看懂。我的项目选择了 Outbox 加事件最终一致性这个方案。
+
+具体到我们的授权链路，额度扣减和交易记录放在同一个库的同一个事务里不拆开，但通知和统计这些下游操作走 Outbox——本质上是给每条服务边界标注清楚一致性要求。
+
+关于 Saga 补偿失败的问题，补偿动作必须设计成幂等且可重试直到成功，也就是说最终一定能成功的操作比如记账冲正，不能是那种可能被拒绝的业务动作。如果真的失败了就进人工干预队列并报警。所以在选择补偿动作的时候就要考虑这一点。
+
+选补偿方向时要挑"不会失败"的操作——加钱方向可以重试，但扣钱方向可能因为余额不足而失败。面试官可能会追问"那跨资源强一致做不到了？"，答案是单个资源内可以用数据库事务做强一致，但跨资源之间只能做最终一致，然后用对账来兜底。真的需要跨资源强一致时，优先考虑把资源合并到同一个库而不是引入 XA。
+
+现在进入分库分表的话题——什么时候真的需要分库分表，以及 shard key 怎么选。首先要排除伪需求，单表几千万行在有好索引的情况下其实没问题，应该先做读写分离、数据归档或者加缓存。
+真正的信号是写入吞吐超过了单机的能力。
+
+shard key 的选择要按最高频的查询维度来，比如发卡系统就选 account_id 或 user_id，这样能保证单个账户的操作都落在一个分片上，本地事务就能保住一致性。跨分片的查询则走异构索引，把按商户维度的查询同步到 ES 或者读模型。分片算法可以用哈希或者范围分片，一致性哈希或者固定槽位的方案是先分出 1024 个逻辑槽映射到 N 个物理库，扩容时只需要迁槽不用重新哈希。分布式 ID 用 snowflake 要注意时钟回拨问题，或者用号段模式。扩容本质上就是一次小型的数据迁移，通过双写、CDC 加校验，最后切读流量。
+
+对于热点账户打爆单分片的情况，需要先识别热点，然后要么单独隔离到 VIP 分片，要么对热点键再做一层拆分，比如子账户拆分加异步汇总。分片后的 count、分页、join 这些操作，
+聚合可以走离线或读模型，深分页用 cursor 来做，设计时就要把哪些查询必须实时精确的需求清单化，通常会比想象中少很多。
+
+现在看到一个关于线上 JVM 服务频繁 Full GC 或 OOM 的排查问题，先要看 GC 的形状再去抓证据。
+
+首先判断是缓慢上涨后 OOM（内存泄漏）、瞬间打满（大对象或流量突增）还是 Full GC 频繁但不 OOM（老年代压力或元空间问题），通过 GC 日志和监控曲线的形状来判断。
+然后用 jstat 看各代占用和 GC 频率，如果已经 OOM 就看 heap dump（提前配好 -XX:+HeapDumpOnOutOfMemoryError，事后用 jmap 会触发 STW 要谨慎），用 MAT 看支配树和 top 对象，或者用 jcmd 看类直方图做轻量级排查。常见的根因包括无界缓存或集合（比如 static map）、ThreadLocal 未 remove（线程池里线程复用）、大结果集查询没做分页等。
+
+止血和根治要分开：滚动重启只是止血，必须先留下 dump 再重启，否则证据就没了。对于 G1 和 ZGC 的选择，要看停顿目标——G1 百毫秒级停顿、吞吐好、是默认选择；
+ZGC 是亚毫秒停顿、适合大堆、吞吐略降、JDK17 以上生产可用。如果授权链路的 p99 延迟敏感可以考虑 ZGC，但要先确认停顿真的来自 GC 而不是锁或 IO，数据要先于选型。如果 GC 正常但 RSS 持续上涨，那就要看堆外的问题。
+
+堆外内存可能来自 DirectByteBuffer、Netty、JNI、线程栈数量或 glibc malloc arena，用 Native Memory Tracking 来排查，这说明 JVM 内存不等于堆。
+
+对于 Java 内存模型，volatile 解决的是可见性和有序性问题——它禁止重排序但不保证原子性，比如 i++ 还是需要 Atomic 或锁。经典场景是双检锁单例中用 volatile 防止半初始化对象逸出。synchronized 和 Lock 提供互斥加 happens-before 保证，而 CAS 操作是无锁的但有 ABA 问题和自旋开销。
+
+ConcurrentHashMap 在 JDK8 后用 CAS 加节点级 synchronized，size 只是近似值，复合操作还是要用 compute 或 putIfAbsent 而不是 get 加 put。
+虚拟线程改变了游戏规则——阻塞不再占用 OS 线程，让 thread-per-request 模式复活了，线程池的意义从池化线程变成限制并发的信号量。但要注意 synchronized 块内阻塞会 pin 住 carrier 线程（JDK21 有这个问题，24 版本改善了），ThreadLocal 容易滥用，而且数据库连接池这类底层资源仍然是硬上限——虚拟线程解决的主要是线程稀缺的问题。
+
+回到我的项目，线程池大小是按下游容量算的，换虚拟线程这个约束不会变。如果升到 JDK21 用虚拟线程，收益是授权链路里那些外部风控调用等阻塞 IO 不再占线程，
+同样容量下线程内存开销也降了。但风险和不变的地方是数据库连接池、行锁串行化、限流阈值都不会因为虚拟线程改变——当吞吐瓶颈在下游时，虚拟线程只是让排队变得更便宜。得先压测确认 pinning 的情况。
+
+现在讲 API 版本演进，核心是兼容性铁律：加字段可以，但改语义、删字段、改类型都不行。调用方要按"容忍读"的方式编写，忽略未知字段。破坏性变更的做法是新版本端点或新字段并行，
+经过迁移期，观测到旧版本流量归零才下线。版本策略可以用 URL 里的 /v1 或 header，但更重要的是组织纪律——契约先行用 OpenAPI，CI 里做 breaking change 检测。关于分页，offset 方式在深分页时是 O(offset) 的复杂度，而且数据插入会导致漂移（重复或跳过记录）；cursor 用 keyset 的方式（WHERE id > last_id ORDER BY id LIMIT n）是 O(1) 且稳定的，代价是...
+
+不能跳页，排序键必须唯一且单调。错误设计方面要区分 4xx 和 5xx 的语义，错误体要结构化（code、message、trace_id），批量接口的部分失败用 207 或逐项结果。幂等 POST 用 Idempotency-Key 头。追问到内部微服务选 REST 还是 gRPC，gRPC 有强契约（proto）、双向流、性能优势，REST 则生态好、调试友好、网关友好，关键是 schema evolution 的纪律在 proto 里同样存在——field number 不复用、不改类型。JD 提到 gRPC 的话可以讲 proto 兼容规则。
+
+密码存储要用 bcrypt、scrypt 或 argon2，自带 salt 且成本可调，不能用 MD5 或 SHA+salt 这种太快的方案容易被 GPU 爆破，加上应用层的 pepper 更安全，
+登录接口还要限流和凭证填充检测。服务间密钥绝不能进代码库或镜像，用 Secrets Manager 或 KMS 配合 IAM 角色注入，设计密钥轮换时要双密钥并存过渡。这块也关联到 PCI 审计——卡数据环境的密钥管理是审计重点。
+
+Session 和 JWT 各有权衡：session 有服务端状态能即时吊销但需要共享存储，JWT 无状态自包含但吊销困难只能靠短 TTL 加 refresh token 轮换和黑名单。
+金融场景通常用短命 access token 配 refresh token，敏感操作还要二次认证。JWT 常见坑是允许 alg=none、密钥混用、把敏感数据放 payload（其实只是 base64 编码），还有不校验 aud 和 iss。如果 access token 泄漏了，短 TTL 能限制风险窗口，refresh token 轮换加重放检测能在旧 token 被重用时全家吊销，敏感操作的二次认证和设备指纹也能进一步止损。
+
+核心思想是假设泄漏一定会发生，设计的是把爆炸半径控制住。
+
+现在转向 S3 的深度展开，在第二个追问后插入详细的数据同步管道部分，讨论全量回填加增量 CDC 的工程细节，特别是一致性起点的问题——快照时刻的 binlog 位点要记录下来，
+全量导出用一致性快照，增量从那个位点开始回放。
+
+如果做不到一致快照，就先开 CDC 缓冲再跑全量，然后增量从缓冲回放并用幂等 upsert 覆盖。回填作业按主键区间分 chunk，每个 chunk 几千行，用进度表记录可以断点续跑，
+还要限速避免打挂旧库，用 claimable job 并行。转换层的旧模型到新模型映射必须是纯函数加单测，建立"语义字典"逐字段记录来源、取值枚举、谁写的、空值含义，还要处理旧系统的枚举值。
+
+CDC 的顺序性问题在于 binlog 按行有序但多表事务会被拆行，新平台按账户聚合时要处理同一事务的多行到达间隙，用账户级校验兜底而不是追求逐事务原子重放。
+数据校验分三层：行数和主键集合对比抓丢行，内容 checksum 用分块 CRC/MD5 抓字段错，业务不变量校验最值钱能抓住两边都错得一致以外的语义错，校验也要增量化只校验变更过的账户。
+
+流量复制有三种方式：网关镜像复制原始请求最真实但要处理认证和幂等副作用，事件订阅让旧系统落库后发事件新系统消费重算但延迟较大。
+
+对于授权这类有外部副作用的路径必须保证 shadow 侧无副作用，外部调用全部打桩或录制回放，风控调用要用录旧系统的真实响应给新系统否则风控结果本身不确定造成假 diff。
+diff 引擎先归一化掩掉时间戳随机 id 和顺序无关字段，然后结构化对比按决策结果分支路径和差异字段聚类，每类计数加样本留存，出口标准是连续 N 天关键类 diff 为零且已知类全部有结论。假 diff 的来源包括数据复制延迟，新系统读到旧数据时用事件里带的版本号对齐或 diff 时重查确认。
+
+非确定性问题如时间随机浮点，以及灰度期间两边规则版本不同步都需要规则变更双投。比对也要比性能，shadow 侧记录延迟分布，新系统不光要答案一样还要 p99 达标。
+
+路由维度按账户而不是按请求，同一账户的读写必须落同侧否则会出现用户可见的不一致。灰度组选择先从内部员工卡开始，然后低活跃账户，再一般账户，
+大客户和特殊状态最后。路由实现用前置 facade 查路由表，路由表本身要高可用加本地缓存加变更推送，账户迁移瞬间要有短暂双侧拒写窗口来等待在途请求。
+
+回切不是简单的开关而是完整的流程，需要旧系统数据仍然新鲜，回切动作包括路由表批量改回、验证旧系统恢复正常、新系统转回 shadow，必须提前演习过。
+按路由侧打标的全套指标要有量化的前进停止回退标准写在 runbook 里。
+
+明确了 SoT 后，需要逐格分析双写期的失败矩阵，比如新写成功但旧写失败时，虽然不影响用户，但要记录差异队列异步补写旧系统，此时回切能力会降级，差异队列长度成为衡量回切健康度的关键指标。
+
+最危险的情况是新写失败但旧写成功，这种不一致必须通过调整顺序来避免——先同步写 SoT，只有 SoT 成功才异步写影子副本，这样影子写不在用户请求路径上，就不会出现这种矛盾的格子。
+
+所以双写的最佳实践是"同步写 SoT + 异步复制到影子 + 差异对账"，本质上就是主从复制模型，风险可控，而不是同步双写两边都要成功的分布式事务。对于反向同步，
+新系统可能表达旧系统无法表达的状态，所以迁移期间要冻结新功能上线，或给旧系统加兼容字段来支持。
+
+对于长尾状态，需要逐一盘点分期中、争议中、督促延滞、解约清算、休眠卡等各类账户，每类决定是硬迁用状态机映射、双轨让存量旧系统跑完新开的进新系统、还是等待窗口让其自然终结。迁移时点要避开出账日和扣款日这些关键业务节点，选在账户账单周期内的安静段进行。
+
+最优方案是按账户的账单周期错峰迁移，每个账户在自己周期的安静点（扣款完成后到下次出账前）进行迁移，这样能天然摊平系统负载。
+
+对于大项目的里程碑设计，每个阶段都要独立产生价值：M1 是数据平台化让新库成为分析查询源、M2 是读切流获得性能收益、M3 是 shadow 运行发现旧系统的 bug 清单本身就有价值、M4 才是写切流。
+
+团队结构上需要平台小队负责管道和路由基建，加上领域对对（每个能力域配一个懂旧系统的和一个建新系统的），把旧系统专家的时间当作项目的瓶颈资源来排程。
+
+迁移期间的新需求要三分法处理：优先只进新系统，其次有限额度的双实现，原则上禁止只进旧系统除非特殊审批。给双实现设预算上限，超额就是砍需求的信号。最后要警惕"90% 完成停滞"的陷阱，因为最后 10% 往往是长尾状态和特殊客户的处理。
+
+计划时要把长尾当作一等公民来估时，而不是当成"剩下的杂项"。
+
+对于 CDC 复制延迟导致新系统读到旧数据的问题，需要三层防护：先把端到端复制延迟的 p99 做成 SLI 指标，超阈值自动降级读流量回旧系统；关键读操作在写发生后的短窗口内（比如 60 秒）强制路由回旧侧，用写事件驱动临时路由；产品层面在余额页展示"更新中"而不是错误数字。核心原则是复制延迟不能靠"希望它快"来管理，必须有可观测的度量和自动降级机制。
+
+预算砍半、时间翻倍时，要检验切分质量——因为每个里程碑本身就有独立价值，已完成的阶段收益保留，剩余工作按"继续留在旧系统成本最高"的域优先迁移（维护费用、风险最大的部分），
+其他域停在双轨稳定态并明确运维成本。
+
+关键是让"半途状态"本身成为可长期运行的稳定态，这是从第一天就要保证的设计性质——最差的设计是"不做完就全无价值"。
+
+现在要更新编号约定表、补充新的行、调整章节编号、更新考前清单和 README 描述。
+
+同时需要检查内部交叉引用的一致性，比如"见 S1"、"衔接 S1 的设计题"这类引用都要保持正确，还要在介绍段落中补充"通用后端技术"的内容范围。
+
+我注意到 E 部分的答案会链接到题库中的相关题目（比如 Q50、Q16、Q52、Q22），这样可以避免重复，同时 E5 关于 OOM/Full GC 的故障排查和 Q58 关于 JVM GC 对高流量的影响是互补的。现在开始执行编辑：先更新介绍中的分工说明，然后在编号约定表中加入 E1–E8 的行，接着在第一部分第二项中提及编码轮涉及 E 的内容，最后在系统设计部分之前插入 E 部分的完整内容。
+
+插入后需要将后续所有章节标题重新编号，从系统设计的"## 3"改为"## 4"，依次往后推。
+
+为了避免重复，我从下往上重新编号会更安全——先改"## 8"到"## 9"，再改"## 7"到"## 8"，以此类推。由于每个标题都是唯一的字符串，无论从哪个方向改都不会产生冲突。
+
+S3 深度挖掘部分要插在"## 5. 行为面试"之前，而且 S3 下的子章节应该用四级标题（####）来组织。最后还要在考前清单里加上 E 行，更新 README，并在 S3 主答案后面加个指针标注 40 分钟版本的结束位置。
+
+现在要完整写出 E 部分的内容，保持结论先行、机制分析、反事实思考、项目挂钩、追问追答的风格。关键是要确保技术细节准确——B+ 树的扇出度、页面大小、行数估算这些都要算对。 Binlog ROW format is required for safety with distributed transactions. TCC has edge cases like rollbacks arriving out of order and duplicate attempts that need idempotent handling. Clock rollbacks in Snowflake IDs are problematic. Virtual threads had pinning issues with synchronized blocks in JDK 21, though later versions improved this. ConcurrentHashMap uses CAS operations with synchronized locking on individual bin heads.
+
+Password hashing with bcrypt or argon2 plus a pepper adds security. Refresh token rotation with reuse detection prevents token replay attacks. Keyset pagination avoids offset issues at scale. gRPC proto evolution requires never reusing field numbers to maintain compatibility.
+
+I'm planning the E section now—it'll be substantial. For code examples I'll use numbered stage comments, and for documentation I'll include concrete examples and counterfactuals with tables where they help clarify. I'll insert the E section before the systems design section and renumber accordingly. I'm continuing with the table edits, adding a new row for general backend technology topics and updating the systems design row to clarify that S3 includes deep-dive specializations. Then I'll move on to revising the second item about the coding interview section. 现在我在为通用技术题制定备考策略——每道题都要先在 60 秒内给出结论，然后再展开细节，这样面试官如果想深入就会自然追问。同时更新 README 中的核心库描述，加入 E1–E8 的通用后端知识模块和 S3 的系统设计深挖内容。 Now I'm drafting the E section on general backend technical deep-dives, starting with an intro paragraph that positions these as universal concepts independent of specific projects, complementing the project-focused versions in the QA bank. Each question will run about 45-65 lines with solid depth. I'll also prepare the S3 deep-dive subsections with follow-up questions, inserting them after the specified marker.
+两个任务：① 在 Domain 节后新增「通用后端技术深水区」E 节（不限信用卡的 general 后端硬核题）；② 把 S3 迁移题拓展成带深挖专题的完整弹药库。先做小的结构性编辑（编号约定、章节引用）。
+
+Edited
+hardcore-interview-qa-cn.md
++5
+-3
+现在我要插入 E 节，包含 8 道通用后端硬核题和追问追答，同时把系统设计节重新编排为第 4 节。
+Edited
+hardcore-interview-qa-cn.md
++394
+-1
+The README was modified externally but my hardcore entry edit is still intact at line 75. I need to update that description to include the E1–E8 and S3 deep-dive content, then renumber the remaining sections and add the S3 deep-dive section and checklist.
+E 节已插入。现在重编后续章节号，并插入 S3 迁移深挖专题。
+Edited
+hardcore-interview-qa-cn.md
++5
+-5
+现在插入 S3 迁移题的深挖专题（六个专题 + 两个新追问）。
+
+Edited
+hardcore-interview-qa-cn.md
++199
+-0
+我需要做几个更新：先在S3主答中加入指向深挖部分的指针，然后更新考前清单加上E行并提及S3深挖，再修改README的第75行，最后用wc和grep验证一下标题编号是否正确。
+I'm updating the pre-exam checklist and README index entries.
+
+Edited 2 files, ran a command
+两部分都完成了，文档从 1030 行扩到 1627 行，章节号已重排（E 节插为第 3 节，后续顺延），README.md 索引条目同步更新。
+
+新增 E 节：通用后端技术深水区（E1–E8），选题标准是 Java 后端高频 + 能分层答出深度 + 和 qa bank 的项目化版本互补（qa bank 是「我项目里怎么做」，E 节是脱离项目也能答的机制本身，多处互相挂链接）：
+
+E1 索引：从磁盘页特性倒推 B+ 树（含扇出计算）、对比哈希/LSM、回表与覆盖索引、失效场景清单；追问：随机 UUID 主键的两笔账、优化器选错索引的止血与根治。
+E2 MVCC：版本链 + Read View 机制、RR/RC 一句话区别、快照读与当前读拼合的坑（也解释了项目里为什么钱路径显式 FOR UPDATE）；追问：长事务三宗罪、RC/RR 生产选型。
+E3 分布式事务：选型矩阵（2PC/TCC/Saga/Outbox）、TCC 三大坑（空回滚/悬挂/幂等）、「补偿不是回滚」；追问：补偿失败怎么办、「强一致做不到了？」的工程答法。
+E4 分库分表：先排除伪需求、shard key 按事务性维度选（发卡=account_id）、逻辑槽位扩容；追问：热点账户、分片后的全局唯一约束。
+E5 JVM 排障：三种曲线形状三种病、取证工具链、高频根因清单；追问：G1 vs ZGC（数据先于选型）、GC 正常但 RSS 涨（堆外排查）。
+E6 JMM + 虚拟线程：volatile/双检锁/ConcurrentHashMap 复合操作竞态，虚拟线程重点讲「它不改变什么」（下游容量、限流语义、pinning）；追问直接落到「你的项目升 JDK 21 怎么样」。
+E7 API 演进：兼容性铁律、cursor vs offset（交易流水场景是正确性问题）、部分失败设计；追问：REST vs gRPC 与 proto 演进纪律（JD 提到 gRPC）。
+E8 安全：慢哈希为什么（不是「MD5 被破解」而是「太快」）、密钥轮换、JWT vs session 表格、金融场景的 step-up 模式；追问：token 泄漏的爆炸半径设计。
+S3 迁移题深挖拓展：40 分钟主答保留，其后新增六个专题（每个都是被按住追问两层时的弹药）+ 两个新追问：
+
+S3-a 数据管道：快照与 binlog 位点衔接（最容易被问倒的一致性起点问题）、幂等 upsert 吸收重叠区、语义字典与 SELECT DISTINCT 考古、三层校验金字塔（行数/checksum/业务不变量）。
+S3-b Shadow 双跑：三种流量复制方式对比表、非确定性输入的消灭（风控录制回放）、diff 引擎流水线与聚类、假 diff 三大来源、量化出口标准、性能也要 shadow。
+S3-c 切流与回切：为什么按账户不按请求、迁移瞬间的 quiesce、回切三要素（前提/动作/演习）、runbook 化的推进标准。
+S3-d 双写失败矩阵：四格逐一分析，结论是「同步写 SoT + 异步复制影子」退化成主从模型，以及功能冻结清单是回切能力的物理前提。
+S3-e 长尾状态：硬迁/双轨/等待窗口三选一，账户级迁移窗口对齐账单周期安静段（挂回项目的 cycle day 属性）。
+S3-f 组织节奏：里程碑独立价值、旧系统专家当瓶颈资源排程、新需求三分法、警惕「90% 完成」。
+追问 3（CDC 延迟导致用户看到旧数据：SLI 自动降级 + 读己之写 pin + 产品兜底）、追问 4（预算砍半怎么调整：中间态必须是可长期运行的稳定态）。
+commit message：
+
+docs: add general backend deep-dive (E1-E8) and expand S3 migration playbook
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+第一部分Domain问题，我觉得不是要这种完全局限于信用卡的domain，应该是java/spring/分布式系统/http tcp/linux 等等专业domain知识，这些更可能在面试中被问到吧？你同意的话，就重新考虑然后替换一下
+信用卡domain知识我觉得能保留一个四方模型以及authorization，posting，statement，repayment这几个核心过程就够了
+
+The user is pushing back on the credit card domain section, arguing it's too specialized and that interview prep should focus on core CS fundamentals like Java, Spring, distributed systems, HTTP, TCP, and Linux instead. They're asking me to reconsider and replace most of it, keeping just one credit card question covering the four-party model and core processes like authorization, posting, statement, and repayment. I'm partially agreeing with this feedback, though I'm still thinking through the tradeoffs for a PayPal-specific context.
+
+Looking at what's already covered in section E—MySQL indexing, MVCC, distributed transactions, sharding, JVM GC, JMM, virtual threads, API design, security—I can see there's already solid technical depth. The restructuring would compress the credit card material into a single focused question as D1, then replace the remaining D questions with more universally relevant topics: Spring bean lifecycle and @Transactional pitfalls, AOP proxies, circular dependency handling, and deeper Java concepts like HashMap internals and streams. There's also potential to cover Spring transaction propagation and self-invocation issues, which are practical pain points in real systems.
+
+For the broader domain knowledge, I'm considering HTTP/TCP mechanics—the full lifecycle from TCP handshake through TLS negotiation, HTTP/1.1 versus HTTP/2 differences, keep-alive behavior, connection pooling, and TIME_WAIT states. Linux troubleshooting is another strong candidate: diagnosing high CPU and load issues, managing file descriptors, understanding page cache behavior, and using tools like top, vmstat, iostat, and strace. On the distributed systems side, CAP and PACELC theorems, consensus algorithms like Raft, leader election patterns, clock synchronization, consistency models, and exactly-once semantics would round out the fundamentals. Redis internals—why it's single-threaded and fast, RDB/AOF persistence, and cluster replication—is a common interview topic that hasn't been deeply covered yet, so that's worth including.
+
+Now I'm thinking through how to structure this without duplicating the existing E section. The current E section already covers MySQL B+ trees, MVCC, distributed transactions, sharding, JVM garbage collection, the Java Memory Model with virtual threads, API design, and security. So section D should focus on language runtimes, networking, Linux systems, and distributed theory fundamentals, while E remains the deeper backend engineering topics. I'm considering renaming section 2 to something like "专业基础深水区" to reflect that it's foundational domain knowledge plus one credit-card question, keeping E as the general backend engineering deep dive. The plan is to replace the current D2–D6 questions with these new topics and clarify the section title.
+
+For the structure, I'm organizing D1 as a credit-card domain question covering the four-party model and the core processes (authorization, posting, statement, repayment) with brief follow-ups. D2 covers the full HTTP/TCP flow from URL input through response, including the three-way handshake, TLS, keep-alive, HTTP/1.1 vs 2, timeouts, and connection pooling, with follow-ups on TIME_WAIT accumulation and the timeout semantics issue. D3 focuses on Linux troubleshooting with the tool chain for diagnosing high load and CPU issues (top, pidstat, jstack for thread mapping), I/O wait, file descriptor leaks, and page cache behavior, with a follow-up distinguishing between 100% CPU and high load.
+
+Now adding D4 to cover I/O models and epoll—BIO, NIO, multiplexing, epoll LT/ET modes, and how Netty and Tomcat handle threading. I'm also merging in Redis here since the single-threaded performance question ties directly to I/O efficiency. D5 tackles Spring internals: bean lifecycle, AOP proxies and @Transactional failure scenarios (self-invocation, private methods, exception types, propagation modes), and the three-level cache for circular dependencies, with a follow-up on REQUIRES_NEW use cases and pitfalls. D6 is starting to cover distributed systems theory with CAP.
+
+For the distributed systems piece, I'm adding PACELC, consistency models (linearizability vs eventual consistency), why consensus is hard (split-brain, leader election, fencing tokens), and Raft intuition, plus why distributed locks need fencing tokens.
+
+That gives one credit-card module plus five CS fundamentals—all distinct from E1-E8. But removing D2–D6 breaks the PayPay ecosystem reference in G1's second follow-up. I need to either fold that condensed content into D1 or directly into G1's follow-up, since the user wants to keep the four-method model and core processes but the PayPay ecosystem stuff is more company research and fits better in the G section anyway.
+
+I'm also scanning for other D2–D6 references across the document—the intro mentions domain deep-water content, the numbering table needs updating, and D1's follow-up 2 mentions リボ and revolving interest tied to D3, which I'll need to fix or condense inline. E8's follow-up also references D3's 3DS risk operations, so I need to handle that reference carefully. I need to restructure D1 to explicitly cover the four core issuer-side processes—authorization, posting, statement, and repayment—while keeping the four-party model and money flow intact. The two follow-ups (why auth and clearing are separate, and STIP) stay, but I should remove or minimize the リボ reference. I'm considering whether to do this as one large edit replacing the entire D1–D6 section or break it into smaller edits. I could write a Python script to read the file, locate the section boundaries by searching for the D2 header and the end marker, then replace everything between them with the new content. That's more reliable than trying to match 200 lines of exact text, and it aligns with using dedicated tools for this kind of surgical replacement.
+
+Actually, a better approach is to do smaller, targeted edits—replacing each question block individually. So I'd swap out the old D2 about revolving credit with the new one on HTTPS requests, replace D3 about 3DS with Linux troubleshooting, and swap D4 about chargebacks with the IO models and Redis content.
+
+Then I need to handle the cross-references scattered throughout: removing the "see D3" pointer in D1, rewriting E8 to drop the D6 and D3 citations while keeping the substance about PCI and risk operations, and condensing that G1 follow-up to stand on its own without leaning on the old D5 structure. 现在我需要更新文档的几个关键部分：调整 D 节的描述，更新考前清单和 README 中对 D 的定义，重写第 2 节的标题和介绍，以及修改文档开头的段落，使其更准确地反映这份面试题库涵盖的全类型内容。
+
+我保留关于锚点数字的说明，因为 G1、D1 等编号仍然需要保持。现在开始起草新内容，第 2 节将介绍专业基础深水区（D1–D6），其中 D1 是唯一保留的信用卡领域题，涵盖四方模型和 issuer 的四个核心过程——这是理解项目的最低领域背景。
+
+D2–D6 则涵盖网络、Linux、IO 模型、Spring 和分布式理论五个 CS 基础方向，这些比行业知识更高频，因为面试官日常工作中就在使用这些技术。第 E 节侧重工程决策（数据库、事务、JVM 调优、API、安全），而第 D 节侧重机制原理。现在我在思考 D 和 E 的分工划分是否恰当。
+
+对 D1 重新组织：用一笔交易讲清四方模型和 issuer 内部的四个核心过程。答案分两层——第一层是四方模型的资金流向，第二层深入 issuer 内部的生命周期，包括授权（冻结额度、幂等性）、清分（hold 转 posted、异步处理）、出账（周期快照、可审计）和还款（核销、更新额度）。每个过程都要说明设计原因和反面影响，然后通过两个追问来深化理解。
+
+现在转向 D2 关于 HTTP/TCP 的问题。我在梳理从客户端发起 HTTPS 调用到收到响应的完整网络过程，包括 DNS 查询、TCP 三次握手的原理和 RTT 成本，以及 TLS 握手的细节。
+
+然后讨论 HTTP 层的演进——HTTP/1.1 的 keep-alive 和队头阻塞问题导致需要连接池，而 HTTP/2 通过多路复用在单连接上解决这个问题。关键是超时配置不是单一值而是三个维度的组合，整体预算必须小于上游对我们的超时，否则会触发重试风暴。最后通过 TIME_WAIT 的追问来说明大量短连接的危害。
+
+现在继续讨论客户端端口耗尽才是真正的风险，解决方案是通过连接复用而不是依赖 tcp_tw_reuse；关于谁主动关闭连接的问题，可以通过让服务端主动关来转移 TIME_WAIT 的负担。然后引出超时和业务完成之间的矛盾——客户端超时取消了等待，但服务端可能已经完成了业务，这需要幂等性设计来处理。
+
+客户端必须把超时当作"结果未知"来处理，重试时带上相同的幂等键，而接口的语义设计要假设响应可能会丢失。
+
+现在转向 Linux 排障的话题。当服务器 load 飙高时，首先要理解 load average 不等于 CPU 使用率——它包括可运行的任务和处于不可中断睡眠状态的任务，所以 load 高可能是 IO 等待导致的。前五分钟的诊断从查看整体 CPU 使用情况开始，包括用户态、内核态、IO 等待和中断的占比，然后找出消耗资源最多的进程。
+
+根据不同的指标高低来判断问题根源：用户态 CPU 高通常是应用计算或垃圾回收，需要看线程栈；内核态高可能是系统调用风暴或锁竞争；IO 等待高则需要查看磁盘 IO 情况和具体是哪个进程在等待；软中断高可能是网络问题。对于 Java 进程，可以通过线程级别的 top 找到热线程，把线程 ID 转换成十六进制后在 jstack 输出中查找对应的栈信息。还要检查磁盘空间、inode 使用、内存可用情况、网络连接状态分布和系统日志中的 OOM 或硬件错误。一个常见的误区是只看 CPU 百分比而忽视 IO 等待，这样会错误地认为服务器没问题。
+
+关于容器环境下进程内存没超但被 OOM killer 杀掉的情况，这是因为 cgroup 的内存限额是从容器整体视角计算的，包括 RSS、page cache 等多个部分。JVM 的堆、堆外内存、线程栈和 metaspace 加起来可能超过了 cgroup 限额，所以要在 dmesg 或日志中查看 OOM kill 记录，并通过设置 -Xmx 只占限额的 60-75% 来留出缓冲空间。
+
+文件描述符耗尽时，新的连接会报"Too many open files"错误，表现为服务还活着但拒绝新连接。可以通过对比进程的文件描述符数量和 ulimit 限制来确认，泄漏通常来自响应体没有关闭或连接池泄漏，监控文件描述符使用率是必要的。
+
+现在进入 IO 模型的讨论。
+
+阻塞 IO 是一连接一线程的模式，线程在读操作上睡眠；非阻塞 IO 需要轮询浪费 CPU；IO 多路复用让一个线程通过 select/poll/epoll 监听数千个文件描述符，只在就绪时处理。epoll 相比 select 的优势在于就绪列表是 O(1) 查询而不是每次全量扫描，也不需要每次都拷贝文件描述符集合。
+
+Redis 能用单线程扛 10 万 QPS 的真相是每个命令都是微秒级的纯内存操作，单线程加 epoll 事件循环就足够了，而且避免了锁竞争和上下文切换开销。Redis 6.0 后把网络读写多线程化了，但命令执行仍然是单线程以保持无锁模型。单线程的代价是一个慢命令（比如 KEYS 或大 key 操作）会阻塞所有请求，这就是为什么生产环境禁用 KEYS 命令和要拆分大 key。
+
+Tomcat 这类应用服务器采用 NIO 接入加业务线程池的架构，因为业务逻辑需要做阻塞的数据库或 HTTP 调用，延迟在毫秒到百毫秒级，必须靠线程数来堆并发。Netty 的做法是用事件循环组加 pipeline，业务中的慢操作必须从 EventLoop 中丢出去，否则整个连接组会卡死。
+
+高性能组件的核心规律就是少拷贝、少切换、顺序 IO、批量化——这套思路在 Kafka 和 RocketMQ 的高吞吐设计中也体现得很清楚，顺序写加 page cache 加 sendfile 零拷贝能减少两次内存拷贝和两次上下文切换。
+
+Bean 生命周期从实例化、属性注入、Aware 回调、BeanPostProcessor 前置、init 方法到后置处理器，AOP 代理就是在后置处理器阶段生成的，这解释了为什么代理能拦截方法调用。循环依赖通过三级缓存（原始 bean、半成品、代理 bean）来解决。
+
+关于 REQUIRES_NEW 的实际场景，通常是需要无论外层事务成败都要保留的数据，比如审计日志或失败记录表，这样外层回滚时新事务的提交不会被影响。但要注意一个坑：如果外层持有某行的锁再开启新事务，新事务也要修改同一行就会产生死锁。
+
+单例 Bean 不担心并发问题的原因是它们通常是无状态的，只存储依赖引用而不放可变字段。一旦在 Bean 中定义可变实例变量就会成为并发 bug，比如 SimpleDateFormat 作为成员变量就是常见的事故。如果确实需要有状态，要么用 ThreadLocal（记得清理），要么把状态放在方法内的局部变量里。
+
+CAP 定理经常被讲错，正确的理解是网络分区（P）不可避免，真正的权衡是分区发生时选择一致性（拒绝服务）还是可用性（容忍不一致）。平时没有分区时的取舍其实是延迟和一致性的权衡，这就是 PACELC 定理。一致性存在光谱：从线性一致（像单机一样）到顺序/因果一致再到最终一致，对应的复制策略从同步复制、Quorum 读写到异步复制。在项目里的体现就是数据库主从架构中，关键路径（比如转账）走主库读保证强一致，而读模型可以走从库接受最终一致。
+
+共识算法之所以难是因为异步网络环境下无法区分节点真的死了还是网络太慢，这就是 FLP 不可能性的直觉。Leader 选举容易出现脑裂，Raft 通过任期号加多数派投票加日志多数派复制才提交的方式来解决——多数派的特性保证任何两个多数派必然相交，旧 Leader 无法凑齐新的多数派。
+
+关键是 fencing token 的概念：即使分布式锁服务本身没问题，客户端也可能因为 GC 停顿或网络延迟而拿着已过期的锁继续写数据。解决方案是锁服务发放单调递增的 token，存储层拒绝小于已见 token 的写操作。这说明互斥的最后防线必须在资源侧而不是锁侧，这也是为什么项目里的转账路径用数据库行锁或 lease（资源侧）而不是 Redis 锁（锁侧）。
+
+对于业务的一致性选择，额度扣减是 CP 模式——数据库不可用宁可拒绝授权，因为授权的额度检查必须强一致；而通知、积分、读模型是 AP 模式——允许延迟和暂时不一致，通过重试和对账来收敛。设计的核心就是给每条数据标注它需要的一致性等级。
+
+对于 PayPay 生态的理解，我看到三个层面：集团结构上，码支付（6000 万注册用户）和 PayPay カード（1000 万+ 会员）相互咬合，卡是授信底座，而「PayPayクレジット」把授信直接嵌进扫码流程——这意味着发卡系统同时要服务卡组织报文和自家 App 流量，幂等性、限流、峰值特征完全不同；行业背景上，EC 加盟店 2025 年 3 月底前要义务化 EMV 3-DS，不正利用被害额年间 500 亿円量级，安全和风控是现在进行时；技术挑战上，我推断是遗留系统现代化加营销尖峰流量的组合。但我要诚实地说，这些来自公开资料和推演，内部实际架构肯定有我不知道的约束——这正是我想通过逆质问来请教的部分。 I'm checking that the existing docs don't overlap with the new D topics — the distributed lock doc covers fencing which D6 references, and the thread docs align with what I'm adding. Now I'll execute the edits: updating the intro bullet, the 编号约定 D row, section 1 item 2, and then replacing the section 2 header, intro paragraph, and D1 block with the new content that incorporates the four-process framework. 我在权衡是否保留被删除的内容。用户明确要求只保留四方模型和四个核心流程，删除其他信用卡领域知识，但那些被删的内容（リボ利息、3DS、chargeback、合规）是有价值的准备材料。最直接的做法是按要求删除，但在总结中提到如果需要，这些内容可以移到 credit-card-domain-cn.md 里——不过这可能超出了用户的范围。我应该就按照用户的明确指示删除，保持简洁。
+
+现在我在重写 D1 部分，用新的四方模型和四个流程内容替换旧的 D1 块。
+
+新标题会改为"用一笔交易讲清信用卡四方模型，以及 issuer 内部的四个核心过程"，保留四方模型的解释部分，然后用更完整的四步流程（授权、清分、结算、回款）来展示钱的流向和 issuer 的收入来源，最后用项目实现的镜像关系来收尾。追问部分保持不变。 我在详细展开リボ的计算机制和风险模型。通过一个具体的30万円、年率15%、月还1万円的例子，说明本金下降有多慢（30+个月才还清，累计手数料近6万円），以及「残高スライド方式」如何进一步拉长还款周期。然后解释为什么这对发卡行是利润核心——リボ用户贡献年化15%+的持续利息流，而一括用户只贡献一次性的interchange。
+
+风险层面涉及三个维度：逆向选择（リボ用户倾向资金紧张人群）、合规舆论压力（「リボ地狱」是社会话题，监管对手数料展示和劝诱方式有限制），以及最关键的计算正确性——利息计算必须可审计、可重放，通过在出账时固化快照来确保任何一期账单都能从固化数据重算，而不是依赖当时的内存状态。
+
+最后补充了购物リボ和キャッシング的法律区分：前者属割賦販売法、后者属貸金業法和利息制限法，两类余额必须分开建模、分开计息、分开上报，混在一个字段里是合规事故。
+
+现在我在考虑如何安全地编辑这个大文档。由于D2–D6这个区域很长（约200行），用Edit的old_string精确匹配容易出错，所以我打算用Python脚本通过Bash来做整块替换——在标记处分割文件，从临时文件读入新内容，然后拼接回去。这比逐个Edit更稳健。
+
+但要注意的是，Bash外部修改可能会导致后续Edit调用时文件状态不一致，所以我应该先做小的Edit（在D2–D6之外的部分），最后再执行Python拼接操作。
+
+具体顺序是：先修改intro bullet、编号约定表格、section-1项目、section-2标题和intro，以及D1的标题和内容，然后最后做Python拼接。
+
+现在继续处理E3部分，用四个核心过程（authorization/posting/statement/repayment）替换原来的挂回项目段落，再依次修改E8的PCI和3DS引用、G1的追问2回答、考前清单的D行和锚点行、README行，最后生成新的scratchpad文件并执行Python拼接。 我需要用 Python 脚本来处理那些容易出错的替换——特别是 D2-D6 的拼接和 G1 追问2 部分，因为行尾换行符不确定。其他相对稳定的部分可以用 Edit 直接替换，比如 D1 挂回项目段落、Section 2 的标题和开头、以及 Section 1 的第二项。
+
+现在要更新的是第二项的描述，把"行业知识"和"通用后端知识"的表述改成更精确的分类——D1 是信用卡领域背景，D2-D6 是网络/Linux/Spring/分布式等基础，E 节是数据库/JVM/API/安全等工程题。同时要更新表格行的标题从"Domain 深水区"改成"专业基础深水区"，以及 intro 部分的描述和顶部的一句话总结。
+
+还要用 Python 处理几个地方的编辑——D2-D6 的拼接、G1 的追问、还有清单中 D 节那一行的日文/中文混用问题，用正则表达式来替换会更安全。
+
+然后检查 E8 里的几处引用文本，确保新旧版本的替换点都能精确定位，比如那句关于 PCI 要求和密钥管理的内容，以及最后关于风控哲学那段的改写。
+
+现在开始起草 D2 到 D6 的完整内容，保持和 E 系列问题相近的信息密度。
+
+我在梳理一次服务间 HTTPS 调用的完整链路：从 DNS 解析、TCP 三次握手、TLS 握手到 HTTP 层的多路复用，每一步都有成本。冷连接需要 2-3 个 RTT 的建连延迟，这就是为什么必须用连接池和 keep-alive。超时不是一个而是三个——连接超时、读超时、连接池获取超时——而且总预算必须小于上游对我的超时，否则我还在重试上游已经放弃了。我项目里外部风控调用的 timeout 加降级策略就是这套预算法的实践。
+
+关于 TIME_WAIT，几万个本身不致命，真正的症状是大量短连接在被创建和关闭，说明 keep-alive 没生效。风险在客户端侧会耗尽本地端口，根本解决办法是连接复用而不是打开 `tcp_tw_reuse`。另外要注意反向代理和客户端的 idle 超时错开，避免竞态。
+
+对于客户端超时但服务端执行成功的情况，这不是 bug 而是分布式的本性——超时取消的是等待不是执行，客户端只能知道结果未知。正确的设计是用幂等键加重试，同一个键真成功了返回原结果，真失败了重新执行。
+
+幂等不是锦上添花的优化，而是网络会超时这个物理事实逼出来的必选项。
+
+现在看 load 高的问题。首先要纠正概念，load average 统计的是可运行加不可中断睡眠状态的任务数，所以 load 高不等于 CPU 高——CPU 可能空转，一堆线程卡在磁盘或 NFS 上，load 照样爆表。这个概念理清了，后面的排查才有方向。登录后前五分钟我会按顺序用工具链排查，先从 `top` 开始看三件事。
+
+`top` 里看 load 三个值的趋势、CPU 分解（用户态、内核态、IO 等待、软中断），还有头部进程。然后根据 CPU 分解的具体数字分型排查：如果用户态高说明应用自己在烧，转向 Java 进程内定位；内核态高通常是系统调用或上下文切换风暴，用 `vmstat` 看 `cs` 列，常见根因是锁竞争、线程过多或频繁小 IO；IO 等待高就用 `iostat` 看设备利用率和响应时间，再用 `pidstat` 定位具体进程；软中断高说明网络流量或小包风暴。
+
+对于 Java 进程，用 `top -H` 找烧 CPU 的线程，把线程号转十六进制，然后在 `jstack` 输出里按 `nid` 对号入座，那根线程的栈就能看出是 GC、死循环、正则回溯还是序列化风暴。同时顺手检查磁盘空间、inode、可用内存（注意别把 page cache 当泄漏）、连接状态分布和 `dmesg` 里的 OOM killer 或硬件报错。
+
+OOM killer 看的是进程总内存而不是 JVM 堆，堆外还有 Metaspace、线程栈、DirectByteBuffer、JNI 和 glibc 碎片，容器场景常见的错误是 `-Xmx` 设得接近 memory limit 导致堆外没有余量。对策是让堆占 limit 的 60–75%，或用 `MaxRAMPercentage` 让 JVM 感知容器配额，被杀后从 `dmesg` 的 oom_kill 记录里能看到当时的内存账单。
+
+文件描述符耗尽的现象很有欺骗性，进程活着、健康检查可能还通着，但新连接全部失败，像「半死」状态。fd 的消费者是网络连接、打开的文件和 pipe，泄漏源头常见是 HTTP 响应体没关或连接池配置错导致连接只借不还。排查方法是用 `ls /proc/<pid>/fd | wc -l` 对比 `ulimit -n`，看 fd 都是什么类型。
+
+防御策略是把 fd 使用率进监控，用到 70% 就该报警，同时代码里走 try-with-resources 的编码纪律确保资源关闭。
+
+IO 多路复用解决的是 BIO 的万连接万线程问题，通过让内核管理就绪状态，一个线程用 epoll_wait 看住几万个 fd，就绪了才去处理。Redis 单线程能扛十万 QPS 是因为命令都是纯内存操作微秒级，瓶颈在网络 IO 而不是 CPU，单线程加 epoll 事件循环就能喂饱，还白赚了免锁和天然原子性。Redis 6.0 的多线程也只是把网络读写并行化，命令执行仍单线程保留了无锁模型的核心优势。
+
+但单线程的代价是一个慢命令会阻塞所有人，所以生产禁用 KEYS、大 key 要拆、删除用 UNLINK 异步化。Tomcat 要线程池是因为业务逻辑要做阻塞的 DB 和 HTTP 调用，毫秒到百毫秒级，这段时间线程必须干等，所以并发能力就等于线程数。这是两个模型的分水岭：处理是否阻塞决定了要不要用线程数堆并发。Netty 的 EventLoop 组也有同样的铁律，慢操作必须丢出 EventLoop 线程，否则同组所有连接一起卡。
+
+Kafka 的高吞吐本质上是「顺序 IO 加零拷贝加批量化」的组合，分区日志只追加把随机写变顺序写，消费路径用 sendfile 零拷贝让数据从 page cache 直接进网卡，生产者攒批加压缩把每次操作摊到几百条消息上。高性能中间件翻来覆去就是四件事：少拷贝、少切换、顺序 IO、批量化。
+
+现在看 Spring 的 @Transactional 失效问题，原理是 AOP 代理——Spring 给 bean 生成代理对象，事务的 begin/commit/rollback 织在代理方法的前后，所以失效场景归结为调用没有经过代理或异常没有到达代理。自调用是最高频的坑，this.methodB() 走的是原始对象不是代理，B 上的 @Transactional 完全不生效。方法不是 public 或是 final、static 也织不进去。异常类型不对是高频 bug，默认只对 RuntimeException 和 Error 回滚，checked 异常不回滚。异常被吞掉的话代理根本看不到，照常提交。
+
+跨线程调用时事务上下文绑在 ThreadLocal 上，@Async 或自开线程里没有外面的事务。传播行为误配也容易出现一半提交一半回滚的情况。
+
+Bean 生命周期里，AOP 代理是在后置处理器这一步把原始对象换掉的，循环依赖的三级缓存也是为了在这个流程里能提前暴露还没织完的引用。
+
+REQUIRES_NEW 真正需要的场景是无论外层成败都必须留下的记录——审计日志、失败流水、重试任务这类，外层业务回滚了，这条记录也要活。
+
+但有两个坑：自死锁问题，外层事务拿着某行锁，内层新事务又要锁同一行就会自己等自己；还有连接占用翻倍，同一线程同时占两个连接，连接池小并发高时会出现所有线程各拿一个连接都在等第二个的池死锁。所以 REQUIRES_NEW 要短、要少、别碰外层锁过的行。
+
+Spring 单例 bean 被并发调用通常不担心线程安全，是因为约定 bean 无状态，字段里只有注入的依赖，它们也是无状态单例。
+
+所有数据全在方法参数和局部变量里，栈上数据天然线程隔离。一旦有人往 bean 里放了可变实例字段就是并发 bug，经典事故是 SimpleDateFormat 成员变量内部有共享缓冲区，并发下日期解析出错乱值。需要状态时的出路是方法内局部变量、不可变对象或 ThreadLocal，但线程池环境必须 remove，否则值串到下一个请求。
+
+现在来看 CAP 的真实版本——P 不是三选一里的可选项，网络分区是物理现实一定会发生，真正的选择只在分区发生时要 C 还是要 A。
+
+平时没分区的日子里，取舍其实是延迟 vs 一致，同步复制慢但一致，异步复制快但有落后窗口，这就是 PACELC 对 CAP 的补全。一致性是光谱不是开关，从线性一致到因果一致再到最终一致，实现上对应不同的复制策略，quorum 可到强一致，异步复制只能最终一致。工程上一致性是按数据分级购买的，额度和交易走单点强一致，通知和读模型走最终一致，全系统一个档位既贵又慢。共识难的根本原因是异步网络里无法区分节点死了还是网络慢。
+
+朴素的 leader election 会脑裂，Raft 通过任期号单调递增和多数派投票来解决，任何两个多数派必有交集，所以旧 leader 凑不齐多数派、新 leader 一定包含全部已提交日志。Fencing token 把理论落到事故上，即使锁服务完美，客户端拿到锁后可能因为 GC 停顿或网络卡住导致锁过期被别人拿走，它醒来不知道自己已经没锁了，继续写就会产生冲突。
+
+解法是锁服务发单调递增的 token，资源侧拒绝 token 小于已见最大值的写入——互斥的最终防线必须在资源侧，这正是我项目用 DB 行锁和 DB lease 而不是 Redis 锁的理论根据。
+
+额度与交易是 CP，授权的额度检查必须读到最新值，分区时选一致、弃可用；通知、积分、读模型缓存是 AP，组件故障不阻塞主链路，分区时选可用、容忍暂时不一致。真正的设计动作不是系统级的「选 CP 还是 AP」，而是给每类数据标注它买的是哪档一致性、故障时牺牲什么——把问题从二选一重构成分级采购，通常就是这题的最佳答案。
+
+现在更新 checklist，D 节要求能白板画出 D1 的钱流和四个核心过程，D2–D6 每题的工具链、失效清单、概念阶梯能脱稿列全，每题至少讲得出一个反向事实。同时要用最新公开资料刷新锚点数字——PayPay 用户数、卡会员数、cashless 比率、不正利用被害额、interchange 公开料率，这些数字用在 G1 及其追问和 D1。README 的 Domain 深水区行要改成专业基础深水区，扩展覆盖四方模型加 authorization/posting/statement/repayment，以及 HTTP·TCP/Linux 排障/IO 模型/Spring 事务/分布式理论 CAP·共识·fencing。
+
+G1 追问 2 要新增一个三层递进的追答——先讲 PayPay 码支付和 PayPay カード 的生态咬合，卡是授信底座，同一套额度账务要同时服务卡组织报文和自家 App，两者的幂等键、限流、峰值形状完全不同；再讲 EC 加盟店 2025 年 3 月底前 EMV 3-DS 全面导入和年间 500 亿円不正利用被害额这个现状；最后从公开信息推断遗留系统现代化和大促营销尖峰下的授信流量这两大工程主题，对应 S3 迁移题和 S1 积分题。结尾要交底说这些来自公开资料和自己推演，内部架构肯定有很多不知道的约束，这正是逆质问想请教的部分，把「被考」转成「对话」。
+
+同时要调整 checklist 的 D 节和 E 节两个条目，以及用 Python 脚本来精确替换 D2–D6 的内容——从「### D2：リボ払い」到「## 3. 通用后端技术深水区」之间的部分，用新的 D2–D6 文本替换掉，确保 D1 保持完整。还要修改文档顶部的介绍行，把「domain 深水区、全新系统设计题」改成「专业基础（CS 基础 + 领域核心）、通用后端工程、全新系统设计题」，以及 D1 的标题和 リボ 那一行的内容。
+同意——对后端岗位来说，网络/Linux/Spring/分布式理论这类 CS 基础确实比行业深水知识更高频。方案：D1 压缩为唯一保留的领域题（四方模型 + authorization/posting/statement/repayment 四过程），D2–D6 替换为 HTTP·TCP、Linux 排障、IO 模型、Spring 事务、分布式理论五题；原 D5 的 PayPay 生态内容浓缩后移入 G1 追问 2（那里本来就引用它，不能断）。先做外围小编辑。
+
+
+Edited 2 files
+I'm preparing to write the updated content for cells D2 through D6, create a replacement for the G1 follow-up question, and update the D-block checklist, then use Python to splice everything together across three scratchpad files.
+外围编辑完成。现在我将写入新的 D2–D6 内容来替换旧的信用卡深水题，用脚本按标记切分以避免匹配错误，同时重写 G1 追问 2 和考前清单 D 行。
+
+Created 3 files, ran 2 commands
+结构和引用都干净了。还要核实一处：第 2 节导语把删掉的行业话题指向了 [credit-card-domain-cn.md](docs/credit-card-domain-cn.md)，确认那份文档确实覆盖这些主题，避免指错。
+Checked topic coverage of credit-card-domain doc
+I'm noticing the credit-card-domain doc only covers chargeback/dispute briefly, but my intro oversells it by claiming it covers リボ计息, 3DS, and compliance—content that was actually deleted and isn't preserved anywhere. I need to reword that pointer to be honest: the doc has the domain workflow and chargeback/dispute, but for the other topics I should either tell users to extend from that foundation themselves, or offer to salvage the deleted sections back into the doc if they want.
+那份文档只简要覆盖 chargeback/dispute，没有リボ计息、3DS、合规的深入内容——导语的指向会 overclaim，修正为准确表述。
+Edited
+hardcore-interview-qa-cn.md
++3
+-3
+D 节替换完成，文档现为 1725 行。改动总结：
+
+D 节重构为「专业基础深水区」——你的判断我完全同意：这些 CS 基础比行业深水知识在实际面试中高频得多。
+
+D1（唯一保留的领域题）：四方模型钱流 + issuer 收入结构，新增了 authorization / posting / statement / repayment 四个核心过程的走读——每个过程一句「关键设计 + 不这样会怎样」，并指向 qa bank 的逐题深挖。原有的两个追问保留（授权/清分为什么分两步、issuer 宕机时的 STIP），因为它们正好是四过程的自然延伸。
+D2 HTTP/TCP：一次 HTTPS 调用的完整链路（DNS → 三次握手为什么是三次 → TLS 1.3 → HTTP/1.1 队头阻塞 vs HTTP/2），落点在「冷连接 = 2–3 个 RTT，所以必须连接池」和三种超时的预算法。追问：几万个 TIME_WAIT 要不要紧（机制 + 真正风险在客户端端口耗尽）、客户端超时但服务端执行成功了怎么办（引出幂等是被网络物理事实逼出来的）。
+D3 Linux 排障：load ≠ CPU 的概念纠偏 + 五分钟工具链（top 按 %us/%sy/%wa/%si 分型 → top -H + jstack 的 nid 对号）。追问：堆正常却被 OOM killer 杀（容器内存账单）、fd 耗尽的「半死」现象。
+D4 IO 模型：BIO → NIO → epoll 的概念阶梯，回答「Redis 单线程为什么够、Tomcat 为什么不够」——分水岭是处理是否阻塞；顺带 Redis 6.0 多线程的边界和慢命令纪律、Netty EventLoop 铁律。追问：Kafka 高吞吐归纳成「少拷贝、少切换、顺序 IO、批量化」四件事。
+D5 Spring：@Transactional 六种失效场景，全部从 AOP 代理原理推出来（「调用没经过代理，或异常没到达代理」一句话统摄）；带过 bean 生命周期和三级缓存。追问：REQUIRES_NEW 的正当场景与自死锁/连接池死锁两个坑、单例 bean 为什么不担心并发。
+D6 分布式理论：CAP 纠偏版（P 不是可选项）+ PACELC、一致性光谱与「按数据分级购买」、Raft 两句话直觉、fencing token——结论「互斥的最终防线必须在资源侧」正好是项目 money path 用 DB 锁的理论根据，挂回 distributed-lock-cn.md。追问直接落到「你的项目哪里 CP 哪里 AP」。
+配套修正：原 D5 的 PayPay 生态内容浓缩后移进了 G1 追问 2（那里原本引用 D5，现在自包含）；E8 里两处对旧 D3/D6 的引用改为直述；编号约定表、第 1 节轮次指引、考前清单（D 行拆成「白板四过程 + D2–D6 脱稿清单」和「锚点数字刷新」两条）、README 索引均已同步。
+
+一点需要你知道的：被删的旧 D2–D6（リボ计息算法、3DS/liability shift、chargeback 生命周期、割販法/PCI 合规）这些内容现在不在任何文档里了——credit-card-domain-cn.md 只有 chargeback 的概览级一行。如果你想留档备查，我可以把它们整理成一节附到那份领域文档末尾；不需要就此作罢。
+
+commit message：
+
+docs: replace card-domain deep-dive with CS fundamentals (network/Linux/IO/Spring/distributed theory)
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+你还推荐加入什么主题，或者哪个主题需要拓展一下问题的数量或者质量？
+如果没有优先级更高的了，可以继续打磨和拓展现有的
+
+I'm reviewing what topics might need more coverage or deeper treatment for this PayPay Card Java backend interview guide. Looking at the current structure across domain fundamentals, general backend engineering, system design, and behavioral sections, I'm considering whether there are gaps in question depth or areas that could use expansion to better prepare candidates.
+
+One significant gap stands out: practical coding problems that mirror what candidates actually encounter in live coding rounds. While the doc mentions a coding round exists, there's no content for it—and Japanese tech interviews commonly include hands-on problems like implementing an LRU cache, rate limiter, or thread-safe data structures. Adding a section with these practical coding scenarios would fill a real preparation need.
+
+Beyond that, pure Java language fundamentals feel underrepresented—things like the equals/hashCode contract, HashMap internals, generics erasure, and modern features like records. And while Kafka usage is covered well, the deeper internals around ISR, replication acknowledgment levels, and rebalancing protocols that often come up in hardcore backend interviews aren't fully addressed. The recruiter typically handles salary and visa questions, so that's covered. For English readiness, the tech round will likely be conducted in English, which is a real gap — I should consider whether to add English versions of the E and D section answers or at least key phrases per section to help the user practice. That might double the length, so maybe recommending it as a follow-up option is better. I'm also noticing database migrations and zero-downtime schema changes (like expand-contract patterns or tools like gh-ost) could be worth adding as an E-level topic. SLO and error budgeting aren't currently covered, which is valuable for high-traffic roles—I could add this as E10 or fold it into a checklist. AI/LLM usage is increasingly common in 2026 interviews, so a question about how I use Copilot or handle code quality with AI assistance would be a strong differentiator, especially for PayPay; I'm thinking T6 or a dedicated mini-section. Product estimation and HR logistics questions are lower priority.
+
+My top recommendations are: a new practical coding section covering LRU caches, token bucket limiters, producer-consumer queues, concurrent deduplication, and CompletableFuture orchestration—these are high-probability live-coding questions with no current coverage. Then E9 on online DDL and large table migrations using expand-contract and gh-ost patterns, which fits the money systems context. E10 on Kafka reliability internals around acknowledgments, ISR, and idempotent producers is solid but I need to check for overlap with the events doc first. T6 on AI collaboration tools and quality responsibility is modern and likely to come up. Finally, Java language details like HashMap internals and equals/hashCode could become D7 or integrate into the coding section notes.
+
+I'll structure this by inserting a new C section (实务编码) after E with five practical coding problems, extend E to include the DDL and Kafka questions, add the AI collaboration question to T, and check the events-outbox-inbox-kafka document to avoid duplicating Kafka coverage.
+好问题。先快速盘点现有覆盖面，确认 Kafka 可靠性这类候选主题有没有和现有文档重复，再决定加什么。
+
+Checked existing coverage of Kafka internals and coding topics
+Kafka's reliability mechanisms like acknowledgment settings, in-sync replicas, and idempotent producers are already thoroughly documented in the existing Kafka guide, so covering that again would be redundant. Rate limiting concepts like token bucket and sliding window algorithms are conceptually explained in the caching documentation, but there's a gap in actually live-coding a token bucket implementation from scratch.
+
+LRU caching is only mentioned in the context of Redis eviction policies, so hand-coding an LRU cache would be a valuable addition. For the concurrency topics—BlockingQueue and CompletableFuture—the JVM threads document explicitly acknowledges these deserve separate treatment, which makes them perfect candidates for the hands-on coding section.
+
+My plan is to create a new practical coding section with five problems: LRU cache, token bucket (with a reference to the architecture doc), bounded blocking queue, CompletableFuture orchestration, and a SQL problem for finding top-N results per group. I'll also add a section on online DDL and the expand-contract pattern for large table migrations, then handle renumbering and reorganize the document structure accordingly. I need to insert E9 right after the E8 answer about 3DS challenges, and then add T6 at the end of the T5 answer about aligning system change costs with business change frequency.
+
+I'm also updating the numbering table to expand E into E1–E9, adding a new C row for coding problems (C1–C5), and updating T to T1–T6. Then I need to update the section headers, checklist, and README to reflect these changes.
+
+For E9, I'm drafting content about adding fields or indexes to a multi-billion-row production table without locking the business. The key risks are metadata locks (MDL) — when a DDL needs the table's metadata lock, any long-running transactions or slow queries holding read locks will cause the DDL to queue, and then all subsequent queries queue behind the DDL, effectively freezing table traffic. I'm starting with the three main risks of ALTER operations.
+
+Now I'm layering the toolbox: MySQL 8.0 has INSTANT (metadata-only changes for adding columns at the end, takes seconds), INPLACE (adds secondary indexes without rebuilding the clustered index but still consumes IO), and COPY (for type changes, requires full rebuild). For non-INSTANT changes, I'm covering the shadow table approach using gh-ost or pt-osc — building a new table with the target structure, bulk-copying data in batches while applying incremental changes from the binlog or triggers, then doing an atomic rename once caught up. This is similar to S3 migrations but at the single-table scale. I'm also describing the expand-contract pattern at the application layer: add the new column as nullable with a default, have code write to both columns, backfill data, switch reads to the new column, stop writing the old one, then delete it — each step can be deployed and rolled back independently.
+
+The key discipline is checking for long-running transactions before DDL, setting a short lock_wait_timeout so DDL fails fast rather than blocking the queue, and monitoring replica lag. Adding indexes requires caution too since INPLACE still means full table scans that consume IO and CPU, potentially starving the workload and delaying replicas; plus the new index changes the optimizer's plan choices, which can slow other queries. Migration tools like Liquibase and Flyway handle versioning and repeatability of schema changes. 现在进入实务编码题部分，强调的是 30 分钟内写出线程安全、边界清晰的小类——这类题目的关键在于先花 30 秒确认需求和 API 签名，因为一半的分数其实来自"你问了什么"。以 LRU Cache 为例，考点是 HashMap 加双向链表的组合实现 O(1) 性能，我需要讲清楚标准库方案（LinkedHashMap 配 removeEldestEntry）和手写实现的区别。
+
+核心坑点包括 get 时忘记移动节点导致变成 FIFO、删除时只改链表或只改 map 导致两个结构不同步、以及没用哨兵节点导致 null 判断满天飞。线程安全的追问需要分层回答：从简单的全量 synchronized 到 ConcurrentHashMap 的不足（复合操作仍需锁），最后升到生产级答案——用 Caffeine 这样的库，它用 W-TinyLFU 替代纯 LRU 来抵抗全表扫描，用分段环形缓冲实现近似无锁。TTL 追问则涉及节点带过期时间、get 时惰性删除、加上后台低频清理来处理永久占位的问题。
+
+对于令牌桶限流器，关键是懒补充设计——不用后台线程定时加币，而是取币时按流逝时间一次算清。用 `System.nanoTime()` 保证单调性而不是 `currentTimeMillis()` 避免 NTP 回拨。capacity 和 refill 速率两个参数要能讲清语义。多实例共享限流时把读-算-写逻辑搬进 Redis Lua 脚本原子执行，桶状态存 HASH，用 Redis TIME 而不是本地钟，还要根据场景选 fail-open 还是 fail-closed。
+
+现在看有界阻塞队列的实现——这是并发编程的试金石。核心是条件等待的正确姿势：必须用 `while` 不是 `if` 来检查条件，因为被唤醒不等于条件成立，虚假唤醒和竞态都可能导致条件再次失效。用两个 Condition 对象分别控制生产者和消费者的等待，这样能精确唤醒对方阵营而不是让同类线程空转。unlock 必须在 finally 块里确保 await 抛异常时锁也能释放。
+
+JDK 的 ArrayBlockingQueue 采用单锁加两个条件的设计，和手写版本结构一致；LinkedBlockingQueue 则用两把独立的锁分别保护 put 和 take 操作，配合原子计数器，这样生产消费两端不互斥，吞吐量更高但实现复杂度也上升。线程池用无界 LinkedBlockingQueue 是个隐患，任务会无限堆积导致 OOM，生产环境应该用有界队列配合拒绝策略。
+
+现在转向 CompletableFuture 的并行聚合场景——需要同时发起三个下游调用（风控分、账户额度、卡状态），在 200ms 内返回聚合结果，任一超时就用降级值。关键是先把所有异步任务都发射出去再统一 join，如果在循环里逐个 join 就会串行化，并行度为零。要用自定义线程池而不是默认的 commonPool，因为 commonPool 是为 CPU 密集设计的，拿它跑阻塞 IO 会饿死整个 JVM 的并行任务。每条路径都要配置自己的 fallback 和超时，这样一路失败不会拖垮整个聚合，但要注意哪些下游允许降级、哪些必须硬失败是业务决策。总预算要大于等于单路预算，因为并行下的总耗时由最慢的那条路决定。
+
+虚拟线程时代可以用结构化并发（StructuredTaskScope）让代码回归同步写法，fork 三个子任务、joinUntil deadline、作用域保证资源不泄漏，可读性和取消传播都更优。但核心的三个判断不变：并行收益评估、每路的降级策略、线程池换成对下游的信号量限流。API 会变，思考方式不变。
+
+SQL 现场题是找每个账户最近一期账单的余额 Top 10。用窗口函数按 account_id 分区、按 cycle_end 倒序排列，取 ROW_NUMBER 为 1 的行，再按 closing_balance 倒序取全局前 10。关键坑是窗口别名不能直接放在 WHERE 子句里，因为执行顺序是 WHERE 先于窗口计算，必须套一层子查询。MySQL 8.0 之前没有窗口函数，要用自连接的方式找每个账户的最大 cycle_end，但要小心同日多条记录的并列语义。如果追问并列怎么处理，ROW_NUMBER 会硬切一条、RANK 会保留并列，这是业务定义，主动问出来是加分。
+
+优化这条查询的话先看 EXPLAIN，理想索引是 (account_id, cycle_end DESC)，这样窗口按分区有序扫描就免去排序。
+
+但如果表很大且这是高频查询，根本的做法不是继续优化 SQL，而是维护一个「最新账单」的读模型，每次出账时 upsert 一行到 latest_statement 表，把 O(全表窗口) 的复杂度降到 O(账户数) 的直查，这就是项目里读模型思路在 SQL 层的应用。
+
+关于 AI 编码工具，我把它当成需要监督的结对对象，边界很清楚。用在样板代码、测试用例的边界穷举、陌生 API 的用法探索、文档初稿，以及从另一个角度 review 代码。设计和取舍全是我拍板，AI 帮我加速验证和生成第一稿，再由我逐行改写。但责任模型不变，提交者对代码负全责，"这是 AI 写的"永远不是缺陷的借口。所以 AI 产出我按陌生人提交的 PR 标准 review，金融系统里资金语义相关的代码特别要严格。
+
+硬红线是生产数据、密钥、客户信息不进 prompt，AI 生成的 SQL 和 DDL 在生产执行前要走同一套评审闸门。质量兜底靠测试而不是靠信任，行为用测试钉死，测试本身我要亲手确认断言有意义，因为 AI 会写出跑得过但什么都没验证的测试。
+
+我的立场是 AI 改变的是产出速度，不改变我对正确性的所有权，金融后端恰恰是验证成本高于生成成本的领域，所以懂领域、会验证才是关键。
+
+对于团队里有人过度依赖 AI、提交自己讲不清楚的代码，我会用和 T1 review 原则同构的方法处理——对事不对人，review 时让作者走读关键路径，讲不清楚的代码按未完成打回，标准与是否用 AI 无关。如果团队普遍有这个趋势，我会把"作者能解释"写进 review checklist，并分享自己的用法作为示范。
+
+现在要更新表格和文档结构：编号调整为 E1–E9（加在线 DDL）、新增 C 节实务编码 C1–C5、T 节扩展到 T1–T6 加 AI 相关内容。Section 1 的编码一面要补充 C 节手写组件的提及，E 节和 T 节的标题和 checklist 都要相应更新。 Updating the table row... I need to insert a new "实务编码题" section as section 4, then shift the system design section to 5, and renumber all subsequent sections accordingly—being careful to apply changes from the bottom up to avoid duplicate replacements. I'm adding the T6 block with that quote about aligning system change costs with business change frequency, then inserting the checklist C line after the E block, anchoring it at the end of that existing checklist entry. 我在检查 README 中关于后端工程深水区的描述，确认之前的编辑已经将"技术"改为"工程"，现在需要更新这一部分的内容标题。
+
+同时验证团队协作部分从 T1–T5 扩展到 T1–T6 并加入 AI 协作的说法，以及确认 E9 中关于在线 DDL 的新增内容、B1 示例的引用和 0001–0007 变更日志的有效性都没有问题。
+
+我先用 grep 快速检查一下 mybatis 文档中是否存在重复的在线 DDL 内容，然后再进行编辑，这样可以避免不必要的重复。
+
+现在开始写编辑命令，用 "## 4. 系统设计（S1–S3）" 作为旧字符串进行替换，这个标题是唯一的，所以很安全。
+
+Writing edits...
+Kafka 可靠性已在现有文档中充分覆盖，但我发现了三个关键缺口：实务手写编码题、大表在线 DDL 和 AI 协作提问。现在我来确认 DDL 是否被 MyBatis 文档遗漏。
+Checked online DDL coverage in migration doc
+E9 addresses a genuine need and serves as the comprehensive version that those earlier references were building toward, so I should move forward with all the edits.
+只有提及、没有展开——E9 正好补上。现在执行全部新增：E9（大表在线 DDL）、新 C 节（5 道手写题）、T6（AI 协作）、章节重编与索引同步。
+Edited
+hardcore-interview-qa-cn.md
++59
+-4
+现在插入 C 节（5 道手写题）并重编后续章节：
+
+Edited 2 files, ran a command
+I've wrapped up the document at 2045 lines across 10 sections, adding the C section, E9, and T6 as planned while deliberately leaving out Kafka internals since that's already covered elsewhere. There are some lower-priority expansion ideas I can note for the user to explore later, and I should prepare a commit message for this update.
+完成。我的判断和落地如下，文档现为 2045 行、10 节。
+
+本轮新增（按优先级）：
+
+新 C 节：实务编码题（C1–C5）——这是整个准备体系里最大的缺口：coding 轮不总是 LeetCext，实务派面试官偏爱「30 分钟手写一个能用的组件」，而 jvm-threads-runtime-cn.md 里明确标注这些并发主题"本文不展开"。五道题都是骨架代码 + 必踩的坑 + 追问：
+C1 LRU（哨兵节点、两结构同步改；追问线程安全分层答法、生产为什么用 W-TinyLFU 不用裸 LRU）
+C2 令牌桶（懒补充、nanoTime 防时钟回拨；追问 Redis Lua 分布式版——直接挂回项目的 RedisTokenBucketRateLimiter）
+C3 有界阻塞队列（while 不是 if 这个第一淘汰点、双 Condition、finally unlock；追问 JDK 两种 BlockingQueue 的锁差异）
+C4 CompletableFuture 并行聚合（先发射再 join、不用 commonPool 跑阻塞 IO、额度不能降级的业务判断；追问结构化并发）
+C5 SQL 窗口函数现场题（每组取最新 + Top-N、窗口别名不能进 WHERE；追问引到读模型根治）
+E9：大表在线 DDL——MDL 连环堵事故、INSTANT/INPLACE/COPY 分档、gh-ost 影子表（点明是 S3 迁移的单表缩影）、expand-contract 与 B1 事故示例呼应；追问讲清 Liquibase 管版本化、不管执行安全的两层分工。mybatis-sql-and-migration-cn.md 只有一句带过，这里补成完整弹药。
+T6：AI 协作——2026 年面试几乎必问的新题：用法边界、责任模型（提交者负全责）、数据红线、「AI 会写跑得过但什么都没验证的测试」这类具体观察；追问处理队友过度依赖 AI 的场景。答案里顺便把这个准备项目本身当作工作流证据。
+核实后主动不加的：Kafka 可靠性内幕（acks/ISR/rebalance storm/static membership）——events-outbox-inbox-kafka-cn.md 已经覆盖得相当好，包括 rebalance storm 时序推演，重写只会制造两份不同步的版本。
+
+剩余的低优先级拓展方向（供你之后按需做，暂未动手）：
+
+英文版关键答案：技术轮大概率英语，但目前只有 G1 和 readiness review 的 15 条有英文版。最值得做的是给 D/E 每题配一个 60 秒英文短版——这是练习任务而不是写作任务，建议你口头练的时候自己录，卡壳的地方再让我帮你写。
+B 节素材填充：五个 STAR 骨架仍是【替换】占位状态，等你把真实经历填进去后，我可以帮你逐个打磨中英两版并做「追问三层」压力测试。
+G2/G5 个人化：同样在等你的真实履历信息（在日时长、日语水平、转职背景）。
+commit message：
+
+docs: add hands-on coding section (C1-C5), online DDL (E9) and AI collaboration QA (T6)
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+
+实际生产，开发，测试过程的经验，实际debug，解决线上事故，这类问题再继续增强，可以增强已有的内容，然后拓展几个新的高质量内容
+
+The user wants me to strengthen questions around real production and development experience—focusing on actual debugging and incident resolution. I'm looking at what's already covered: the QA bank has five troubleshooting scenarios tied to specific projects, and there's some Linux load documentation, so I need to enhance these and add a few more high-quality items in this area.
+
+I'm identifying three key gaps: incident management processes (how teams handle outages, severity levels, communication, blameless postmortems), debugging war stories with a framework (heisenbug, race conditions, timezone/encoding issues, off-by-one errors in money calculations, connection leaks, production-only bugs), and testing practices in practice (test pyramid, unit vs integration decisions, Testcontainers, testing concurrency and idempotency).
+
+I should also cover safe deployment practices (feature flags, canary, blue-green, rollback discipline, database/code ordering), observability design (SLI/SLO, symptom-based vs cause-based alerts, dashboard design, alert fatigue), production debugging techniques (logs/metrics/traces, dynamic log levels, thread dumps, heap dumps, Arthas, tcpdump, feature flag isolation), and performance investigation across the full stack.
+
+For sporadic latency issues, I need to address p99 vs average latency, tail latency sources like GC, locks, connection pools, TCP retransmissions, and noisy neighbors, plus tracing approaches. Data repair discipline is important too—never hand-writing UPDATE statements, using reviewed fix scripts, ensuring idempotency, and maintaining audit trails. Development workflow practices like code review standards, trunk-based vs git flow, CI pipeline design, and staging environment fidelity round out the coverage.
+
+The user wants me to enhance existing content and add a few new high-quality questions. I'm thinking about creating a new "生产实战" (Production Practice) section rather than scattering these into existing categories—something like P1–P6 covering debug, incidents, testing, and deployment. This feels cleaner and aligns with how the user might expand by category later. I'm starting to outline what those P questions should be, with P1 focusing on a systematic approach to diagnosing sporadic p99 spikes and timeouts.
+
+For P1, the methodology is about making the "sporadic" observable through correlation analysis, timeline slicing by dimension, and a checklist of usual suspects like GC, locks, connection pool queuing, retry amplification, and noisy neighbors. The follow-up question addresses the harder case: when spikes happen only once a minute and can't be reproduced—the answer involves continuous profiling with async-profiler and sampling slow requests with tracing. P2 shifts to the practical toolkit for debugging in production where you can't attach a debugger, covering layered approaches with dynamic logging, metrics, and tracing, plus JVM-specific tools like jstack, jmap, jcmd, and flame graphs from async-profiler. 我在思考怎么把事故响应流程和事后总结合并成一个问题，或者让事后总结作为事故响应的追问——重点是讲清楚好的事后总结应该有时间线、量化影响、根因分析（避免单一根因的陷阱）、以及有明确负责人和截止日期的行动项，还要防止流于形式，通过定期审查和重复事故审计来确保真正的改进。
+
+然后是数据修复的实战场景：发现线上数据错误后，不能直接手写 SQL，而是要把修复脚本当代码对待，包括代码审查、测试、幂等性、分批执行、可回滚和审计日志，同时要先修复根源再修复结果，通知下游系统和清除缓存，还要考虑修复过程中新错误数据继续产生的情况。最后是测试实战的决策框架：根据测试金字塔来决定什么该测、怎么测，单测关注纯逻辑和金额计算，集成测试用真实数据库而不是内存数据库来测 SQL 和事务约束，E2E 测试少而精，还要处理并发测试和不稳定测试的问题。
+
+我在考虑是否加入安全发布作为第六个话题，涵盖特性开关、灰度发布和发布检查清单，这样能覆盖生产、开发、测试、调试和事故处理的完整链路。同时要在现有内容中补充一些细节，比如在故事版本和流程版本之间加上指针说明。
+
+还需要更新编号约定表、招聘经理部分、检查清单和 README，并在各个章节之间添加交叉引用，比如从 T4 指向 P3 的应急手册，从 E5 指向 P2 的异步分析工具。
+
+现在要决定 P 节的位置——可以放在 C 节之后作为第 5 节（两个都是实战技能），这样 S 节变成第 6 节；或者放在 S 节之后作为第 6 节，这样 B 节往后都要重新编号。
+
+我倾向于把 P 放在 C 之后，因为 P 的问题在同样的面试轮次中被问到，顺序应该是 D → E → C → P → S。这样的话需要重新编号所有后续章节：S 变成第 6 节，行为面试变成第 7 节，团队变成第 8 节，国际化变成第 9 节，逆质问变成第 10 节，考前清单变成第 11 节。还要检查跨文件引用，比如 R2 提到 S3 的地方，虽然用字母标记应该没问题。
+
+另外需要在第 1 节第 2 轮补充 P 的提及，说明编码轮会涉及生产经验题。第 4 轮招聘经理面试的部分要从"B 节 + T 节"改成"B 节 + T 节 + P 节的经验题"。还要在几个地方加上交叉引用：B1 后面加一句说这题的流程版本见 P3，T4 关于 runbook 的地方指向 P3 的完整事故响应流程，E5 可能需要提及 async-profiler 的工具。
+
+现在开始起草第 5 节生产实战部分，这一节的目的是回答"你真的上过生产吗"这类问题，面试官想听的不是背诵流程，而是看你有没有实际操作过的肌肉记忆——具体用过哪些工具、怎么排查问题。
+
+我注意到项目版的五个排障场景已经在 QA bank 第 12 节里了（授权 p99、Outbox backlog、账单缓存、consumer lag、Redis timeout），这一节要讲的是通用的方法论框架，两层配合使用：先用这里的框架开场建立思路，再用项目具体场景当例子来落地。
+
+第一个场景是接口偶发超时，一天几十次但没规律，我要系统化地讲怎么排查。核心思路是不要试图现场复现偶发问题，那样靠运气，而是要先把"偶发"变成"可观测"的东西——通过工程手段让问题可见。排查的第一步是定义清楚什么叫"偶发"，是 p99 延迟的尖刺还是随机分布，先拉延迟分布直方图看看。
+
+双峰分布（大部分 20ms 加一小撮 2s）和长尾渐变是完全不同的问题，双峰几乎总是撞上了某个离散事件，比如 GC、锁、重建或超时重试。
+
+第二步是时间相关性分析，把慢请求的时间戳导出来，和所有周期性事件对齐——GC 日志、定时任务、缓存过期、连接池回收、部署时间、整点流量这些。我的习惯是先问尖刺有没有周期性，有周期就意味着有定时源头，一半的偶发问题在这一步就能破案。第三步是维度切分，把慢请求按实例、接口、账户、参数特征这些维度来分类。
+
+现在要看这些慢请求是集中在单实例（宿主机或邻居问题）、单账户（热点行锁）、特定参数（某个分支的慢查询），还是完全随机分布（基础设施层问题），这决定了下一步往哪个方向挖。
+
+第四步是请求级证据，trace 采样必须保留慢样本，用尾部采样而不是头部随机采样，否则低采样率下根本抓不到 p99 的样本。日志里用 traceId 贯穿整个链路，在关键阶段打点记录耗时，这样任何一条慢请求都能被解剖出时间花在哪一段。
+
+最后是常见嫌疑人清单，按命中率排序，GC 停顿是首当其冲的。
+
+然后是锁等待（行锁或 JVM 锁，可以用 jstack 抓现场）、连接池排队（获取连接的等待时间要单独打点，因为它常被算进「DB 慢」背锅）、下游超时加重试放大、DNS 和 TLS 握手问题（通常是连接池过小或 keep-alive 失效）、宿主机邻居争抢（steal time 或 IO 争抢）。
+
+如果尖刺一天只出现几次，trace 也没抓到，就得上常驻低开销观测，用 async-profiler 做持续性能分析，开销只有几个百分点，生产环境可以长开，事后按时间窗拉火焰图对比正常时刻和尖刺时刻的差异。或者用 JFR 的环形缓冲常开，出现问题时立即导出。
+
+如果怀疑是网络层问题，就用 tcpdump 按条件抓包轮转。核心思想是把系统改造成「出事时证据已经在手里」，而不是「出事后再去抓」，这和飞机黑匣子的设计哲学一样。
+
+对于线上 debug，我分四层工具，从零成本到高侵入，用到哪层停到哪层。第一层是已有的可观测性——结构化日志按 traceId 串链、metrics 面板、trace，九成问题应该到此为止，如果经常不够用说明可观测性建设本身有问题。
+
+第二层是动态调整——运行时下调日志级别（logback/log4j2 都支持 JMX 端点动态改，比重新发布快两个数量级）、用 feature flag 隔离可疑功能路径。第三层是 JVM 快照与画像——用 jstack 抓线程栈看锁等待和死循环、jcmd 查对象分布、async-profiler 生成 CPU/alloc/lock 三种模式的火焰图、JFR 记录，heap dump 是重武器但会 STW 秒级。
+
+第四层是 Arthas 这类热诊断工具，watch 看方法真实入参返回值异常、trace 看调用耗时分布、tt 记录现场事后回放，都不需要改代码重启，特别能抓住生产行为和代码不一致的情况（比如跑的是旧版本类）。
+
+但诊断工具本身有观察者效应——字节码增强和高频 watch 都有开销，生产使用必须走审批留痕，watch 的入参可能含敏感数据（卡号、金额）需要脱敏，一切以「不放大事故」为上限。对于怀疑某个方法在特定参数下走错分支但日志没打的情况，可以用 Arthas 的 watch 条件表达式直接在生产环境观察该方法的入参和返回值。
+
+没有 Arthas 的环境就动态调整日志级别到 DEBUG（前提是代码里本来有 debug 日志——这就是为什么写代码时要在关键分支留 debug 级日志，给未来的自己留后门），再
+这类「你真的上过生产吗」的经验题确实是当前最值得加强的——面试官用它区分「学过」和「干过」。计划：新增 P 节：生产实战（P1–P6）（偶发尖刺系统化排查、线上 debug 工具箱、事故响应前 15 分钟、数据订正、真实测试策略、发布纪律），并给 B1/T4 加流程版交叉引用。项目版的 5 个排障场景在 qa bank 第 12 节已有，P 节做通用方法论层，两层互相配合。
+
+Edited
+hardcore-interview-qa-cn.md
++7
+-3
+现在插入 P 节主体并重编后续章节：
+
+
+Edited 2 files, ran a command
+Everything checks out, so I'm ready to wrap this up with a final summary and commit message.
+完成。新增 P 节：生产实战（P1–P6），插在实务编码和系统设计之间，文档现为 2291 行、11 节。
+
+六道新题的设计思路——每题的评分点都是「顺序和取舍」，这是有无实战经验最难伪装的地方：
+
+P1 偶发超时排查：核心方法论是「不要试图复现，先把偶发变成可观测」——延迟直方图分型（双峰 vs 长尾）、时间相关性对齐（一半的偶发问题是撞上定时源头）、维度切分、尾部采样（1% 随机采样永远抓不到 p99 样本这个细节很显功力）、按命中率排的嫌疑人清单（特意点出连接池排队常给「DB 慢」背锅）。追问给到 continuous profiling + JFR 环形缓冲的「黑匣子哲学」。
+P2 线上 debug 工具箱：四层成本阶梯（已有可观测性 → 动态日志级别 → jstack/async-profiler/JFR → Arthas 热诊断），含 watch 条件表达式的具体用法和 jad 对质「灵异问题其实是旧类文件」的经典场景；金融语境补了观察者效应、审批留痕、watch 输出脱敏的纪律。追问的「确认成本阶梯」（老手第一反应是盘点不用发布的手段）是区分新老手的点睛句。
+P3 事故前 15 分钟：2 分钟定级（资金错误和可用性问题优先级完全不同——宁可不可用不可算错）→ 3 分钟找变更 → 5 分钟止血（回滚不需要先证明因果）→ 5 分钟沟通节奏。追问 1 是回滚 vs fix forward 的决策框架（「事故中的人智商减半」），追问 2 是 postmortem 四个硬要求（单根因谬误、可验证 action item、审计上次完成率）。
+P4 数据订正：堵源头 → 圈影响面留证 → 修复脚本当生产代码（幂等/分批/review/抽样放量）→ 修派生污染 → 闭环对账。追问把「多收的钱退款」引回 append-only 冲正的账务原则——「修错误的能力是设计出来的」。
+P5 真实测试策略：按「出错概率 × 出错代价」投资、Testcontainers 真 MySQL 而不是 H2 的理由（方言差异恰恰长在钱路径上）、测行为不测实现、flaky 零容忍。追问给并发测试三层法：CountDownLatch 确定性化、断言不变量而非交错、承认 JVM 内测试的边界。
+P6 发布纪律：变更单三件事、金丝雀阈值事先写好、feature flag 解耦部署与放量、发布记录是 P3「3 分钟找变更」的数据源。追问讲 flag 债治理（发布型限期删除 vs 运营型有台账、默认值要经得起配置中心宕机拷问）。
+对已有内容的增强：B1（事故 STAR 故事）和 P3（事故流程版）互相标注为同一题的两种问法、素材互通；T4 的 runbook 段落指向 P3；第 1 节的轮次指引和编号约定表加入 P 节；考前清单新增一条——给 qa bank 第 12 节的每个项目排障场景配一个 P 节框架的开场白，形成「方法论 + 实例」组合拳；README 同步。
+
+整节和 qa bank 第 12 节（项目版五场景）是刻意的两层结构：面试时先用 P 节框架开场证明有体系，再用项目场景落地证明动过手。
+
+commit message：
+
+docs: add production-experience QA section (P1-P6: debugging, incidents, data fixes, testing, releases)
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+接下来加强实际项目积累的经验和最佳实践（区别于线上事故，重点在于平常的项目开发过程），比如项目管理，技术选型，开发过程的实际经验（比如工具使用，git的使用），如何高效开发，AI的使用的优点和带来的问题。各种你能想到实际生产开发才能获得的高质量的反思，经验，解决问题的办法（包括但不限于技术问题和写代码，还有项目管理，团队合作，以及你想到的其他重要的核心）
+
+I need to create a new section covering everyday project development experience and best practices—things like project management approaches, technology choices, development workflows, git usage, efficiency strategies, and deeper insights into AI usage including both benefits and challenges. This should capture real production experience across technical work, code quality, team collaboration, and problem-solving that goes beyond incident handling.
+
+I'm sketching out a framework with prefix "W" for this section, organizing it around core engineering practices: technology selection decisions (boring tech principle, selection dimensions, PoC approaches, ADR documentation), git workflows (trunk-based vs git flow tradeoffs, PR discipline, commit atomicity and messaging for archaeology, rebase vs merge strategies, bisect techniques), and code review culture from a process perspective (review SLAs, PR templates, author responsibilities).
+
+I'm also considering questions on design documentation practices—what scale of changes warrant a design doc, using a one-page template with background/goals/non-goals/solutions/risks/alternatives, and how to establish this culture when teams lack it—plus estimation and project management approaches like task decomposition to 2-day granules, uncertainty buffers, milestones, and early slip detection.
+
+Then there's personal efficiency: deep work blocks, investing in dev environments with fast feedback loops like local test runs and hot reloading, automating repetitive tasks, managing debug time, and minimizing context switching costs. I'm framing this around feedback loop engineering to accelerate iteration.
+
+Finally, I want to explore AI usage more deeply than just quality assurance—looking at both the advantages and the problems it introduces. 技术债管理上，我想强调分类方法（有意 vs 无意、临时 vs 永久）和债务台账的重要性，再加上 20% 规则和顺路修的实践，最后要把债翻译成业务语言，这样才能判断什么时候该大重构、什么时候渐进式处理。文档和知识管理方面，runbook、onboarding 文档和把口头知识书面化都很关键。然后需求到上线的完整流程是个很好的综合题——从澄清需求、设计、拆任务估算、开发分支和 PR，再到测试这一整套。
+
+现在我想把 W1 设定为这个综合开场题：一个需求从接到手到上线，你的完整流程是什么？这样能串联需求澄清、设计、拆解、开发、review、测试、发布、观测和复盘各个环节，每步说出关键动作和为什么要这样做。追问可以问哪一步最常被跳过、代价是什么——通常是设计和观测被忽略，跳过设计就得用代码试错，跳过观测功能上线了也没人知道效果怎样。W2 转向技术选型，讨论 boring tech、维度清单、单向门和双向门的区别、PoC 的时间盒限制，还有用 ADR 留下决策记录。
+
+追问可以问有人提议用新技术栈重写时怎么评估，或者选型后来被证明是错的怎么办——这时候要看退出成本是否提前设计过、有没有通过抽象隔离来降低风险。W3 讲 git 和 PR 工作流，强调小 PR 的重要性，用 trunk-based 加短分支、原子 commit 配好 message 方便未来用 git blame 或 bisect 追溯，PR 要控制在 400 行以内，还可以用 stacked PR 来拆大功能。追问可以问怎么把一个大功能拆成小 PR——用 feature flag 做纵切或者先做准备性重构来"make the change easy"，还有 commit message 规范的实际价值。W4 开始问写代码之前做什么，设计文档怎么写才有效。
+
+一页纸模板包括背景、目标、非目标、方案、失败场景推演、替代方案和否决理由，非目标本身很有价值，因为在纸上失败的成本远低于代码里失败。ADR 和设计文档有区别。追问可以问多大的改动需要文档——不是看行数，而是看不可逆性和影响面；如果团队没这文化，自己先写，用效果说话。W5 讲估算和交付管理，工程师低估的结构性原因是只估 happy path 的编码时间，忽略了集成、测试、review、等待、打断这些。要拆到两天以内的粒度，粒度是估算准确性的主决定因素。不确定性高的先做 spike，里程碑对外承诺要留 buffer，slip 的处理还没说完。
+
+W6 讲高效开发的核心是反馈回路速度乘以打断保护，具体做法包括本地一键起环境、秒级测试、热重载，自动化所有重复操作，深度工作块配合异步沟通，减少在制品数量。
+
+新入职的人可以通过先投资环境和构建来快速达到高效。W7 讨论 AI 辅助开发的真实收益和代价：优点是生成样板代码、测试用例枚举、学习陌生库、充当橡皮鸭和大代码库问答，但也带来幻觉 API 导致验证成本转移、生成代码膨胀增加审查负担、手写能力和调试直觉退化风险、审查疲劳降低警惕，以及团队技能差距扩大等问题。
+
+对策包括核心逻辑保持手写、AI 产出要求最小改动、定期无 AI 练习和在 prompt 中明确项目约定。关于 junior 培养，担心他们用 AI 跳过挣扎期会缺乏调试直觉，所以让他们先自己思考再对比 AI，review 时追问原因。还需要考虑技术债的话题，虽然 T2 部分涵盖了，但用户提到范围包括技术问题、代码、项目管理和团队合作。
+
+W8 可以问技术债管理，区分有意和无意、战术和战略的债务，用台账化和定期 review 来追踪，明确顺路修的边界，把债翻译成业务语言，通过 definition of done 防止新债产生。对于业务方不给还债时间的情况，可以把还债嵌进需求实现路径，用摩擦数据说话，大债通过下次需求顺路解决。
+
+现在要确定这 8 个问题在整个框架中的位置——W 属于日常工程实践，应该插在 P（生产实战）之后、S（设计）之前，这样需要重新编号后续的章节。
+
+还要检查与其他部分的交叉引用：T6 和 W7 涉及 AI 的质量与效率维度需要互相关联，B3 的 deadline 框架在 W5 中被引用，T2 和 W8 都涉及技术债，T5 的需求澄清与 W1 相关，P5/P6 在 W1 中被提及。此外要更新编号约定表、第一部分关于问题提问时机的说明、核对清单和 README。
+
+现在开始写 W 部分的内容，每个问题保持实质性的深度，用结论先行的风格配合具体实践和反事实论证，自然地挂回项目背景。
+
+这一节的核心是向面试官展示我是否是一个能持续交付的工程师——有自己的工作系统而不是凭惯性做事。每个回答都要包含具体做法、背后的原因，以及一个真实的反面教训。
+
+对于需求从接收到上线的完整流程，我会强调几个关键环节：首先在澄清阶段用具体案例逼出精确需求，产出一页行为描述让需求方确认，因为写下来的分歧成本最低；其次根据影响面决定设计深度，小改动直接开发，但涉及数据模型或跨模块的必须先写设计文档，重点关注失败场景；然后拆解任务到两天以内的粒度，识别有回滚依赖的步骤；最后开发阶段用短分支小 PR 的方式推进。
+
+发布前自己先 self-review 一遍 diff 能拦住一半的低级问题，发布后用金丝雀加指标阈值的方式灰度，并主动盯 30 分钟；收尾时不只验证"没报错"，而是看业务指标是否真的动了，清理发布型 flag，顺手更新文档。这个流程最常被砍掉的是澄清和收尾两步——跳过澄清就会用一周的返工代替一小时的对话。
+
+跳过观测验证意味着功能上线了但没人知道它有没有真正起效。我见过代价最大的是设计文档里漏掉"非目标"这一段——不明确说不做什么，开发中途就会被 scope creep 吃掉，每个人都往里塞"顺便做了吧"，两周的活变成六周。非目标是设计文档里唯一防守性的段落，给了工程师说"不做"的书面依据。
+
+技术选型我用四个维度打分，权重根据团队现状调整。首先看问题匹配度——这个工具解决的真的是我们的问题吗，还是为了用工具而发明问题。其次是总拥有成本，包括学习曲线、运维负担和升级路径，特别是引入新的存储系统或消息队列这类运行时组件，运维成本远大于库和框架。第三是生态与生命周期，看社区活跃度和大厂背书，我倾向于选择无聊的成熟技术，把创新预算花在业务差异化上。最后是退出成本——
+
+这个决策是可逆的还是不可逆的。
+
+可逆决策（比如换个 JSON 库）可以快速试错，但不可逆决策（选主数据库、定事件 schema）值得花十倍时间谨慎评估，决策的谨慎度应该和不可逆性成正比。执行上我限制候选方案不超过三个，用真实数据和负载做时间盒 PoC，最后写成 ADR 文档记录背景、选项、决定和被否决的理由，这样半年后新人问为什么选 X 不选 Y，答案在仓库里而不是在离职同事脑子里。
+
+我的项目就是这样选的——用 MySQL 行锁而不是 Redis 锁做资金互斥，选 outbox 而不是 Kafka 事务，每个决定都带着否决理由在文档里。
+
+当同事提议用新框架重写某个模块时，我会把讨论从审美拉回成本：先量化现状的痛点（bug 率、改动周期），确认新方案是否真的解决这些痛而不是别的问题，评估迁移成本和风险，最后看有没有渐进路径——能用 strangler 模式就不推倒重来。多数重写冲动在这一步就会被打消。
+
+但也不能一刀切当守旧派，如果新技术确实命中真痛点，就在小范围试点并收集数据。
+
+如果选型后来被证明错了，关键是设计时就该给依赖留抽象层——repository 接口后面藏 ORM，事件发布藏在 port 后面——这样退出成本是设计出来的。真要换的话，承认沉没成本不是理由，算的是从今天起继续用还是迁移的前瞻成本，然后用双跑灰度的方式来迁移。
+
+最重要的是把教训写回 ADR，记录当初哪个假设错了，选型能力的成长全在这些复盘里。
+
+我的 git 工作流是主干开发加短命分支加小 PR。分支活不过几天，因为长命分支的合并冲突和集成风险随时间超线性增长，用 feature flag 让未完成的功能也能安全合入主干。PR 要控制在 400 行以下，研究和经验都指向 review 质量在几百行后断崖下跌，大 PR 得到的不是真正的 review 而是走过场的批准。
+
+小 PR 的复利效应很明显：review 快就能合入快，冲突少，回滚粒度细，bisect 也好用。
+
+原子 commit 加有信息量的 message 同样关键——一个 commit 一个逻辑变更，message 讲为什么而不是做了什么，因为 diff 已经说了做了什么。这不是代码洁癖，而是实用考虑，`git blame` 和 `git log` 是最常用的考古工具，半年后面对一行怪代码，blame 出来的 message 写着"兼容 X 系统的日期格式 bug"和写着"fix"，完全是两个世界。我准备项目时坚持每次提交都带完整 message，就是给自己的考古留路。git bisect 在回归 bug 时特别有用，能快速定位问题引入的具体提交。
+
+分支内 rebase 保持线性好读，但共享分支绝不 force push；用 `git revert` 生成反向 commit 保留历史可追溯性，而不是删历史。
+
+现在的问题是大功能怎么拆成小 PR，答案是两个刀法：先做准备性重构让改动变容易，再做容易的改动。
+
+第一批 PR 全是行为不变的重构——抽接口、挪代码，测试证明行为没变，最后才是真功能，每个 PR 都能独立 review 和回滚。第二个刀法是纵切加 flag，按"走通一条最窄的端到端路径"来切而不是按层切，逐步放开 flag。那种"一个 PR 3000 行因为功能不可拆"的说法几乎总是假的，其实是没花拆的功夫。
+
+现在进入第四周的话题：写代码之前做什么，设计文档怎么写才不流于形式。核心原则是写文档是为了先在纸上失败。
+
+在纸上改一个方案十分钟，代码里改一个方案就得花一周。判断什么规模需要文档看两个轴：不可逆性和影响面。改数据模型、事件 schema、对外 API 这些必须写，因为 E7、E9 的兼容性问题都源于此；跨模块、跨团队的改动也必须写。代码行数其实无关——改一行隔离级别的代码可能比一千行 CRUD 更需要文档。一页纸模板就够了，多了没人读：背景与目标用新人能看懂的语言讲清楚，非目标明确说不做什么防止 scope creep，方案部分画出数据模型和关键流程图。
+
+失败场景推演很关键，每个环节都要想"进程在这里挂了会怎样"，这段逼出来的设计修正比评审会议还多。把被否决的替代方案列出来，一句话方案加一句话否决理由，能提前消灭评审会上 80% 的"为什么不用 X"。最后讲风险与迁移，怎么灰度上线、怎么回滚。评审的正确姿势是文档提前 24 小时发出去，会上现读就是浪费所有人时间，关键 reviewer 要提前一对一过一遍。
+
+团队没有文档文化的话，不要开口号会，用行为示范更有效——自己的下一个中型改动写一页纸发出去，第一次可能没人看，但当它在评审里提前挡掉一个设计错误、或三个月后有人靠它十分钟看懂模块时，价值自己会说话。把门槛降到最低，提供模板、把文档链接加进 PR 模板的可选项。自上而下的文化靠强制，自下而上的文化靠"被看见的好处"，后者慢但牢。
+
+工期低估是结构性问题，不是态度问题。我们默认估的是编码 happy path 的时间，但真实交付还要加上测试、review 等待、集成调试、环境问题、会议打断和需求微调。
+
+编码往往不到总时间的一半。还有计划谬误，人对自己这次总是乐观，对别人或上次的教训不敏感。加上不确定性不对称，顺利只能省 20%，踩坑能翻 3 倍，所以估算分布是长尾的，而我们报的是众数。
+
+我的对策是拆到两天粒度再估，粒度是估算准确性的第一决定因素。
+
+拆不动的部分就是不确定性所在，先做时间盒 spike，一天内产出"知道怎么做了"就够。用历史数据校准，看上个类似任务实际花了多久，个人系数比任何方法论都准。对外承诺加缓冲并分级，对内计划紧、对外承诺松，milestone 用日期区间而不是单点日期。进度落后的第一时间暴露，估算错不是失职，隐瞒才是。
+
+明知做不到的 deadline 被压下来，关键是把代价具体化让决策者签字。日常预防的两条路：争取估算参与权，deadline 应该是业务需要和工程估算的谈判结果，而不是单方面通知；平时积累估算信用，估算历史越准，谈判时数字越有分量，信用是复利资产。
+
+高效开发的核心是反馈回路。
+
+我的做法包括本地环境一键启动，新人从 clone 到跑通不超过 30 分钟；测试分层求快，单测秒级、集成测试选择性运行，因为测试慢的直接后果是大家不跑测试了；热重载和增量构建，构建超过几分钟就值得投资，因为它每天被乘以百次；自动化所有重复三次以上的操作。
+
+对于专注保护，我强调深度工作块的重要性——大块不被打断的时间产出远高于碎片时间之和，因为上下文重建一次需要 20 分钟，一天被打断 6 次就是半天没了；采用异步优先沟通，非紧急问题走文字批处理；严格限制 WIP，同时只推进一件主要事，因为三件事各完成 60% 的交付价值是零，一件 100% 两件 0% 至少交付了一件。
+
+新入职团队的快速高效之道是头两周把时间投在"环境和回路"而不是急着产出——跑通构建测试部署全链路、读懂 CI、配好调试环境，这些投资之后每天都在付息。同时用认知地图的方法追一条主链路并写下来让老人挑错。第一个任务选小而完整的，目的是把发布全流程走一遍——新人的首要任务不是证明聪明，是打通自己的交付管道。
+
+现在转向 AI 辅助开发这个话题，想探讨它真正的提效点在哪里，以及带来了什么新问题。
+
+按实际体感来看，AI 最大的价值在于处理样板和胶水代码——mapper、DTO、配置这类机械劳动几乎可以归零。其次是测试用例的枚举，AI 穷举边界 case 比人更有耐心，虽然后续还是要我来裁剪断言。陌生领域的考古工作也收益很大，比如读不熟的库源码、解释遗留代码、生成文档骨架，这块的效率倍数最明显。另外把设计讲给 AI 听让它来攻击，比对着墙讲要有效得多。在大 codebase 里做检索问答也很有帮助，快速定位"哪里处理了 X"这类问题。
+
+但这也带来了新的问题。验证成本转移到了我这边——生成快了，但幻觉 API、过时用法、似是而非的并发代码需要我来验证，总时间省多少取决于我的验证效率，这也解释了为什么资深者提效更多。代码膨胀也是个问题，AI 偏爱防御性样板和过度抽象，不加约束的话代码量和 review 负担会同步上涨，我的对策是在 prompt 里强制"最小 diff"并把项目约定喂进上下文。还有审查疲劳的问题，大量"看起来都对"的代码容易让人警惕性下降。
+
+我也在意技能维护成本——调试直觉和手写能力是靠挣扎积累的，全托管给 AI 会退化，所以我刻意保持核心逻辑手写或逐行重写 AI 稿，定期不带 AI 做题保持手感。最后是团队方差放大的问题，会验证的人效率翻倍，不会验证的人反而产出负价值代码更快了——AI 放大的是判断力差距而不是抹平。
+
+归根结底，AI 把瓶颈从"写"移到了"判断"，受益最大的是本身判断力强的人。
+
+关于 junior 培养的风险，我承认挣扎期确实是调试直觉长出来的地方。我带人时的调整是先让他们自己写思路再对比 AI 的，差异点就是学习点；review 时多问"为什么这么写"，讲不出来的就按规则打回；还给 junior 的任务里保留一部分"禁 AI 区"，比如手写并发原语或手查一次生产问题。这就像计算器没有消灭心算教育，只是让教育更聚焦于"什么时候该按什么"——AI 时代的教育也是这个逻辑。
+
+现在来看技术债的管理。我觉得得先分类再谈，不分类的讨论都是各说各话。有意的战术债是合法工具，但必须记录——欠条不记债就变成惊喜了，我用 TODO 注释关联 ticket 或直接进债务台账。无意的债靠 review 和事后发现，发现即记录。还有腐化债，当年正确但世界变了，比如依赖过期或模式不再适配——这个需要定期审视。
+
+管理的核心是给债务标注"利息"——这个债每月吃掉我们多少摩擦时间、bug 率或招人劝退。没有利息的债可能根本不用还，丑但稳定的代码还它反而是伪工作。还债走两条腿：小债顺路修，但要小，PR 里混大重构会毁掉 review；大债打包进需求，"做这个功能正好要动那个模块，加 20% 工时顺路重构"比单独立项容易批十倍。
+
+关键是用摩擦数据而不是道德词汇来谈判——"烂代码"说服不了人，数字可以。控制新增债的方法是 definition of done 含测试和文档，review 挡住"临时方案不留欠条"。
+
+业务方永远不给还债时间的真正解法不是申请专门的还债时间——那样永远输——而是把还债嵌进需求实现本身。
+
+用真实事故或量化摩擦做杠杆（比如"这个季度 40% 的线上问题出自这个模块"），P3 复盘的 action item 是最好的立项通道。最后守住底线：新代码不欠新债是工程师自己的职权范围，不需要审批。如果做完这些债还在雪崩，那就是组织级问题，值得提前问清楚。
+
+现在要调整编号约定表，在 P 行后加 W 行；第一部分第 4 项要加入 W 的提及，开发流程与选型类问题（怎么估算、怎么选型、怎么用 AI）归到 W 节；插入 W 部分，把"系统设计"重新编号为第 7 节，后续行为、团队、国际化、逆质问、考前清单依次递增编号；W8 引用 R5，重新编号后 R 保持不变；T6 的交叉引用要加上关于 AI 效率的说明。
+
+现在要在 T6 的"一句话立场"段落后追加一句，说明效率与能力维度的另一半——真正提效在哪、带来什么新问题——见 W7，两题互补成一套 AI 观；B3 的骨架部分后面也要加上估算与提前暴露的日常方法论的交叉引用。
+
+接着要补充 T2 的回答骨架，从交付物和硬期限开始，讲如何发现来不及的时点、怎么把"来不及"转化为选项给决策者、砍了什么和为什么砍、和谁确认的，最后是结果和事后补回；T2 答案末尾关于接手烂代码的心态部分也要加上技术债日常管理体系的引用。
+
+现在要检查 W1 到 W8 各部分的交叉引用是否都存在，确认文档长度在 2650 行左右，然后按顺序执行小编辑、大段插入、重新编号和清单更新。
+这是很好的补充方向——P 节是「出事了怎么办」，还缺「平常怎么干活」：选型、git/PR、设计文档、估算、效率系统、AI 的收益与代价、技术债。计划新增 W 节：工程日常（W1–W8），插在生产实战和系统设计之间，并与 T6/B3/T2 建立交叉引用。先做外围编辑：
+
+Edited
+hardcore-interview-qa-cn.md
++7
+-3
+现在插入 W 节主体：
+
+
+Edited 2 files, ran a command
+Everything's working as expected. I should write up a concise summary and craft a commit message for this.
+完成。新增 W 节：工程日常（W1–W8），插在生产实战和系统设计之间，文档现为 2617 行、12 节。
+
+八道题的设计——和 P 节（出事了怎么办）互补，W 节是「平常怎么干活」，每题都是「具体做法 + 为什么 + 真实代价的反例」，避免教科书正确废话：
+
+W1 需求到上线全流程：hiring manager 综合开场题，七步流程（澄清→设计→拆解→开发→review→发布→收尾）作为整个工作系统的目录页，每步挂到本文对应节。追问落在「非目标」——设计文档里唯一防守性的段落，防 scope creep 的书面依据。
+W2 技术选型框架：四维度（问题匹配/总拥有成本/生态/退出成本）+ boring technology + 单向门/双向门（谨慎度和不可逆性成正比，不和讨论热情成正比）+ ADR 里写否决理由。两个追问：评估「重写冲动」的成本四问、选错了怎么办（可替换性是设计出来的）。
+W3 git 工作流：主干开发 + 小 PR 的复利链、commit message 写「为什么」服务 git blame 考古（顺便点了你这个 repo 的提交纪律）、git bisect 的威力靠日常纪律供养。追问给大功能拆小 PR 的两个刀法：准备性重构先行、纵切 + flag。
+W4 设计文档：「先在纸上失败」、按不可逆性而非行数决定写不写、一页纸六段模板（失败场景推演一段直接引用你项目文档的实践）、评审的根回し工程版。追问：没有文档文化怎么自下而上推。
+W5 估算：低估的三个结构性成因（happy path 偏差/计划谬误/长尾分布报众数）、拆到 ≤2 天粒度是准确度第一决定因素、个人历史系数、估算信用是复利资产。与 B3 明确分工（B3 是当下应对，W5 是日常预防）。
+W6 高效开发：一个公式「效率 = 反馈回路速度 × 专注保护」统摄全部做法——环境一键化、测试慢的真实代价是没人跑、限制 WIP。追问给新人入职的「先打通交付管道」策略。
+W7 AI 的收益与代价：提效五项（按实际体感排序）+ 新问题五项（验证成本转移、代码膨胀、审查疲劳、技能维护、团队方差放大），收束在「AI 把瓶颈从写移到判断」。与 T6 明确分工（T6 质量与责任，W7 效率与能力），追问回答 junior 培养断层——计算器类比 + 三条带人调整。
+W8 技术债：三分类（有意/无意/腐化）、台账带利息标注（没有利息的债不用还）、还债两条腿（顺路修要小 + 打包进需求）、「新代码不欠新债不需要审批」的职权底线。追问把「业务不给时间」的前提本身换掉。
+交叉引用：T6↔W7（AI 观的两半）、B3↔W5（deadline 的当下版与预防版）、T2↔W8（接手烂模块与债务体系）、W1 串联 T5/W4/W5/W3/P5/P6；编号约定表、第 1 节轮次指引、考前清单（W 行：W1 七步当骨架背熟 + 各题配真实例证）、README 均同步。
+
+至此文档结构：形态推演 → D（基础）→ E（工程）→ C（编码）→ P(生产实战) → W（工程日常）→ S（设计）→ B（行为）→ T（团队）→ G（国际化）→ R（逆质问）→ 清单，技术-经验-软性三个梯度都有了两层深度。
+
+commit message：
+
+docs: add everyday engineering practice QA section (W1-W8: tech selection, git, estimation, AI, tech debt)
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
