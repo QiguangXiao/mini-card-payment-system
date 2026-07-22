@@ -863,3 +863,368 @@ partition = hash(key) % numPartitions
 ## 面试角度
 
 这个知识点在面试里价值很高,因为它同时考察了 Kafka 机制理解和分布式系统的实操经验。如果被问到"Kafka 分区数能不能随便改",千万别只说"能增不能减"就结束,加分回答是补上**"增加分区会改变 key 到分区的哈希映射,对有顺序依赖的历史数据和新数据之间可能造成顺序割裂,所以生产上更倾向于提前规划够分区数,或者用新建 topic 灰度切换的方式规避这个问题"**——这正好也是支付场景(授权、扣款、对账这类强顺序依赖的流程)最容易被面试官拿来追问的方向。
+
+
+
+这个问题正好补全上一轮"遥控器 vs 真正机器"这个比喻里,"机器"到底是什么型号。
+
+## `ScheduledExecutorService` 是接口,不是实际类型
+
+```java
+public interface ScheduledExecutorService extends ExecutorService {
+    ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit);
+    ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit);
+    ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit);
+}
+```
+
+它只是 JDK 定义的一组"能调度延迟/周期任务"的行为契约,自己不包含任何实现——跟 `List` 是接口、`ArrayList` 是实现类的关系完全一样。
+
+## 实际类型:`ScheduledThreadPoolExecutor`
+
+```java
+public class ScheduledThreadPoolExecutor
+        extends ThreadPoolExecutor
+        implements ScheduledExecutorService {
+    ...
+}
+```
+
+`ThreadPoolTaskScheduler` 内部 `createExecutor()` 方法,最终 `new` 出来的就是这个类:
+
+```java
+// Spring ThreadPoolTaskScheduler 内部(简化)
+protected ScheduledExecutorService createExecutor(int poolSize, ThreadFactory threadFactory, RejectedExecutionHandler rejectedExecutionHandler) {
+    return new ScheduledThreadPoolExecutor(poolSize, threadFactory, rejectedExecutionHandler);
+}
+```
+
+所以完整的类型继承关系是:
+
+```
+ScheduledThreadPoolExecutor
+   extends ThreadPoolExecutor        ← 复用了我们前面反复讲的 core/max/queue/runWorker 这一整套机制
+   implements ScheduledExecutorService  ← 额外多了 schedule()/scheduleAtFixedRate() 这些方法
+```
+
+这也解释了为什么之前讲的 `runWorker()`/`getTask()` 这套逻辑,在定时任务场景下依然完全适用——**`ScheduledThreadPoolExecutor` 不是重新发明了一套线程池机制,而是直接继承了 `ThreadPoolExecutor`,只是把内部用的队列换成了专门支持延迟排序的实现**。
+
+## 优先队列在哪:就是我们上一轮聊的 `DelayedWorkQueue`
+
+```java
+public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements ScheduledExecutorService {
+
+    public ScheduledThreadPoolExecutor(int corePoolSize) {
+        // 注意这里,直接调用父类构造器,写死传入 DelayedWorkQueue
+        super(corePoolSize, Integer.MAX_VALUE, 0, NANOSECONDS, new DelayedWorkQueue());
+    }
+
+    static class DelayedWorkQueue implements BlockingQueue<Runnable> {
+        private RunnableScheduledFuture<?>[] queue = new RunnableScheduledFuture<?>[INITIAL_CAPACITY];
+        // 内部是一个基于数组实现的小顶堆(binary min-heap)
+        // 堆顶(queue[0])永远是"下一个最快该执行"的任务
+    }
+}
+```
+
+关键点:普通 `new ThreadPoolExecutor(...)` 构造时,队列类型是**你自己传入**的(`LinkedBlockingQueue`/`ArrayBlockingQueue` 随便选,我们前面聊过);但 `ScheduledThreadPoolExecutor` 的构造器**直接在内部 `new DelayedWorkQueue()`,不给你选**,因为定时任务场景必须按"到期时间"排序取出,普通 FIFO 队列(LBQ/ABQ)完全不适用——如果用 LBQ,先提交的任务先被拿走,但先提交的任务不一定是最先到期执行的。
+
+## 为什么用堆(优先队列)而不是普通队列
+
+普通 `BlockingQueue` 保证的是"先进先出"的**提交顺序**;`DelayedWorkQueue` 保证的是"**执行时间早的先出**"——这是完全不同的排序维度。堆结构(二叉小顶堆)能在 `O(log n)` 时间复杂度内插入新任务、取出最快到期的任务,是这类"按优先级取出"场景的标准解法,`take()` 内部逻辑简化理解就是:
+
+```java
+public RunnableScheduledFuture<?> take() throws InterruptedException {
+    lock.lockInterruptibly();
+    try {
+        for (;;) {
+            RunnableScheduledFuture<?> first = queue[0];   // 堆顶,最快到期的任务
+            if (first == null) {
+                available.await();                          // 队列空,挂起(WAITING)
+            } else {
+                long delay = first.getDelay(NANOSECONDS);
+                if (delay <= 0) return finishPoll(first);    // 已到期,直接取走
+                if (leader != null) available.await();       // 已有其他线程在等这个任务到期,自己继续等
+                else {
+                    ...
+                    available.awaitNanos(delay);              // 还没到期,定时挂起(TIMED_WAITING)——这就是我们之前反复在thread dump里看到的状态
+                }
+            }
+        }
+    } finally {
+        lock.unlock();
+    }
+}
+```
+
+这里的 `available` 就是一个标准 `Condition`(走 AQS),跟我们前几轮讲的 `notEmpty`/`notFull` 是同一族机制——只是这里多了一层"按剩余时间决定 park 多久"的逻辑,而不是无限期等待"有没有任务"。
+
+## 一张图串起继承和组合关系
+
+```
+ThreadPoolTaskScheduler (Spring,遥控器)
+   持有 → ScheduledExecutorService(接口引用)
+              实际指向 → ScheduledThreadPoolExecutor(真正的机器)
+                            extends ThreadPoolExecutor(复用worker/runWorker/getTask这套通用逻辑)
+                            内部队列 → DelayedWorkQueue(内部类,基于数组实现的小顶堆,按到期时间排序)
+                                        竞争机制依然是 ReentrantLock + Condition(AQS家族,跟LBQ一个体系)
+```
+
+## 面试角度
+
+如果被问到"Spring 定时任务底层用的什么数据结构",能说出**"`ScheduledThreadPoolExecutor` 继承自 `ThreadPoolExecutor`,复用了同一套 worker 线程调度逻辑,唯一的区别是内部队列写死为 `DelayedWorkQueue`——一个基于数组实现的小顶堆,按任务到期时间排序,保证每次 take() 拿到的都是最快该执行的任务,这跟普通线程池用的 FIFO 队列(LinkedBlockingQueue)在设计目的上完全不同"**,这个回答体现了你不仅知道"用了个队列",
+还理解了**为什么这个场景必须用堆而不是普通队列**——这种"知道设计动机"的回答,比单纯背类名更容易在面试里脱颖而出。
+
+
+
+这个问题问到了 Java 继承体系设计的一个核心决策点——什么时候该用 `extends`(复用实现),什么时候该用 `implements`(遵守契约),`ScheduledThreadPoolExecutor` 正好是个教科书级的例子,把两种机制的差异体现得很清楚。
+
+## 先明确 Java 的硬性规则
+
+`extends` 只能继承**一个类**(单继承),但可以同时 `implements` **多个接口**。这不是设计偏好,是语言层面的强制约束——一个类的字段和方法实现只能有一份"血统",但可以承诺遵守很多份"契约"。
+
+## `extends ThreadPoolExecutor`——拿到的是"实现"
+
+**继承带来的是具体的字段和方法体**,也就是我们前几轮反复讲的那一整套东西:
+
+- `workQueue` 字段(队列引用)
+- `corePoolSize`/`maximumPoolSize` 字段和相关的扩容逻辑
+- `Worker` 内部类的完整实现
+- `runWorker()`、`getTask()`、`execute()` 这些方法的**具体代码逻辑**——不是空壳,是真正能跑的实现
+
+`ScheduledThreadPoolExecutor` 继承了 `ThreadPoolExecutor` 之后,**这些代码它一行都不用重写**,直接白嫖。它做的唯二两件事只是:
+
+1. 构造器里传入 `new DelayedWorkQueue()`,替换掉默认队列
+2. 重写(override)`execute()`/`schedule()` 等少数几个方法,把普通 `Runnable` 包装成带"到期时间"信息的 `ScheduledFutureTask`,再调用父类原有逻辑
+
+也就是说,继承的价值在于:**`runWorker()`/`getTask()` 那一整套"worker 线程怎么循环、怎么从队列取任务、怎么处理异常"的复杂逻辑,一行代码都不用重新写**——这正是我们前面反复在 thread dump 里看到 `ThreadPoolExecutor.getTask`/`runWorker` 这些方法名的原因,`ScheduledThreadPoolExecutor` 压根没有自己的等价方法,调用的就是父类那份。
+
+## `implements ScheduledExecutorService`——拿到的是"契约",不是代码
+
+接口只声明方法签名,不含任何实现:
+
+```java
+public interface ScheduledExecutorService extends ExecutorService {
+    ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit);
+    ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit);
+    ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit);
+}
+```
+
+`implements` 这个接口,`ScheduledThreadPoolExecutor` 相当于**签了一份保证书**:"我承诺提供 `schedule()`/`scheduleAtFixedRate()`/`scheduleWithFixedDelay()` 这几个方法,你可以放心调用",但具体怎么实现,接口一个字都没规定,得靠 `ScheduledThreadPoolExecutor` 自己写:
+
+```java
+public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+    ScheduledFutureTask<Void> t = new ScheduledFutureTask<>(command, null, ...);
+    delayedExecute(t);   // 内部调用继承来的父类逻辑,塞进DelayedWorkQueue
+    return t;
+}
+```
+
+这几个方法是 `ThreadPoolExecutor` 完全没有的新能力——普通线程池只会 `execute()`/`submit()`,不懂"延迟多久执行"这种概念,所以这部分**必须自己实现,没法继承**。
+
+## 为什么不能反过来:把 `ScheduledExecutorService` 也做成父类
+
+这正是 Java 单继承约束逼出来的设计——`ScheduledThreadPoolExecutor` 同时需要:
+1. `ThreadPoolExecutor` 已经写好的那套 worker 线程管理逻辑(想复用代码,只能靠继承)
+2. `ExecutorService`/`ScheduledExecutorService` 定义的一套"调度类"标准方法签名(想让外部代码能用统一类型引用它、多态调用,得实现接口)
+
+如果 Java 支持多继承,理论上两个都能用 `extends`;但正因为只能继承一个类,JDK 设计者必须选**"继承那个真正有实现代码、值得复用的父类"(`ThreadPoolExecutor`)**,而"只是定义方法签名、没有实现代码"的部分(`ScheduledExecutorService`),用接口承载就完全够用,也不占用宝贵的唯一继承名额。
+
+## 用一句话对比两者本质区别
+
+| | `extends`(继承) | `implements`(实现接口) |
+|---|---|---|
+| 拿到什么 | 字段 + 已经写好的方法**实现代码** | 方法**签名**(契约),没有代码 |
+| 数量限制 | 只能一个 | 可以多个 |
+| 目的 | 复用代码,减少重复实现 | 定义"能做什么"的类型契约,支持多态 |
+| 在这个例子里 | 拿到 `runWorker`/`getTask`/线程池管理的全部现成逻辑 | 拿到"我是一个可以被当作 `ScheduledExecutorService` 使用"的类型身份,但具体调度方法要自己写 |
+
+## 延伸一点,呼应你之前学过的知识点
+
+这个"继承拿实现,接口拿契约"的模式,你其实已经在别的地方见过了——`ReentrantLock.Sync extends AbstractQueuedSynchronizer`,同样是继承 AQS 已经写好的 `park`/`acquire`/队列管理逻辑;而 `ReentrantLock implements Lock` 接口,只是对外暴露 `lock()`/`unlock()` 这几个方法签名。**Java 并发包里几乎所有"重型基础设施类"都是这个套路:靠继承复用一个功能强大的抽象基类(AQS 或 ThreadPoolExecutor),靠实现接口对外提供统一、可替换的类型契约。**
+
+## 面试角度
+
+如果被问到"什么时候用继承,什么时候用接口",一个能体现真实理解、而不是背书的回答是:**"看你是想复用别人已经写好的实现代码,还是只想定义一套行为契约让调用方能面向接口编程。`ScheduledThreadPoolExecutor` 就是个好例子——它继承 `ThreadPoolExecutor` 是因为想直接白嫖那一整套 worker 线程管理逻辑,不用重写;它实现 `ScheduledExecutorService` 是因为需要暴露一套新的、`ThreadPoolExecutor` 原本没有的调度方法签名,让外部代码可以用 `ScheduledExecutorService` 
+这个类型统一引用,不用关心具体实现类是谁。"** 这个回答直接把抽象原则和你正在学的具体源码案例连起来了,比空谈"继承是 is-a,接口是 can-do"更有说服力。
+
+
+让我确认一下 `ThreadPoolTaskScheduler` 的准确声明,避免类比时出错。现在有准确数据了,可以完整对比。两者的继承结构其实是**平行对称**的,唯一实质区别在于"包起来的到底是哪种 JUC 执行器",这个区别恰好对应它们各自要解决的问题(普通异步任务 vs 定时任务)。
+
+## 先看两者的真实声明
+
+```java
+public class ThreadPoolTaskExecutor 
+        extends ExecutorConfigurationSupport
+        implements AsyncTaskExecutor, SchedulingTaskExecutor
+
+public class ThreadPoolTaskScheduler 
+        extends ExecutorConfigurationSupport
+        implements AsyncTaskExecutor, SchedulingTaskExecutor, TaskScheduler
+```
+
+`ThreadPoolTaskScheduler` 内部委托给一个 `ScheduledExecutorService` 实例,默认实现会创建一个 `ScheduledThreadPoolExecutor`,这一点官方文档说得很明确。
+
+## 继承关系:完全一致,同一个父类
+
+两者都 `extends ExecutorConfigurationSupport`——这是 Spring 自己写的抽象基类,负责的是同一套东西:`InitializingBean`/`DisposableBean` 生命周期挂钩(启动时初始化底层 executor、容器关闭时优雅停机)、`BeanNameAware`(线程名前缀)、`ThreadFactory` 定制。这部分**没有任何区别**,是两个类共享的"Spring 管理骨架"。
+
+## 实现接口:`ThreadPoolTaskScheduler` 多实现了一个 `TaskScheduler`
+
+```
+Executor(JDK)
+   ↑
+TaskExecutor(Spring)
+   ↑
+AsyncTaskExecutor(Spring,加submit()返回Future)
+   ↑
+SchedulingTaskExecutor(Spring,加prefersShortLivedTasks())
+```
+
+`ThreadPoolTaskExecutor` 到这里为止;`ThreadPoolTaskScheduler` **额外多实现了一个 `TaskScheduler` 接口**:
+
+```java
+public interface TaskScheduler {
+    ScheduledFuture<?> schedule(Runnable task, Trigger trigger);
+    ScheduledFuture<?> scheduleAtFixedRate(Runnable task, Instant startTime, Duration period);
+    ScheduledFuture<?> scheduleWithFixedDelay(Runnable task, Duration delay);
+    ...
+}
+```
+
+这是"能不能调度延迟/周期任务"这个额外能力在 Spring 类型体系里的契约声明,跟 JDK 里 `ScheduledExecutorService extends ExecutorService` 多出 `schedule()`/`scheduleAtFixedRate()` 是同一个设计意图,只是 Spring 自己又平行做了一套。
+
+## 组合关系:两者都不 extend JUC 的执行器,但包的东西不同
+
+这是最核心的区别,也是两个类真正分工不同的地方:
+
+| | `ThreadPoolTaskExecutor` | `ThreadPoolTaskScheduler` |
+|---|---|---|
+| 内部持有字段 | `private ThreadPoolExecutor threadPoolExecutor` | 内部持有 `ScheduledExecutorService`(默认实现是 `ScheduledThreadPoolExecutor`) |
+| 底层队列 | `LinkedBlockingQueue`(FIFO,或队列容量0时用`SynchronousQueue`) | `DelayedWorkQueue`(堆,按到期时间排序) |
+| 擅长处理 | "现在就执行"的一次性异步任务(`@Async`) | "未来某个时间点/周期性"执行的任务(`@Scheduled`) |
+| 是否支持延迟调度 | 不支持,只有 `execute()`/`submit()` | 支持 `schedule()`/`scheduleAtFixedRate()`/`scheduleWithFixedDelay()` |
+
+## 完整关系图,两者对照着看
+
+```
+ThreadPoolTaskExecutor                       ThreadPoolTaskScheduler
+   extends ExecutorConfigurationSupport          extends ExecutorConfigurationSupport   ← 完全相同的父类
+   implements AsyncTaskExecutor,                 implements AsyncTaskExecutor,
+              SchedulingTaskExecutor                        SchedulingTaskExecutor,
+                                                              TaskScheduler              ← 多一个接口
+   持有 → ThreadPoolExecutor(组合)                持有 → ScheduledExecutorService(组合)(实际类型是 `ScheduledThreadPoolExecutor`)
+              内部队列: LinkedBlockingQueue                    内部队列: DelayedWorkQueue
+              (普通FIFO)                                       (小顶堆,按到期时间排序)
+```
+
+## 为什么要设计成两个平行的类,而不是让 `ThreadPoolTaskScheduler` 直接继承 `ThreadPoolTaskExecutor`
+
+这其实是个值得琢磨的设计决策——表面上看 `ThreadPoolTaskScheduler` 多出的能力(调度)似乎可以在 `ThreadPoolTaskExecutor` 基础上"加"出来,但两者内部持有的**底层执行器类型完全不同**(`ThreadPoolExecutor` vs `ScheduledExecutorService`,这是两个没有继承关系的独立类型体系,虽然 `ScheduledThreadPoolExecutor` 恰好继承自 `ThreadPoolExecutor`,但接口 `ScheduledExecutorService` 和 `ExecutorService` 是平行接口)。用**组合**分别持有各自需要的底层类型,再让两个 Spring 包装类各自平行 extend 同一个生命周期基类、平行 implement 相应的能力接口,比"硬凑一个继承链"更清晰,也符合"每个包装类只暴露它真正支持的方法"这个接口隔离原则——`ThreadPoolTaskExecutor` 用户拿到手的类型里根本看不到 `schedule()` 这种它不支持的方法,不会被误用。
+
+## 一句话总结整个对比
+
+**两者的"Spring 管理骨架"部分(生命周期、命名、异步执行契约)完全共享同一个继承体系;差异只体现在各自组合持有的底层 JUC 执行器不同——一个包普通线程池处理即时任务,一个包定时线程池(内部换用堆结构的队列)处理延迟/周期任务,这个差异直接决定了两者各自能不能调度"未来执行"这件事,也是 `TaskScheduler` 这个额外接口存在的全部意义。**
+
+
+
+[某个外部触发者] 调用 shutdownNow()
+   → ThreadPoolExecutor 内部 interruptWorkers(),遍历所有worker包括正在执行的,
+   （shutdown则会等所有线程执行完任务队列中所有任务，直到任务队列执行完，worker线程getTask时，会直接返回null，而不是正常情况下的进入AQS同步队列排队）
+     无差别调用每个 worker.thread.interrupt()   ← 函数一被调用
+
+[你的 Outbox worker 线程,此刻正卡在 kafkaTemplate.send().get(timeout, ...)]
+   → Future.get() 内部检测到中断,通过 Thread.interrupted() 查到true并清零 ← 函数三
+   → 抛出 InterruptedException,此刻 isInterrupted() 已经是 false 了
+
+[你的 catch 块]
+   → 捕获到 InterruptedException
+   → 手动调用 Thread.currentThread().interrupt()   ← 函数一,自己给自己重新设置标志位
+   → throw new IllegalStateException(...)          ← 方法就此返回(以抛异常的方式)
+
+[外层调用方,比如 drainOutbox() 循环里的 catch (Exception e)]
+   → 捕获到这个 IllegalStateException
+   → 如果这里检查 Thread.currentThread().isInterrupted()  ← 函数二,能读到true,业务代码可以据此break循环（不再发送下一条outbox，提前结束任务）
+   → 如果这里什么都没查,或者查到了什么都不做，那么也可以继续 for 循环处理下一条 outbox 记录
+
+[假设外层循环没检查,继续处理下一条record,任务方法整体结束/50条kafka消息发送完，返回,worker回到线程池]
+   → runWorker() 准备执行下一个任务前,检查是否有遗留的中断标志，Thread.currentThread().isInterrupted()发现是true，则会继续检查线程池状态
+   → 如果线程池并非真的处于STOP状态 → Thread.interrupted() 清空这个遗留标志
+      (你恢复的这个标志位,到这里就被框架"顺手冲掉"了,不是被"响应"了)
+   → 如果线程池确实处于STOP状态 → getTask() 会立刻返回 null,不再取队列中的剩下的任务，然后会执行processWorkerExit退出，线程池的workerCount减去1.
+   workerCount到0时，线程池正式TERMINATED
+
+
+   shutdown() 被调用瞬间:
+  ├─ 线程池状态从 RUNNING 变为 SHUTDOWN
+  ├─ 不再接受新任务提交(execute()会直接抛RejectedExecutionException)
+  ├─ 对"当前空闲、正阻塞在take()里等任务"的worker,调用interruptIdleWorkers()，内部是调用调用 worker.thread.interrupt() 
+  │     → 这一步只是为了让它们从take()的阻塞中醒过来,重新走一遍getTask()的判断逻辑
+  │       (因为队列这时候可能是空的,得让它们有机会检测到"队列空+SHUTDOWN"从而退出;
+  │        但如果队列这时候还有货,它们醒来后会正常取到任务,继续干活,不会真的退出)
+  │
+  └─ 对"正在执行任务"的worker → 完全不受影响,继续跑完手头这个任务,
+        跑完后按runWorker的正常循环,回去调getTask()取下一个任务
+        (只要队列没空,一样能取到,继续执行,直到队列空了才退出)
+
+最终:
+  所有worker(不管原本是空闲还是忙碌)都会持续从队列里取任务、执行,
+  直到队列彻底清空 → getTask()返回null → 所有worker陆续退出 → workerCount归零 → TERMINATED
+
+
+  private void interruptIdleWorkers(boolean onlyOne) {
+    for (Worker w : workers) {
+        Thread t = w.thread;
+        if (!t.isInterrupted() && w.tryLock()) {   // 关键:tryLock()
+            try {
+                t.interrupt();
+            } finally {
+                w.unlock();
+            }
+        }
+    }
+}
+w.tryLock() 这一步是精髓所在——runWorker() 在执行 task.run() 期间,会先 w.lock() 占住这把锁,直到任务跑完才 unlock()。所以:如果这个 worker 正忙着跑任务,tryLock() 会失败,
+直接跳过、不去中断它;只有真正空闲(锁没被占)的 worker,才会被这里中断——这正是我们之前讲的"shutdown() 不会打断正在跑的任务"的具体实现依据。
+
+
+第二个问题:shutdownNow() 完整过程
+
+三步走,加锁保护后依次执行:
+
+java
+public List<Runnable> shutdownNow() {
+    List<Runnable> tasks;
+    mainLock.lock();
+    try {
+        checkShutdownAccess();
+        advanceRunState(STOP);      // ① 状态推进到 STOP
+        interruptWorkers();         // ② 无差别中断所有worker
+        tasks = drainQueue();       // ③ 把队列里剩下的任务全部掏出来,不会再被执行
+    } finally {
+        mainLock.unlock();
+    }
+    tryTerminate();
+    return tasks;   // 返回这些"来不及跑就被抛弃"的任务,交给调用方自己处理
+}
+
+第②步是和 shutdown() 最关键的区别所在:
+
+java
+private void interruptWorkers() {
+    for (Worker w : workers)
+        w.interruptIfStarted();   // 不检查tryLock,不分忙碌还是空闲,统统中断
+}
+
+方法注释原话是中断所有线程,即使它们正在运行——即使部分线程可能因为安全异常而没能真正被中断,这里完全不检查 worker 是否忙碌,只要这个 worker 线程已经启动(state >= 0),就直接调 interrupt()。这跟 interruptIdleWorkers() 那种"先 tryLock、忙的就跳过"的克制做法完全不同——shutdownNow() 是真正意义上的"不管你在干什么,先给你发一个中断信号再说"。 
+Echo Blog
+
+第③步 drainQueue(),把 workQueue 里所有还没开始执行的任务原样取出,组装成一个 List<Runnable> 作为 shutdownNow() 的返回值——这些任务永远不会被执行,原因很简单:队列都被清空了,getTask() 自然也拿不到它们了。
+
+两者的关键差异,汇总对比
+	shutdown()	shutdownNow()
+状态推进到	SHUTDOWN	STOP
+中断谁	只中断能拿到锁的(即空闲)worker	无差别中断所有 worker,不管忙不忙
+队列里剩余任务	保留,会被继续正常执行	立刻清空丢弃,通过返回值交还调用方
+正在跑的任务	完全不受打扰,正常跑完	收到中断信号,但能不能真的停下来,取决于任务代码自己响不响应
