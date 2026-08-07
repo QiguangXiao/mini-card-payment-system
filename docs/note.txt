@@ -1228,3 +1228,467 @@ Echo Blog
 中断谁	只中断能拿到锁的(即空闲)worker	无差别中断所有 worker,不管忙不忙
 队列里剩余任务	保留,会被继续正常执行	立刻清空丢弃,通过返回值交还调用方
 正在跑的任务	完全不受打扰,正常跑完	收到中断信号,但能不能真的停下来,取决于任务代码自己响不响应
+
+
+
+
+
+## 1. 是的，一行一次
+
+Handler API 的粒度就是"给我下一条"。`ha_index_next()` 一次调用返回一条记录，这是火山模型（迭代器模型）的标准形态，MySQL 8.0.20 之后的新执行器也还是这个语义。
+
+但**"一行一次"不等于"每行都很贵"**，关键在于代价分布：
+
+- **定位**：`ha_index_read_map()` 时从根节点走一次 B+ 树 —— 只做一次
+- **推进**：InnoDB 内部持有一个持久化游标（`btr_pcur_t`）停在当前记录上。`index_next` 在页内就是移动一下指针；跨页时顺着叶子节点的双向链表走到下一页。**全程不重新从根节点遍历**
+- **回表**：每次都要在聚簇索引上**从根节点完整走一遍** —— 这才是真正贵的部分
+
+所以一次 `index_next` 的成本，可能只有一次回表的几十分之一。这也是为什么 ICP 省回表的价值远大于省跨层调用。
+
+这个模型有个直接可观察的证据：**`LIMIT 20` 为什么能提前结束**。正因为是一行一行拉的，Server 层拿够 20 行就不再调 `index_next` 了，引擎那边的扫描当场停住。如果是批量返回，就不可能有这种早停。
+
+（反过来，`ORDER BY` 需要 filesort、或者有聚合时，Server 必须把符合条件的行全部拉完才能出结果，早停就不成立了。）
+
+一个例外值得知道：**MRR（Multi-Range Read）**，Extra 里显示 `Using MRR`。它会先攒一批二级索引拿到的主键，按主键排序后再批量回表，把随机 I/O 转成接近顺序的 I/O。这是对纯粹逐行模型的一个优化，但默认场景下用得不多。
+
+## 2. 不等价，而且两者可以同时出现
+
+`Using where` 的含义只有一个：**引擎返回行之后，Server 层还要再判断一次**。它和 ICP 不是互斥关系。
+
+| 场景 | Extra |
+|---|---|
+| 条件全部被索引访问消化 | 空 |
+| 残留条件的列**不在**索引里 | `Using where` |
+| 残留条件的列**在**索引里，且需要回表 | `Using index condition` |
+| ICP 处理了一部分，还有列不在索引里 | `Using index condition; Using where` |
+| 覆盖索引 + 残留条件 | `Using index; Using where` |
+| 全表扫描 + 任何 WHERE | `ALL` + `Using where` |
+
+第四行是你问题的直接答案：**ICP 和 Using where 常常一起出现**。
+
+第五行也值得留意——覆盖索引时不触发 ICP，因为 ICP 的收益定义就是"省回表"，而覆盖索引本来就不回表，没得省。所以此时残留条件退回 Server 层判断，显示 `Using index; Using where`。
+
+反方向也不成立：没有 ICP **不一定**有 `Using where`。如果所有条件都被索引范围访问吃掉了，`Extra` 就是空的。
+
+## 3. `Using where` 指哪个 WHERE
+
+它不指某一句，指的是**优化器把 WHERE 拆分后剩下的那部分**。
+
+优化器会把整个 WHERE 条件切成三份：
+
+```sql
+-- 索引: (user_id, created_at, channel)
+SELECT order_id, amount FROM payment_order
+WHERE user_id = 1001                                   -- ①
+  AND created_at BETWEEN '2026-07-01' AND '2026-07-31' -- ①
+  AND channel = 'CREDIT_CARD'                          -- ②
+  AND remark LIKE '%urgent%'                           -- ③
+```
+
+- **① 索引访问条件**：用来确定 B+ 树的扫描区间，体现在 `key_len` 和 `rows` 上，`Extra` 里不显示
+- **② 下推条件（ICP）**：列在索引中但不能用于定位 → `Using index condition`
+- **③ 残留条件**：`remark` 不在索引里，只能回表拿到整行后在 Server 层判断 → **`Using where` 指的就是这一句**
+
+最终 `Extra: Using index condition; Using where`。
+
+如果把索引换成 `(user_id, created_at)`，那 `channel` 也没法下推了，②③ 合并进第三档，变成只有 `Using where`。**同一条 SQL，同一个 WHERE，索引一变，各个子条件的归属就变了** —— 这就是为什么 `Using where` 没法对应到固定的某一句。
+
+## 想精确看到拆分结果
+
+`EXPLAIN FORMAT=JSON` 会把三份分别列出来：
+
+```json
+"index_condition": "channel = 'CREDIT_CARD'",
+"attached_condition": "remark like '%urgent%'"
+```
+
+- `index_condition` → 下推到引擎层的部分
+- `attached_condition` → Server 层过滤的部分
+
+比对着传统 `EXPLAIN` 猜准确得多。调索引的时候用这个来验证"我以为下推了的条件到底下推了没有"，非常实用。
+
+---
+
+**范围提示**：到 `EXPLAIN FORMAT=JSON` 看条件拆分为止，都还在后端五年经验的合理范围内，答出来是加分项。再往下的持久化游标实现、MRR 的 buffer 大小调优、优化器 cost model 怎么决定用不用 MRR，就属于 DBA/内核方向了，面试不会问，别花时间。
+
+
+
+
+
+先说一个诊断:**这不是 SQL 没学好,是两块不同的肌肉。** 你对索引、执行计划、引擎分层的理解已经超过很多五年经验的人,但"需求 → SQL"是独立的一项技能,靠读原理是长不出来的。而且日系面试里,现场让你写一条业务 SQL 的概率,**比问你 ICP 的概率高得多**,所以这块值得补。
+
+问题的根源通常是同一个:**你在按 SQL 的书写顺序思考。** 从 `SELECT` 开始想"我要哪些列",但 `SELECT` 恰恰是逻辑上倒数第三步才决定的东西。开头就走错了方向,后面自然卡住。
+
+---
+
+# 一、最核心的那个问题:一行代表什么
+
+**90% 的卡壳,本质是"粒度"没想清楚。**
+
+在动手之前,先用自然语言回答一句话:
+
+> **"我的结果里,每一行代表一个什么?"**
+
+- 每一行代表**一个订单** → 不需要 `GROUP BY`
+- 每一行代表**一个用户** → 需要 `GROUP BY user_id`
+- 每一行代表**一个用户的一天** → 需要 `GROUP BY user_id, DATE(created_at)`
+- 每一行代表**一个用户,但要带出订单明细** → 粒度冲突,需要窗口函数
+
+这个问题回答清楚了,SQL 的骨架就定了一大半。**回答不清楚就动手,写出来的一定是乱的。**
+
+---
+
+# 二、五步法,按执行顺序想,不按书写顺序
+
+固定按这个顺序自问,每一步只回答一个问题:
+
+| 步骤 | 自问 | 对应子句 |
+|---|---|---|
+| 1 | **结果里一行代表什么?** | 决定要不要 GROUP BY |
+| 2 | 数据从哪几张表来?怎么关联? | `FROM` / `JOIN` |
+| 3 | 哪些**行**不要? | `WHERE` |
+| 4 | 要不要把多行压成一行? | `GROUP BY` |
+| 5 | 压完之后还要按结果筛吗? | `HAVING` |
+| 6 | 最后展示哪些列? | `SELECT` |
+| 7 | 怎么排、要几条? | `ORDER BY` / `LIMIT` |
+
+**关键是第 1 步先做,第 6 步最后做。** 大多数人反过来,所以乱。
+
+---
+
+# 三、关键词映射表——这个最实用,建议背下来
+
+自然语言里有些词是**结构信号**,看到就知道该用什么:
+
+| 自然语言里的词 | 对应结构 |
+|---|---|
+| **每个 / 各个 / 按...分** | `GROUP BY` |
+| **总共 / 一共 / 全部的** | 聚合函数,**不要** `GROUP BY` |
+| **有...的** | `EXISTS` 或 `JOIN` |
+| **没有...的 / 缺失的** | `LEFT JOIN ... WHERE 右表主键 IS NULL` |
+| **最...的那一条**(还要明细) | 窗口函数 `ROW_NUMBER()` |
+| **最...的那个值**(只要数值) | `MAX()` / `MIN()` |
+| **前 N 名** | `ORDER BY ... LIMIT N` |
+| **每个 X 的前 N 名** | 窗口函数(`GROUP BY` 做不到) |
+| **占比 / 率 / 其中...的数量** | 条件聚合 `SUM(CASE WHEN ...)` |
+| **超过 / 少于**(针对统计值) | `HAVING` |
+| **超过 / 少于**(针对单行的值) | `WHERE` |
+| **和上一笔比 / 环比** | `LAG()` |
+| **累计 / running** | `SUM() OVER (ORDER BY ...)` |
+
+**"每个"和"总共"这一对最值得盯**——它们直接决定有没有 `GROUP BY`,而这是初学者最常搞混的地方。
+
+---
+
+# 四、三个例子,从简单到复杂,全程用同一套方法
+
+## 例 1:"查一下上个月成功的订单里,金额超过一万的"
+
+```
+第1步 一行代表什么? → 一个订单。不需要 GROUP BY ✅ 骨架定了
+第2步 几张表? → 一张,payment_order
+第3步 哪些行不要? → 上月之外的、非成功的、金额不足的
+第6步 展示什么? → 订单信息
+```
+
+```sql
+SELECT order_no, user_id, amount, created_at
+FROM payment_order
+WHERE created_at >= '2026-06-01' AND created_at < '2026-07-01'
+  AND status = 1
+  AND amount > 10000;
+```
+
+**注意第 3 步里三个条件是并列的,不用纠结顺序。** 时间条件写成范围而不是 `MONTH(created_at)=6`,是因为前面讲过的"列上不能套函数"。
+
+## 例 2:"统计每个用户上个月的消费总额,只要超过十万的"
+
+```
+第1步 一行代表什么? → 一个用户 → 需要 GROUP BY user_id ✅
+第3步 哪些行不要? → 上月之外、非成功的       ← 这是对"行"的过滤
+第4步 压成一行? → 是,按 user_id
+第5步 压完还要筛? → 要,总额超10万           ← 这是对"组"的过滤,所以 HAVING
+第6步 展示什么? → user_id + 总额
+```
+
+```sql
+SELECT user_id, SUM(amount) AS total
+FROM payment_order
+WHERE created_at >= '2026-06-01' AND created_at < '2026-07-01'
+  AND status = 1
+GROUP BY user_id
+HAVING total > 100000;
+```
+
+**"超过十万"为什么是 HAVING 不是 WHERE?** 因为它针对的是**算出来的总额**,而不是某一行的金额。第 3 步和第 5 步的区分,就是 WHERE 和 HAVING 的区分——**看这个条件是在"压缩前"还是"压缩后"才成立**。
+
+## 例 3:"每个用户最近一笔订单的订单号和金额"
+
+```
+第1步 一行代表什么? → 一个用户
+      但我要 order_no 和 amount → 这是订单的属性,不是用户的属性
+      → 粒度冲突! 用户级的行放不下订单级的列
+      → 这个信号说明:不能用 GROUP BY,要用窗口函数 ✅
+```
+
+**第 1 步就把方案定下来了**,这就是先想粒度的价值。
+
+```
+关键词"最近一笔"→ 排名 → ROW_NUMBER()
+按什么分组排名? → 每个用户 → PARTITION BY user_id
+按什么排序?     → 最近 → ORDER BY created_at DESC
+```
+
+```sql
+SELECT * FROM (
+    SELECT user_id, order_no, amount, created_at,
+           ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+    FROM payment_order
+    WHERE status = 1
+) t
+WHERE rn = 1;
+```
+
+外面套一层,是因为窗口函数执行在 `WHERE` 之后,`rn` 只能在外层过滤——前面讲过的执行顺序,在这里变成了写法上的硬性要求。
+
+---
+
+# 五、写复杂 SQL 的习惯:从小到大,每步都跑
+
+卡住的人往往想一次性写完整条。正确做法是**分层加,每加一层跑一次**:
+
+```sql
+-- 第1步:先确认表和数据长什么样
+SELECT * FROM payment_order LIMIT 10;
+
+-- 第2步:加过滤,看行数对不对
+SELECT COUNT(*) FROM payment_order
+WHERE created_at >= '2026-06-01' AND status = 1;
+
+-- 第3步:加分组,看结果形状对不对
+SELECT user_id, SUM(amount) FROM payment_order
+WHERE ... GROUP BY user_id LIMIT 10;
+
+-- 第4步:加 HAVING、排序、最终列
+```
+
+**每一步都是可运行的,错了立刻知道错在哪一层。** 一次写 30 行然后报错,你根本不知道问题在哪。
+
+多表 JOIN 也一样:先写 `A JOIN B` 看行数,再加 C。**行数突然暴涨,说明关联关系是 1:N,你的聚合马上就要算错了**——这个检查能救掉很多财务数字错误。
+
+---
+
+# 六、一个自查清单
+
+写完之后过一遍:
+
+- [ ] 我的结果里一行代表什么?和需求一致吗?
+- [ ] `GROUP BY` 之后,`SELECT` 里是不是只有分组列和聚合函数?
+- [ ] 有 `LEFT JOIN` 的话,`WHERE` 里有没有写右表的条件?(会退化成 INNER)
+- [ ] `JOIN` 之后行数变多了吗?会不会导致重复计算?
+- [ ] 有没有 `NULL` 参与等值判断?
+- [ ] 聚合结果可能是 `NULL` 吗?要不要 `IFNULL(..., 0)`?
+
+---
+
+# 一句话方法论
+
+> **先回答"一行代表什么",再按 FROM → WHERE → GROUP BY → HAVING → SELECT 的顺序一层层加,每加一层跑一次。永远不要从 SELECT 开始想。**
+
+---
+
+练习建议很具体:**拿 minicard 的表,给自己出 10 道自然语言题**(日报、TOP10、找异常单、对账差异、每人最近一笔……),每道都强制先写下"一行代表什么"再动手。做完 10 道,这个转换基本就顺了——**这纯粹是熟练度问题,不是天赋问题**,而且比你再往深挖 MySQL 内核的性价比高得多。
+
+
+
+# 最小形态:两个关键词就够
+
+```sql
+函数名() OVER ()
+```
+
+只有两样东西:**一个函数** + **`OVER` 关键字**。`OVER` 就是在说"这不是普通函数,是窗口函数",括号里定义窗口范围——**空着就表示整个结果集是一个窗口**。
+
+```sql
+SELECT order_no, amount,
+       SUM(amount) OVER () AS 全部总额
+FROM payment_order;
+```
+
+结果:
+
+```
+order_no | amount | 全部总额
+A001     |   100  |  600
+A002     |   200  |  600
+A003     |   300  |  600
+```
+
+**每行都保留着,同时每行都多了一个"全体总额"。** 这就是窗口函数的全部意义——`GROUP BY` 会把三行压成一行,窗口函数不压,只是给每行贴上一个统计值。
+
+**记住这个形状:`函数() OVER ()`,后面所有内容都是往那个空括号里加东西。**
+
+---
+
+# 加第一个东西:PARTITION BY(分组)
+
+```sql
+函数() OVER (PARTITION BY 列)
+```
+
+把"整个结果集是一个窗口"改成"按某列切成多个窗口":
+
+```sql
+SELECT user_id, order_no, amount,
+       SUM(amount) OVER (PARTITION BY user_id) AS 该用户总额
+FROM payment_order;
+```
+
+```
+user_id | order_no | amount | 该用户总额
+1001    | A001     |   100  |  300      ← 1001 的窗口
+1001    | A002     |   200  |  300      ←
+1002    | A003     |   300  |  700      ← 1002 的窗口
+1002    | A004     |   400  |  700      ←
+```
+
+**`PARTITION BY` 和 `GROUP BY` 的分组逻辑完全一样,区别只在于分完之后压不压行。**
+
+---
+
+# 加第二个东西:ORDER BY(窗口内排序)
+
+```sql
+函数() OVER (PARTITION BY 列 ORDER BY 列)
+```
+
+注意这个 `ORDER BY` 在 **`OVER` 的括号里**,和 SQL 末尾那个 `ORDER BY` 是两回事:
+
+- 括号里的:决定**窗口内部怎么排**,影响计算结果
+- 末尾的:决定**最终结果怎么显示**,不影响计算
+
+```sql
+SELECT user_id, order_no, amount, created_at,
+       ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+FROM payment_order;
+```
+
+```
+user_id | order_no | created_at | rn
+1001    | A005     | 07-28      | 1     ← 1001 里最新的
+1001    | A002     | 07-20      | 2
+1001    | A001     | 07-15      | 3
+1002    | A004     | 07-27      | 1     ← 换了 user_id,编号重新从 1 开始
+1002    | A003     | 07-10      | 2
+```
+
+**排名类函数必须配 `ORDER BY`**,不然"排第几"没有意义。
+
+---
+
+# 语法就这三块,拼起来
+
+```sql
+函数() OVER (
+    PARTITION BY 分组列     -- 可选,不写就是整个结果集一个窗口
+    ORDER BY 排序列         -- 可选,但排名函数必须写
+)
+```
+
+**关键词只有三个:`OVER`、`PARTITION BY`、`ORDER BY`。** 其中只有 `OVER` 是必须的。
+
+---
+
+# 函数分两类,行为不一样
+
+## 第一类:排名函数(专属于窗口函数)
+
+```sql
+ROW_NUMBER()   -- 1,2,3,4     强制不重复
+RANK()         -- 1,1,3,4     并列后跳号
+DENSE_RANK()   -- 1,1,2,3     并列后不跳号
+```
+
+这三个不接受参数,括号永远是空的。用途在前面讲过,不重复了。
+
+## 第二类:聚合函数(和 GROUP BY 里的是同一批)
+
+```sql
+SUM() / COUNT() / AVG() / MAX() / MIN()
+```
+
+**这类函数有个坑:加不加 `ORDER BY`,结果完全不同。**
+
+```sql
+-- 不加 ORDER BY → 整个分区求和
+SUM(amount) OVER (PARTITION BY user_id)                        -- 300, 300, 300
+
+-- 加了 ORDER BY → 变成累计(从第一行累加到当前行)
+SUM(amount) OVER (PARTITION BY user_id ORDER BY created_at)    -- 100, 300, 600
+```
+
+```
+order_no | amount | 不加ORDER BY | 加了ORDER BY
+A001     |   100  |     600      |   100
+A002     |   200  |     600      |   300   ← 100+200
+A003     |   300  |     600      |   600   ← 100+200+300
+```
+
+**为什么会这样**:`ORDER BY` 一旦出现,窗口的默认范围就从"整个分区"变成了"分区开头 → 当前行"。这是 SQL 标准规定的默认行为,不是 MySQL 的特殊设计。
+
+**这个默认行为不是坑,是特性**——"累计流水"这个需求就是靠它实现的,余额表、累计消费额都用这个。但如果你想要的是"整组总和"却手滑加了 `ORDER BY`,数字就全错了,而且**不报错**,很难发现。
+
+---
+
+# 三个必会的模式
+
+到这里语法已经讲完了,剩下的是套路。这三个覆盖生产里绝大多数场景:
+
+```sql
+-- 1. 每组取第一名(必须套一层子查询)
+SELECT * FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+    FROM payment_order
+) t WHERE rn = 1;
+
+-- 2. 累计求和
+SELECT order_no, amount,
+       SUM(amount) OVER (PARTITION BY user_id ORDER BY created_at) AS 累计
+FROM payment_order;
+
+-- 3. 和上一行比(环比)
+SELECT order_no, amount,
+       LAG(amount) OVER (PARTITION BY user_id ORDER BY created_at) AS 上一笔,
+       amount - LAG(amount) OVER (PARTITION BY user_id ORDER BY created_at) AS 差额
+FROM payment_order;
+```
+
+`LAG(列)` 取上一行的值,`LEAD(列)` 取下一行,第一行没有上一行时返回 `NULL`。
+
+---
+
+# 两个写法上的注意点
+
+**1. 窗口函数不能出现在 `WHERE` / `HAVING` 里**,只能在 `SELECT` 和末尾的 `ORDER BY` 里。想用它的结果过滤,必须套一层子查询——前面讲过原因(执行顺序在 HAVING 之后)。
+
+**2. 同一个窗口重复写多次时,可以用 `WINDOW` 子句抽出来**:
+
+```sql
+SELECT order_no,
+       ROW_NUMBER() OVER w AS rn,
+       SUM(amount)  OVER w AS 累计
+FROM payment_order
+WINDOW w AS (PARTITION BY user_id ORDER BY created_at);
+```
+
+不是必须的,但上面那个 `LAG` 写了两遍的例子,用这个会干净很多。
+
+---
+
+# 一句话总结
+
+> 窗口函数的语法核心就是 `函数() OVER (PARTITION BY ... ORDER BY ...)`,三个关键词里只有 `OVER` 必须写。`PARTITION BY` 相当于 `GROUP BY` 的分组,`ORDER BY` 决定窗口内的顺序。排名函数必须配 `ORDER BY`;聚合函数加不加 `ORDER BY` 结果完全不同——不加是整组求和,加了是累计到当前行。
+
+---
+
+建议现在就在 minicard 上跑一遍:**同一条 SQL 写两列,一列 `SUM(amount) OVER (PARTITION BY user_id)`,一列加上 `ORDER BY created_at`**,亲眼看一次两列数字的差别。这个对比一旦看过,那个"默认窗口范围"的规则你就再也不会忘了。
