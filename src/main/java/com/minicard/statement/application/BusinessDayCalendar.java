@@ -11,7 +11,7 @@ import java.time.LocalDate;
  * <p>Statement batch 只依赖这个接口，不直接写节假日规则。当前实现
  * {@link ConfiguredBusinessDayCalendar} 把 weekend + 配置的祝日マスター（holiday master）
  * 当成非营业日；未来换成银行提供的日历接口或 DB 表时，只需要替换实现 bean，
- * {@link StatementCycleService} 的账期逻辑一行都不用改。</p>
+ * {@link StatementBatchService} 的账期逻辑一行都不用改。</p>
  */
 public interface BusinessDayCalendar {
 

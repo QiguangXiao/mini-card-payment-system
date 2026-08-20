@@ -156,11 +156,10 @@ mini-card JVM
 | --- | --- | --- | --- | --- |
 | `outboxTaskScheduler` | `outbox-scheduler-` | 1 | `OutboxPoller.poll` / `OutboxRecoverer.recover` | 1s / 5s |
 | `delayJobTaskScheduler` | `delay-job-scheduler-` | 2 | `DelayJobPoller.poll` / `DelayJobRecoverer.recover` | 1s / 5s |
-| `billingCycleTaskScheduler` | `billing-cycle-scheduler-` | 1 | `BillingCycleScheduler`（每天触发 reconciliation 心跳，`StatementCycleService` 补建缺失 close cycle 的分片 job） | daily cron(JST) |
-| `statementJobTaskScheduler` | `statement-job-scheduler-` | 2 | `StatementJobDispatcher` 的 claim / recover | 1s / 10s |
+| `billingCycleTaskScheduler` | `billing-cycle-scheduler-` | 1 | `BillingCycleScheduler` → `StatementBatchService.run()`（**例外：出账循环直接跑在 scheduler 线程上**，见下） | daily cron(JST) |
 | `notificationDeliveryTaskScheduler` | `notif-delivery-scheduler-` | 2 | 通知投递 poll / recover | 见投递文档 |
 
-> 设计原则：**`@Scheduled` thread 只周期性醒来、短事务 claim、提交 worker；长业务交给 worker pool**。好处：scheduler 不被 Kafka ack/银行扣款/业务 row lock 长时间占住；claim 事务短，减少 DB lock 持有；worker 宕机可经 PROCESSING lease recover；线程名清晰。outbox pool=1（poller 与 recoverer 不并发，发布也偏轻）；delay/statement pool=2（poll 与 recover 可并行）。**若看到 `*-scheduler-*` 长时间卡 JDBC 栈，先查 claim/recover SQL、索引、DB 锁，不要先加线程数**。
+> 设计原则：**`@Scheduled` thread 只周期性醒来、短事务 claim、提交 worker；长业务交给 worker pool**。好处：scheduler 不被 Kafka ack/银行扣款/业务 row lock 长时间占住；claim 事务短，减少 DB lock 持有；worker 宕机可经 PROCESSING lease recover；线程名清晰。outbox pool=1（poller 与 recoverer 不并发，发布也偏轻）；delay pool=2（poll 与 recover 可并行）。**唯一的例外是出账 batch**：它每月才有一次真正的工作量，单线程跑完即可，所以没有单独的 worker 池——代价是这一次 tick 会长时间占住 `billing-cycle-scheduler-1`，但该 scheduler 上没有别的任务。**若看到 `*-scheduler-*` 长时间卡 JDBC 栈，先查 claim/recover SQL、索引、DB 锁，不要先加线程数**。
 
 > 注意：statement 现在是 **claimable job**（cron planner 建分片 → dispatcher claim → `statement-job-worker-*` 逐账户小事务出账），不再是旧的"单 scheduler 60s 扫描全部账户"。分片/扇出/账户级故障隔离见 `claimable-jobs-cn.md`。
 
@@ -300,7 +299,7 @@ rg 'http-nio|outbox-|delay-job-|billing-cycle|statement-job|notif-delivery|kafka
 
 **为什么 `RUNNABLE` 不等于吃 CPU / 为什么 row lock 不显示 `BLOCKED`**：JDBC socket read、native network I/O 在 Java 层也是 `RUNNABLE`；Java `BLOCKED` 专指等 Java monitor，MySQL row lock 在 DB 内部，线程在 JDBC/socket 栈等结果。排 row lock 结合 MySQL lock wait/slow query/Hikari pending。
 
-**为什么 `@Scheduled` 不直接处理所有任务**：scheduler thread 应短小稳定；Outbox/DelayJob/StatementJob 先短事务 claim 成 PROCESSING lease，commit 后交 worker pool；Kafka ack/业务 row lock/银行扣款这些慢动作在 worker；worker 挂有 lease recoverer，queue 满 retry/DEAD，不让 scheduler 卡死或堆 heap。
+**为什么 `@Scheduled` 不直接处理所有任务**：scheduler thread 应短小稳定；Outbox/DelayJob/NotificationDelivery 先短事务 claim 成 PROCESSING lease，commit 后交 worker pool；Kafka ack/业务 row lock/银行扣款这些慢动作在 worker；worker 挂有 lease recoverer，queue 满 retry/DEAD，不让 scheduler 卡死或堆 heap。
 
 **Outbox worker 和 DelayJob worker 区别**：Outbox worker 主要等 Kafka broker ack 再 finalize；DelayJob worker 进入具体业务 service 和业务表 row lock（如授权过期释放额度、自动还款）。都是 bounded pool，但风险不同（Kafka ack/backlog vs 业务锁/retry/DEAD）。
 

@@ -4,8 +4,8 @@
 > `remaining-domain-roadmap-cn.md`（剩余领域学习路线图）。合并时把两者重复的 "Ledger vs Reconciliation 区别" 与
 > "后续领域优先级" 统一讲一次，并**对齐代码**：旧文档把账单批处理描述成 `StatementBatchPoller`/
 > `StatementBatchService`/`StatementService.generate`，但 PR #1 已改成 claimable job
-> （`BillingCycleScheduler` → `StatementCycleService` → `StatementJobDispatcher` →
-> `StatementJobHandler` → `StatementGenerationService`）。原两份已归档在 `docs/archive/`。
+> （`BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService`）。
+> 原两份已归档在 `docs/archive/`。
 > 从 HTTP 到锁/状态的逐请求细节见 `domain-state-flow-cn.md`；实现走读见 `implementation-walkthrough`。
 
 > 关键词：发卡方, 授权, 入账, 账单, 还款, 退款, 冲正, 争议, 账本, 对账, issuer, authorization,
@@ -76,8 +76,9 @@ CardTransaction PENDING → POSTED   （授权 hold 变成正式交易，可进�
 
 - 不是外部实时请求，而是周期性批处理。当前产品级固定日期：**每月月末关账，次日由 `BillingCycleScheduler`（每天 JST cron）触发 reconciliation 心跳，补建缺失的出账分片；次月 27 日为扣款基准日；27 日非日本营业日则按 `ConfiguredBusinessDayCalendar`（周末 + 配置的祝日マスター `statement.batch.bank-holidays`）顺延到下一营业日**。
 - 当前实现（claimable job，详见 `claimable-jobs-cn.md`）：
-  - `BillingCycleScheduler` 每天 cron 触发 → `StatementCycleService` 扫描最近已过去的 close cycles，缺失周期才计算 billing cycle（period/dueDate）、按账户数算 shardCount、`INSERT IGNORE` 建分片 `statement_jobs`。
-  - `StatementJobDispatcher` claim 分片 → `StatementJobHandler` 取本片账户 → 逐账户调 `StatementGenerationService.generate(...)`（**每账户独立小事务**），按 billing cycle 汇总未出账的 `POSTED` 交易。
+  - `BillingCycleScheduler` 每天 cron 触发 → `StatementBatchService` 推导刚结束的自然月账期和扣款日，列出本账期仍有 `POSTED + UNBILLED` 交易的账户。
+  - 逐账户调 `StatementGenerationService.generate(...)`（**每账户独立小事务**），汇总该账户本期未出账的 `POSTED` 交易。
+  - 生产落差：真实発卡行的 締め処理 跑在独立批处理系统上（JP1/A-AUTO 编排 ジョブネット、Spring Batch、Step Functions），不是应用内 `@Scheduled`；本项目刻意只保留最小触发器，规模化设计记录见 `claimable-jobs-cn.md` §4。
   - `statements` 存账单汇总，`statement_lines` 存交易快照；`card_transactions.statement_id` 标记交易已进入哪期账单（防重复出账）。
   - 同事务写 `AUTO_REPAYMENT` DelayJob 计划 dueDate 自动扣款；Statement 不再重复发布 Kafka 通知事件，Outbox/Inbox 学习由 Authorization 与 CardTransaction 两条主线承担。
 

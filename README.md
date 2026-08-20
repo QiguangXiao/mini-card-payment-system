@@ -45,11 +45,11 @@ reference, partition ordering, the group-routed DLT, the real gaps (retention, D
 observability, version negotiation), and hardcore interview Q&A. (Merged from the
 former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
 notes, now archived under docs/archive/.)
-See [Claimable Jobs (DelayJob / Outbox / StatementJob)](docs/claimable-jobs-cn.md)
+See [Claimable Jobs (DelayJob / Outbox)](docs/claimable-jobs-cn.md)
 for the three database-backed job families: the shared claim-lease-recover model
 and seven invariants, the per-family details (4-class framework vs 1-class
 dispatcher, single vs multi-column lease, backoff vs none, sharded fan-out), the
-master comparison table, the StatementJob flatten (parent-batch removal) with its
+master comparison table, the removed StatementJob sharded batch kept as a design record (why a third copy of the same claim-lease-recover skeleton was deleted) with its
 data model and per-account fault isolation, the scheduler-vs-worker pool platform
 resources, the real gaps (DEAD observability, completed-row retention), and Q&A.
 (Merged from the former async-workflows-comparison, statement-job-design, and

@@ -56,7 +56,7 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 高并发时形成环路等待"。这说明锁顺序是设计约束，不是巧合——面试官用这个区分
 "背过死锁定义"和"推理过死锁"。
 
-### 1.3 可认领任务框架（DelayJob / Outbox / StatementJob 三族同构）
+### 1.3 可认领任务框架（DelayJob / Outbox 同构；StatementJob 曾是第三族，已移除）
 
 统一的 claim–work–finalize–recover 生命周期：
 
@@ -317,10 +317,15 @@ T4  DelayJob 按 retry policy 重试：
 **修复后的面试价值**：这是"我在自查中发现了资金级竞态并修复"的最佳故事，
 能部分对冲缺支付生产经验的背景短板。
 
-### 6.3 账单批处理失败缺少运维闭环 — 严重度 Medium
+### 6.3 账单批处理失败缺少运维闭环 — 严重度 Medium（**已随分片实现移除而消解，但换了一种形态**）
 
-StatementJob 重试耗尽后会进入 DEAD，但当前仍缺少 DEAD 计数告警和受控 replay 工具。
-修复：DEAD 计数 gauge + 告警 + runbook（DEAD→PENDING 重放安全性论证见 §5-Q9）。
+原问题：StatementJob 重试耗尽后进入 DEAD，缺 DEAD 计数告警和受控 replay 工具。
+
+> **后续（2026-08）**：statement 分片 job 已删除，出账改成每日 `StatementBatchService` 逐账户循环，
+> 所以不再有 DEAD 分片。新形态下的等价缺口是：**失败账户只有日志，没有指标**——
+> 一个账户连续 30 天出不了账，除非有人翻日志否则看不见。
+> 修复方向也随之变化：给 `statement_batch_done` 的 `failed` 计数打 metric + 告警，
+> 而不是做 DEAD replay 工具。DEAD 可观测性对 `delay_jobs` / `outbox_events` 仍然成立（见 §5-Q9）。
 
 ### 6.4 高流量主张缺证据 — 严重度 Medium（背景相关）
 

@@ -33,7 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>流程总览（mini trace，全部在一个 DB transaction 内；编号对应方法内的"阶段/创建阶段"注释。
  * 锁顺序：credit account 先于待出账交易，和 posting 一致）：</p>
  * <pre>
- * StatementJobHandler 对单个 (account, cycle) 调用 generate
+ * StatementBatchService 对单个 (account, cycle) 调用 generate
  * 1. SELECT credit_account FOR UPDATE（与 posting 共用的并发门）
  * 2. SELECT statement by (account, periodStart, periodEnd) FOR UPDATE；
  *    已存在: 直接返回幂等结果，不再扫交易

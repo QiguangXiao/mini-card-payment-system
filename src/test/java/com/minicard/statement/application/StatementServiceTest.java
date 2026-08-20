@@ -149,10 +149,7 @@ class StatementGenerationServiceTest {
 
     private StatementProperties statementProperties() {
         return new StatementProperties(
-                new StatementProperties.Batch(
-                        true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 2, 1000, Set.of()
-                ),
-                new StatementProperties.Jobs(true, 1000, 10000, 10, 3, 300, 4, 20),
+                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 27, Set.of()),
                 new StatementProperties.Policy(
                         new BigDecimal("0.10"),
                         Map.of("JPY", new BigDecimal("1000.00"))

@@ -1,47 +1,29 @@
 package com.minicard.statement.application;
 
 /**
- * Statement 生成阶段的统一业务异常。
+ * 「这个账户本账期不应出账」的业务信号。
  *
- * <p>关键词：账单生成异常, retryable, rejected, statement generation exception,
- * idempotency, 請求作成例外(せいきゅうさくせいれいがい)。</p>
+ * <p>关键词：账单生成异常, 业务跳过, statement generation exception, business skip,
+ * 請求作成例外(せいきゅうさくせいれいがい)。</p>
  *
- * <p>mini-card 不需要一组很细的异常层级。这里用 retryable 标记区分“稍后可重试”
- * 和“本账户本周期可跳过”，让 job handler 的失败处理保持直观。</p>
+ * <p>它表示确定性的业务结论（例如加锁读取时该账户已经没有 UNBILLED 交易），
+ * 不是系统故障。{@link StatementBatchService} 把它计入 skipped 并继续下一个账户；
+ * 真正的系统异常（DB 故障、死锁）走 {@code RuntimeException} 分支计入 failed，
+ * 由第二天的批处理自然重试——那些账户的交易仍是 UNBILLED，还在候选集合里。</p>
+ *
+ * <p>反向事实：如果不区分这两类，一个「本来就没有消费的账户」会和「数据库超时」一样被记成失败，
+ * 出账日志里的 failed 数就永远不为零，真正的故障反而被淹没。</p>
  */
 public class StatementGenerationException extends RuntimeException {
 
-    private final boolean retryable;
-
-    private StatementGenerationException(String message, boolean retryable) {
+    private StatementGenerationException(String message) {
         super(message);
-        this.retryable = retryable;
     }
 
     /**
-     * 创建“整个 statement job 需要重试”的失败信号。
-     *
-     * <p>适合瞬态数据库/锁故障。StatementJobHandler 会计入 failed，dispatcher 再依据
-     * maxAttempts 把分片放回 PENDING 或推进 DEAD；如果误标成 rejected，这个账户会被永久跳过。</p>
-     */
-    public static StatementGenerationException retryable(String message) {
-        return new StatementGenerationException(message, true);
-    }
-
-    /**
-     * 创建“不需要重试该账户”的确定性业务跳过信号。
-     *
-     * <p>例如账户在 worker 真正加锁读取时已经没有 UNBILLED 交易。它会计入 skipped，
-     * 不是系统故障；如果仍按 retryable 处理，空账户会反复消耗整个分片的 retry budget。</p>
+     * 创建「不需要为该账户出账」的确定性业务跳过信号。
      */
     public static StatementGenerationException rejected(String message) {
-        return new StatementGenerationException(message, false);
-    }
-
-    /**
-     * 返回 dispatcher 是否应重试整个分片，而不是表示当前单账户方法能在原事务内立即重试。
-     */
-    public boolean retryable() {
-        return retryable;
+        return new StatementGenerationException(message);
     }
 }

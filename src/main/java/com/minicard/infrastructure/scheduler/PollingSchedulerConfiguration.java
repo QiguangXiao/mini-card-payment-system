@@ -43,17 +43,9 @@ public class PollingSchedulerConfiguration {
      */
     @Bean(name = "billingCycleTaskScheduler")
     public ThreadPoolTaskScheduler billingCycleTaskScheduler() {
-        // BillingCycleScheduler 每天只创建 batch/jobs，不直接跑百万账户出账。
+        // 出账批处理单线程按序跑：它是月度低频任务，不需要并发，
+        // 单线程也避免出账循环和在线还款同时抢大量 credit_accounts 行锁。
         return taskScheduler("billing-cycle-scheduler-", 1);
-    }
-
-    /**
-     * Statement job dispatcher 使用的 scheduler。
-     */
-    @Bean(name = "statementJobTaskScheduler")
-    public ThreadPoolTaskScheduler statementJobTaskScheduler() {
-        // dispatcher 的 claim/recover 共用 scheduler；真正生成账单在 statementJobWorkerExecutor。
-        return taskScheduler("statement-job-scheduler-", 2);
     }
 
     /**

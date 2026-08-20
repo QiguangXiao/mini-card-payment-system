@@ -25,13 +25,13 @@ import lombok.experimental.Accessors;
  *
  * <p>状态转换表（方法 / 推动方）：</p>
  * <pre>
- * (无)            -> CLOSED          close()           异步 batch：StatementJobHandler 出账，生成即 CLOSED
+ * (无)            -> CLOSED          close()           月次 batch：StatementBatchService 出账，生成即 CLOSED
  * CLOSED          -> PARTIALLY_PAID  applyRepayment()  部分还款
  * CLOSED          -> PAID            applyRepayment()  一次性全额结清（终态，PAID 后拒绝再收款）
  * PARTIALLY_PAID  -> PAID            applyRepayment()  补足剩余金额（终态）
  * </pre>
  *
- * <p>划分逻辑：CLOSED 由 billing-cycle batch（StatementJob）推动，没有 API 能出账；
+ * <p>划分逻辑：CLOSED 由月次 billing batch 推动，没有 API 能出账；
  * 还款转换由两条入口共同推动——手动还款 API（RepaymentController）和 due date 自动扣款
  * DelayJob（AutoRepaymentDelayJobHandler），二者最终都走 RepaymentService 同一事务。
  * 逾期（例如 OVERDUE 状态）刻意不建模：需要 due-date 逾期扫描 cron 写入才有意义，

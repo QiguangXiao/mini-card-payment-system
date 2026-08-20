@@ -23,8 +23,8 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `remaining-domain-roadmap` 路线图；对齐 statement claimable job 类名（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobHandler`/`StatementGenerationService`） |
-| [`domain-state-flow-cn.md`](domain-state-flow-cn.md) | ✅ | **保留不归档**；已把 statement 批处理类名对齐到 claimable job（`BillingCycleScheduler`/`StatementCycleService`/`StatementJobDispatcher`/`StatementGenerationService`），账户级出账锁逻辑未变 |
+| [`credit-card-domain-cn.md`](credit-card-domain-cn.md) | ✅ | **已合并** `credit-card-lifecycle` + `remaining-domain-roadmap` 路线图；statement 出账已简化为 `BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService` |
+| [`domain-state-flow-cn.md`](domain-state-flow-cn.md) | ✅ | **保留不归档**；statement 批处理已简化为 `BillingCycleScheduler`/`StatementBatchService`/`StatementGenerationService`，账户级出账锁逻辑未变 |
 
 ### 2. 项目实现（Implementation）
 
@@ -37,7 +37,7 @@
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
 | [`events-outbox-inbox-kafka-cn.md`](events-outbox-inbox-kafka-cn.md) | ✅ | **已合并** `kafka-outbox-design` + `kafka-learning` + `event-outbox-messaging-design`；对齐当前 Authorization/CardTransaction 两条事件路径与 Notification consumer，保留 Kafka 配置参考 + 实现走读 + 11 道硬核 Q&A；3 份原文档已归档 |
-| [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；**改正** async-workflows 把 statement 批处理当"非 claimable job"的过时描述（已扁平化），对齐当前 `StatementJobDispatcher`/`BillingCycleScheduler` 等类名；3 份原文档已归档 |
+| [`claimable-jobs-cn.md`](claimable-jobs-cn.md) | ✅ | **已合并** `async-workflows-comparison` + `claimable-job-families` + `statement-job-design`；statement 分片批已从代码中移除，本文保留其设计记录并说明为什么删；当前家族只有 DelayJob / Outbox；3 份原文档已归档 |
 | [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md) | ✅ | 已核对完全对齐代码（`max-attempts=8`、`processing-timeout=30s`、per-channel 断路器、`lease_token` 模型）；**保留独立不归档**，仅修正了它对已归档消息/job 文档的引用 |
 
 ### 4. 数据（Data：MyBatis / SQL / Migration）

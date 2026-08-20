@@ -151,11 +151,9 @@ OutboxEvent: authorization.posted + card_transaction.posted
 入口：
 
 ```text
-BillingCycleScheduler
--> StatementCycleService.createDueJobs()
--> StatementJobDispatcher
--> StatementJobHandler
--> StatementGenerationService.generate(...)
+BillingCycleScheduler（每日 JST cron）
+-> StatementBatchService.run()（账期 = 上一个自然月；列出待出账账户）
+-> StatementGenerationService.generate(...)（逐账户独立小事务）
 ```
 
 也可以通过 API 手动生成：

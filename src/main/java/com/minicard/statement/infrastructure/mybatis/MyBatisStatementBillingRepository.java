@@ -27,26 +27,11 @@ public class MyBatisStatementBillingRepository implements StatementBillingReposi
     private final StatementBillingMapper mapper;
 
     @Override
-    public long countBillableAccounts(
+    public List<UUID> findBillableAccountIds(
             Instant periodStartInclusive,
             Instant periodEndExclusive
     ) {
-        return mapper.countBillableAccounts(periodStartInclusive, periodEndExclusive);
-    }
-
-    @Override
-    public List<UUID> findAccountIdsForJob(
-            Instant periodStartInclusive,
-            Instant periodEndExclusive,
-            int shardNo,
-            int shardCount
-    ) {
-        return mapper.findAccountIdsForJob(
-                        periodStartInclusive,
-                        periodEndExclusive,
-                        shardNo,
-                        shardCount
-                )
+        return mapper.findBillableAccountIds(periodStartInclusive, periodEndExclusive)
                 .stream()
                 .map(UUID::fromString)
                 .toList();

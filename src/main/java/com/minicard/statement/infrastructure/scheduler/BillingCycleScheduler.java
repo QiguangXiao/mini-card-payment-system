@@ -1,6 +1,6 @@
 package com.minicard.statement.infrastructure.scheduler;
 
-import com.minicard.statement.application.StatementCycleService;
+import com.minicard.statement.application.StatementBatchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -8,13 +8,20 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Billing cycle 的 daily scheduler。
+ * 账单批处理的定时触发器。
  *
- * <p>关键词：账单周期调度, daily scheduler, job creation,
- * billing cycle scheduler, 締め日(しめび), 日次起動(にちじきどう)。</p>
+ * <p>关键词：定时触发, 账务时区, 出账批处理, scheduled trigger, billing timezone,
+ * 締め処理(しめしょり), バッチ起動(バッチきどう)。</p>
  *
- * <p>它每天醒来一次，只负责判断是否需要创建本期 statement jobs。
- * 真正生成账单由 StatementJobDispatcher 的 worker 通过 DB claim 并行处理。</p>
+ * <p>刻意做得很薄：只负责「每天按 JST 醒一次」，账期推导和出账逻辑都在
+ * {@link StatementBatchService} 里，scheduler 不需要知道 billing timezone 之外的任何业务规则。</p>
+ *
+ * <p>{@code zone} 必须显式指定：cron 表达式默认按 JVM 时区解释，容器时区通常是 UTC，
+ * 那样「每天 01:00 出账」在日本实际会变成上午 10:00 跑，撞上在线交易高峰。</p>
+ *
+ * <p>生产落差：真实発卡行用 job scheduler（JP1/AJS、Control-M）或 Spring Batch /
+ * Step Functions 在独立批处理系统上跑，不会让在线 API pod 兼职跑批。
+ * 理由和取舍见 {@link StatementBatchService} 的类注释。</p>
  */
 @Component
 @ConditionalOnProperty(
@@ -26,21 +33,17 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class BillingCycleScheduler {
 
-    private final StatementCycleService cycleService;
+    private final StatementBatchService batchService;
 
     @Scheduled(
             cron = "${statement.batch.cron:0 0 1 * * *}",
             zone = "${statement.batch.zone:Asia/Tokyo}",
             scheduler = "billingCycleTaskScheduler"
     )
-    public void createDueStatementJobs() {
-        // 阶段 1：daily scheduler 在配置的账务时区醒来。
-        // 这里不直接生成所有账单，只触发一次"对账式补建"检查，避免 cron 漏跑后永远丢失某天的 job。
-        // 阶段 2：StatementCycleService 查询当前 due 的 billing cycles，并用 DB 唯一约束保证幂等创建。
-        int shardCount = cycleService.createDueJobs();
-        // 阶段 3：只记录有实际创建的批次。没有 due cycle 是正常空跑，不需要刷日志。
-        if (shardCount > 0) {
-            log.info("billing_cycle_jobs_created shardCount={}", shardCount);
+    public void generateStatements() {
+        int generated = batchService.run();
+        if (generated > 0) {
+            log.info("billing_cycle_statements_generated count={}", generated);
         }
     }
 }

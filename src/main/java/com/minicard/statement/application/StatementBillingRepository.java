@@ -9,35 +9,26 @@ import com.minicard.statement.domain.StatementLineSource;
 /**
  * Statement billing 候选数据仓储。
  *
- * <p>关键词：账单候选, 分片账户, 交易出账, statement billing repository,
- * shard query, billed marker, 請求対象検索(せいきゅうたいしょうけんさく),
- * 分割処理(ぶんかつしょり)。</p>
+ * <p>关键词：账单候选, 待出账账户, 交易出账, statement billing repository,
+ * billable accounts, billed marker, 請求対象検索(せいきゅうたいしょうけんさく)。</p>
  *
  * <p>它把已经 {@code POSTED + UNBILLED} 的 CardTransaction 读取为 statement line source；
- * StatementGenerationService 不直接知道 SQL、row lock 和 shard hash 细节。</p>
- *
- * <p>分片查询的关键是“按账户分片”，不是“按交易分片”。实现类用
- * {@code MOD(CRC32(credit_account_id), shardCount) = shardNo} 先找出本 shard 负责的账户，
- * handler 再让 {@link StatementGenerationService} 对每个账户一次性扫描并锁住该账户本账期所有候选交易。
- * 如果直接按交易 id 分片，同一账户的两笔消费可能落到不同 job，两个 job 就会并发尝试为同一账户同一账期出账。</p>
+ * StatementGenerationService 不直接知道 SQL 和 row lock 细节。</p>
  */
 public interface StatementBillingRepository {
 
-    long countBillableAccounts(Instant periodStartInclusive, Instant periodEndExclusive);
-
     /**
-     * 查询某个 statement job shard 负责的账户列表。
+     * 查询本账期还有待出账交易的账户。
      *
-     * <p>{@code shardNo/shardCount} 来自 {@code statement_jobs} row。SQL 使用 MySQL
-     * {@code CRC32(credit_account_id)} 生成稳定整数，再取模映射到某个 shard。
-     * 同一个 account id 在同一个 {@code shardCount} 下永远得到同一个 {@code shardNo}，
-     * 因此这个账户本账期的所有 {@code POSTED + UNBILLED} 交易会被同一个 job 处理。</p>
+     * <p>返回的是「账户」而不是「交易」：同一账户本期所有消费必须进同一张账单，
+     * 所以批处理按账户 fan-out，再由 {@link StatementGenerationService} 一次性锁住该账户全部候选交易。</p>
+     *
+     * <p>这个查询本身就是批处理的 desired state：账户一旦出账，它的交易被标成 BILLED，
+     * 下次就不会再出现在结果里。所以重复跑批是安全的，也不需要一张「本期是否已跑过」的状态表。</p>
      */
-    List<UUID> findAccountIdsForJob(
+    List<UUID> findBillableAccountIds(
             Instant periodStartInclusive,
-            Instant periodEndExclusive,
-            int shardNo,
-            int shardCount
+            Instant periodEndExclusive
     );
 
     List<StatementLineSource> findBillableLineSourcesForUpdate(

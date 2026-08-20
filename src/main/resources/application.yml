@@ -319,28 +319,27 @@ authorization:
 statement:
   batch:
     # 整个 statement.* 前缀绑定到 StatementProperties。
+    # 月次出账批处理：BillingCycleScheduler 每天按 JST 醒一次，把刚结束的自然月账期逐账户出账。
+    #
+    # 生产落差（面试要能主动说）：真实発卡行不会用应用内 @Scheduled 跑締め処理，
+    # 而是用 job scheduler（JP1/AJS、A-AUTO、Control-M）编排 ジョブネット，
+    # 或 Spring Batch / AWS Step Functions，跑在与在线 API 隔离的批处理系统上，
+    # 有 リラン/リスタート 入口和与勘定系的突合。本项目只保留最小触发器，
+    # 把学习重点放在 StatementGenerationService 的幂等、锁顺序和 UNBILLED->BILLED 状态机上。
     enabled: true
-    # BillingCycleScheduler 每天按 JST 醒来一次，只负责对账式补建缺失的 statement_jobs。
-    # 对应代码：BillingCycleScheduler 的 @Scheduled(cron=..., zone=...) -> StatementCycleService.createDueJobs()。
+    # 对应代码：BillingCycleScheduler 的 @Scheduled(cron=..., zone=...) -> StatementBatchService.run()。
+    # 每天跑而不是每月 1 号跑：重复跑是幂等的（已出账账户的交易已是 BILLED，不再进候选集合），
+    # 所以漏跑一天不会丢账期——当月任何一天恢复都能补上。
     cron: "0 0 1 * * *"
     # zone 同时用于 cron 触发时区和账期日切（periodStart/periodEnd 转 Instant）；
-    # 对应代码：StatementCycleService.batchZone()、StatementGenerationService.periodStartInstant()。
+    # 对应代码：StatementBatchService.batchZone()、StatementGenerationService.periodStartInstant()。
+    # 不显式指定的话 cron 按 JVM 时区解释，容器通常是 UTC，"每天 01:00 出账"会变成日本上午 10 点跑。
     zone: Asia/Tokyo
-    # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
-    # 默认 31 表示月末关账；次日批处理上一周期，避免关账日白天迟到交易漏入账单。
-    # 对应代码：StatementCycleService.recentCloseDatesOnOrBefore()/periodStartFor()，
-    # 短月自动落到当月最后一天（dayInMonth），例如 2 月会收敛到 2/28（闰年 2/29）。
-    close-day-of-month: 31
-    # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
-    # 对应代码：StatementCycleService.paymentDateAfter() + ConfiguredBusinessDayCalendar（见下方 bank-holidays）；
-    # 结果写入 statement_jobs.due_date，最终成为 statements.due_date 和自动扣款 DelayJob 的触发日。
+    # 账期固定为自然月（月末关账），不支持客户自定义 billing day——学习项目的刻意简化。
+    # 25 日常见为工资日；默认次月 27 日扣款，若 27 日是周末或下面配置的银行休业日则顺延到下一个营业日。
+    # 对应代码：StatementBatchService.dueDateAfter() + ConfiguredBusinessDayCalendar（见下方 bank-holidays）；
+    # 结果写入 statements.due_date，并成为自动扣款 DelayJob 的触发日。
     payment-base-day-of-month: 27
-    # 每天醒来时对最近几个已过去关账周期做 reconciliation，防止 missed cron 导致账单分片永远不创建。
-    # 对应代码：StatementCycleService.recentCloseDatesOnOrBefore() 的回看窗口（level-triggered 补建）。
-    reconciliation-lookback-cycles: 2
-    # 每个 durable statement_job 目标账户数；百万账户会被拆成约 1000 个分片任务。
-    # 对应字段：statement_jobs.shard_no/shard_count。对应代码：StatementCycleService.shardCount()。
-    target-accounts-per-job: 1000
     # 银行休业日主数据（祝日マスター / holiday master），由 ConfiguredBusinessDayCalendar 读取，
     # 与周末一起决定 due date 能不能落在这一天（payment-base-day-of-month 遇休业日顺延）。
     # 为什么是配置而不是代码：祝日是数据。祝日法改过（山の日 2020/2021 移动、天皇誕生日 2019 换日），
@@ -385,30 +384,6 @@ statement:
       - 2027-10-11  # スポーツの日
       - 2027-11-03  # 文化の日
       - 2027-11-23  # 勤労感謝の日
-  jobs:
-    # 分片 job 的执行配置。注意 statement_jobs 的 lease 字段和 outbox/delay-jobs 不同：
-    # 用 claim_until（deadline）+ claim_token（owner identity），而不是 next_attempt_at + lease_token；
-    # claimed_by 只是排查日志里的 worker 名，不作为最终防 stale worker 的唯一凭据。
-    enabled: true
-    # 对应代码：StatementJobDispatcher 扫 statement_jobs status='PENDING'。
-    fixed-delay-ms: 1000
-    # 对应代码：StatementJobDispatcher 的 recover 路径，捞 status='PROCESSING' AND claim_until<=now。
-    recovery-fixed-delay-ms: 10000
-    # 对应代码：StatementJobDispatcher 单轮领取的 LIMIT。分片 job 每个都要处理最多 target-accounts-per-job
-    # 个账户，比单条消息重得多，所以此值远小于 outbox/delay-jobs 的领取上限。
-    # 此值不应远大于 worker-pool-size：claim 的瞬间 300s lease 就开始倒计时，
-    # 领 20 个但只有 4 个线程时，排在队尾的 job 可能还没开跑 lease 就过期，
-    # 被 recoverer 收回重发，原线程白跑一遍（幂等兜底不会出错，但纯属浪费）。
-    # 取 2x worker-pool-size：线程刚空出来就有下一个 job 可跑，又不会让排队时间吃掉 lease。
-    max-per-run: 8
-    # 对应字段：statement_jobs.attempt_count；达到上限置 DEAD。
-    max-attempts: 10
-    # 对应字段：statement_jobs.claim_until = claim 时刻 + 本值。
-    # 300s 是因为一个分片要循环处理上千账户（每账户一个独立事务），远长于单条 publish/投递。
-    processing-timeout-seconds: 300
-    # 对应代码：WorkerExecutorConfiguration.statementJobWorkerExecutor。
-    worker-pool-size: 4
-    worker-queue-capacity: 100
   policy:
     # minimum payment = min(total, max(total * rate, currency floor)).
     # 当前只是教学用简化规则，真实发卡系统会按产品条款、余额分层和监管要求配置。

@@ -23,8 +23,6 @@ delay-jobs:
 statement:
   batch:
     enabled: false
-  jobs:
-    enabled: false
   read-cache:
     broadcast:
       # MySQL 集成测试不起 Redis 容器；关掉 Pub/Sub 广播后注入 NoOp broadcaster，

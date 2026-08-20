@@ -743,7 +743,6 @@ url: ${DB_URL:jdbc:mysql://localhost:3306/mini_card}
 - `DelayJobRecoverer`
 - `OutboxRecoverer`
 - `BillingCycleScheduler`
-- `StatementJobDispatcher`
 
 显式指定 scheduler：
 
@@ -1625,13 +1624,13 @@ record goes to DLT
 
 ### 14.12 `YearMonth` 比 `minusDays(30)` 更适合账单月
 
-位置：`StatementCycleService`
+位置：`StatementBatchService`
 
 账单周期不是固定 30 天。
 
 ```java
-YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
-LocalDate previousCloseDate = dayInMonth(previousMonth, properties.closeDayOfMonth());
+YearMonth closedMonth = YearMonth.from(LocalDate.now(clock.withZone(batchZone()))).minusMonths(1);
+LocalDate periodEnd = closedMonth.atEndOfMonth();
 ```
 
 为什么不用：
@@ -1650,7 +1649,7 @@ periodEnd.minusDays(30)
 
 ### 14.13 private record 适合绑定强相关局部值
 
-位置：`StatementCycleService.BillingCycle`
+位置：`StatementBatchService.BillingCycle`
 
 ```java
 private record BillingCycle(
@@ -2257,7 +2256,7 @@ covered Java files: 136 / 226 = 60.2%
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
 9. 读 `RequestNotificationService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
 10. 读 `OutboxEvent`、`DelayJob`、`OutboxEventMapper.xml`、`CardTransactionMapper.xml`，理解 backoff、XML escaping 和 MyBatis `<foreach>`。
-11. 读 `StatementCycleService`、`ConfiguredBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
+11. 读 `StatementBatchService`、`ConfiguredBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
 12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Notification listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
 
 每读一个点，都问一句：

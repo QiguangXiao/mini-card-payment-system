@@ -789,7 +789,7 @@ Kafka ack 成功但 Outbox finalize 前宕机 → 为什么会重复发且必须
 
 - 选 `Outbox` 作为 publish/finalize reference。
 - 选 `NotificationDelivery` 作为外部副作用 + throttle reference。
-- 选 `StatementJob` 作为分片 batch reference。
+- 分片 batch reference 已随 `StatementJob` 一起移除；被问到大规模出账时讲 `claimable-jobs-cn.md` §4 的设计记录 + 当前 `StatementBatchService` 的取舍。
 - DelayJob、Auto Repayment 只讲与上述 reference 不同的业务语义，不再逐类背所有方法。
 
 不要强行抽成一个 GenericClaimableJobFramework。四类状态机虽然形状相似，但 publish、未来动作、通知投递、
@@ -935,7 +935,7 @@ P3  Lua 细节、所有生产推荐数字、每个 scheduler/worker 类的重复
 ### 9.9 仍然需要补齐，但不要再扩散范围
 
 - **capacity-aware claim**：poller 按 executor 可用 slot 领取，避免 queue 中提前燃烧 lease。
-- **statement backoff**：失败分片不要每轮立即重领。
+- ~~**statement backoff**~~：随分片实现一起移除；现在出账失败的重试节奏就是「明天再跑一次」。
 - **workload isolation**：生产把 API、Kafka consumers、statement/batch 分 profile 部署和 sizing。
 - **DLT/DEAD/backlog 运维闭环**：指标、告警、受控 replay。
 - **真实压测证据**：当前没有可引用的最大 QPS、p95/p99 或 saturation point。
@@ -1032,7 +1032,7 @@ drain time ≈ backlog / (recovery consumption rate - current production rate)
 ### Q5：当前配置最值得先改什么？
 
 > 第一不是把数字调大；当前已把小项目 Hikari/Tomcat 显式化，下一步要做压测并修正 poller 提前 claim 远多于
-> worker slot 的问题；为 statement failure 增加 backoff；生产部署把 API、consumer 和 batch 隔离。
+> worker slot 的问题；生产部署把 API、consumer 和 batch 隔离。
 
 ---
 
@@ -1078,6 +1078,6 @@ drain time ≈ backlog / (recovery consumption rate - current production rate)
 | Scheduler pools | `PollingSchedulerConfiguration` |
 | Outbox intake/worker | `OutboxPoller`、`OutboxWorker`、`OutboxEvent` |
 | DelayJob intake/worker | `DelayJobPoller`、`DelayJobWorker`、`DelayJob` |
-| Statement claim/worker | `StatementJobDispatcher`、`StatementJob` |
+| Statement 月次 batch | `StatementBatchService`（单线程逐账户，无 claim/worker 池） |
 | Kafka consumer concurrency/retry | `KafkaConsumerConfiguration`、各 `@KafkaListener` |
 | Statement cache load shaping | `StatementReadCacheProperties`、`StatementReadService` |

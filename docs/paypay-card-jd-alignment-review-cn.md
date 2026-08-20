@@ -55,7 +55,7 @@
 | 测试代码 | 6,990 行 / 64 个测试类（+1 类），含 Testcontainers 集成测试 | 测试占比 ~45%，健康且有真实集成测试 |
 | Bounded context | 多个业务与机制边界（Notification 保留独立 consumer） | 广度足够，不再增加投影型 context |
 | 文档 | **29,228 行 / 36 个文件**（上次 26,835 / 28，**+2,393 行 / +8 文件**） | ⚠️ 是生产代码的 **~1.86 倍**（上次 ~1.7），**review 警告后仍在涨**，是最固执的过度 |
-| 可靠性基建 | Outbox + Inbox + **三套** claimable job（DelayJob/Outbox/StatementJob，本月又给三套统一加了 explicit lease token）+ Resilience4j + DLT + statement L1/L2 缓存（Lua CAS + Pub/Sub 失效） | ✅ 顶配但**继续在已饱和处加投入**（见 §3.2）|
+| 可靠性基建 | Outbox + Inbox + **三套** claimable job（DelayJob/Outbox/StatementJob，本月又给三套统一加了 explicit lease token；*StatementJob 已于 2026-08 删除，见 §3.2 三次复盘*）+ Resilience4j + DLT + statement L1/L2 缓存（Lua CAS + Pub/Sub 失效） | ✅ 顶配但**继续在已饱和处加投入**（见 §3.2）|
 | 云 / 部署落地 | 只有 `docker-compose.yml`；**仍无 Dockerfile、无 CI、无 IaC、无压测数据**（一个月零变化） | ❌ 与公司栈（ECS/CFN/CodePipeline）最大的真实差距，且**纹丝未动** |
 
 这张表基本框定了所有结论：**正确性维度过度饱和，部署/工程化维度有真实缺口（且一个月零进展），文档维度严重过度（且仍在恶化）。**
@@ -169,7 +169,16 @@
   backoff 与失败语义不同，过早抽象会增加耦合。（注意别让"我写了三套"显得像炫技。）
 - **不建议现在去重构**——重构的收益远低于把时间花在 §4/§5。把它当成一道"已知会被问到"的题即可。
 
-> [!NOTE]
+> [!TIP]
+> **三次复盘更新（2026-08，本节结论已被执行）：** `StatementJob` 那一套（`statement_jobs` 表 +
+> dispatcher + handler + cycle planner，约 1600 行代码 + 570 行测试）**已经删除**，
+> 出账收敛成 `StatementBatchService` 的单线程逐账户循环。触发本次决定的不是本节，
+> 而是一个更朴素的事实：**这堆代码写完之后就没被读过**——没读过的代码学习价值是 0。
+> 另加两条本节当时没写出来的理由：① 应用内 `@Scheduled` 跑分片批本来就不是生产形态
+> （真实是 JP1/Spring Batch/Step Functions + 独立批处理系统），学它的细节回报低；
+> ② claim-lease-recover 由 outbox + delayjob 讲两遍已经够，第三遍边际为零。
+> 设计记录保留在 `claimable-jobs-cn.md` §2.3/§4，代码在 git 历史里。
+>
 > **二次复盘更新：** 这一个月仅有的 2 个代码 commit（`6db9ea2` / `c18843d`）恰恰就是给这三套 job
 > 统一加 explicit lease/claim token。这是一次干净的、正确的工程改进——**但它落在了本节明确写着"不建议现在投入"的方向上。**
 > token 模型更严谨了，对面试说服力的边际提升却接近零（面试官不会因为你的 lease 列从隐式变 explicit 而高看一眼）。

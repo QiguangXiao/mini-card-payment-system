@@ -33,7 +33,7 @@
 
 所以 `com.minicard.infrastructure.scheduler` 不是“所有 scheduler 业务逻辑”的地方。
 它只创建 Spring `ThreadPoolTaskScheduler`。真正的 poll/claim/worker/recover 流程在
-`messaging/outbox` 和 `delayjob`，而 statement 出账已扁平化为 claimable job（`BillingCycleScheduler` 每日触发 + `StatementJobDispatcher` 的 claim/recover）。
+`messaging/outbox` 和 `delayjob`；statement 出账则刻意**不是** claimable job——它收敛成 `BillingCycleScheduler` 每日触发 + `StatementBatchService` 单线程逐账户循环（曾经的分片实现已移除，理由见 `claimable-jobs-cn.md` 文首）。
 
 `com.minicard.infrastructure.async` 也不是业务异步流程本身，只是 worker pool 配置。
 如果以后重命名，`infrastructure.execution` / `WorkerPoolConfiguration` 会更直观；当前代码先保留现状，
@@ -720,13 +720,12 @@ PayPay Card interview提示：
 - 标记这些交易已经被该 statement 收录，避免下次重复出账。
 - 为账单 `dueDate` 写入 `AUTO_REPAYMENT` DelayJob，到期后自动模拟银行扣款。
 
-真实主路径（账单批处理已扁平化为 claimable job，机制详见 `claimable-jobs-cn.md`）：
+真实主路径（极简月次批处理；为什么不是分片 claimable job 见 `claimable-jobs-cn.md` 文首与 §4.0）：
 
 ```text
-BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
--> StatementCycleService.createDueJobs（扫描最近已过去 close cycles，缺失的周期补建 statement_jobs）
--> StatementJobDispatcher（claim 分片）
--> StatementJobHandler（取本片账户：CRC32(account)%shardCount）
+BillingCycleScheduler（每天 JST cron，单线程）
+-> StatementBatchService.run（账期=上一个自然月；dueDate=次月 27 日顺延营业日）
+-> StatementBillingRepository.findBillableAccountIds（本账期仍有 POSTED+UNBILLED 交易的账户）
 -> StatementGenerationService.generate(...)（逐账户独立小事务出账）
 ```
 
@@ -751,18 +750,17 @@ dueDate     = 7 月 27 日
 - 当前项目按 billing timezone（默认 Asia/Tokyo）切账期，先让 6 月 30 日完整结束，再在 7 月 1 日批处理。
 - 生产系统通常会把 billing timezone 放在产品或账户配置中。
 
-为什么 scheduler 要做 reconciliation，而不是只看“昨天是不是关账日”：
+为什么批处理是 level-triggered，而不是只看“昨天是不是关账日”：
 
-- Spring `@Scheduled` 默认不会补跑 missed cron。比如 7 月 31 日关账，8 月 1 日 01:00 JST 应该创建 7 月账单分片；
+- Spring `@Scheduled` 默认不会补跑 missed cron。比如 7 月 31 日关账，8 月 1 日 01:00 JST 应该出 7 月账单；
   如果应用在 8 月 1 日 00:50 到 8 月 3 日 09:00 宕机，这次 tick 就丢了。
-- `StatementCycleService.createDueJobs()` 现在是 level-triggered control loop：每天醒来扫描最近
-  `statement.batch.reconciliation-lookback-cycles` 个已过去 close cycles，先用
-  `StatementJobRepository.existsForCycle(periodStart, periodEnd)` 看该周期是否已经有 `statement_jobs`。
-- 缺失的周期才计算 `dueDate`、账户数和 shardCount，并用 `INSERT IGNORE` 写入
-  `(period_start, period_end, shard_no)` 唯一保护的分片 rows。多实例同时补建也安全，最多一个实例真正插入。
-- 只有 `createDueJobs()` 一个入口。"今天是哪天"完全来自注入的 `Clock`（`statement.batch.zone` 决定时区），
-  所以测试用 fixed clock 就能驱动真实 scheduler 语义，不需要一个只有测试会走的 `createDueJobs(runDate)` 重载。
-  反向事实：留着那个重载，生产代码里就多一条 edge-triggered 分支，而真正每天跑的 level-triggered 补跑路径反而没被测到。
+- `StatementBatchService.run()` 每天处理**上一个自然月**这个已结束账期，而不是判断“昨天是不是关账日”。
+  8 月里任何一天跑，处理的都是 7/1–7/31 这个刚结束的账期，所以漏跑一次 tick 不会丢账期。
+- 重复跑是幂等的，而且**不需要任何状态表**：候选账户查询只看 `card_transactions` 里
+  `POSTED + UNBILLED` 的交易，账户一旦出账，交易被标成 BILLED，第二天就不在候选集合里了。
+  这就是「desired state 由业务数据本身表达」——`statement_jobs` 那张执行状态表因此可以删掉。
+- “今天是哪天”完全来自注入的 `Clock`（`statement.batch.zone` 决定时区），所以测试用 fixed clock
+  就能驱动真实 scheduler 语义，不需要一个只有测试会走的重载入口。
 
 为什么扣款日用 27 日并顺延到日本营业日：
 
@@ -779,51 +777,44 @@ dueDate     = 7 月 27 日
 
 入口：
 
-Batch path（claimable job，详见 `claimable-jobs-cn.md`）：
-- `BillingCycleScheduler`（每日 JST cron）-> `StatementCycleService.createDueJobs`（reconciliation 补建缺失分片 `statement_jobs`）
-- `StatementJobDispatcher`（claim 分片）-> `StatementJobHandler`（取本片账户）
+Batch path：
+- `BillingCycleScheduler`（每日 JST cron）-> `StatementBatchService.run()`（推导已结束账期 + 列出待出账账户）
 
-Worker 中的单账户出账：
+批处理循环中的单账户出账：
 - `GenerateStatementCommand`
 - `StatementGenerationService.generate(command)`
 - `Statement.close(...)`
 - `StatementBillingRepository.markCardTransactionsBilled(statementId, lineSources, now)`
 - `StatementDueJobScheduler.scheduleAutoRepayment(statement)`
 
-### 5.1 触发与分片（claimable job）+ Command 阶段
+### 5.1 触发 + Command 阶段
 
-`BillingCycleScheduler` 是很薄的 scheduler：用 `@Scheduled` 的**每日 JST cron** 醒来，只负责触发一次 reconciliation；
-真正的 close-cycle 判断、缺失周期扫描和分片补建都收在 `StatementCycleService` 里，避免 scheduler 知道 billing timezone 和账期规则。
+`BillingCycleScheduler` 是很薄的 scheduler：用 `@Scheduled` 的**每日 JST cron** 醒来，只调一次
+`StatementBatchService.run()`，账期推导和出账循环都不在 scheduler 里，避免 scheduler 知道账期规则。
 
-`StatementCycleService.createDueJobs` 先扫描最近几个已过去 close cycles；某个周期已经有 `statement_jobs` 就跳过，
-缺失时再计算 `periodStart/periodEnd/dueDate`、按账户数算 shardCount、`INSERT IGNORE` 建分片。
-随后由 `StatementJobDispatcher` claim 分片、`StatementJobHandler` 取本片账户（`CRC32(account)%shardCount`）逐个调 `StatementGenerationService.generate(...)`。
+`StatementBatchService.run()` 推导刚结束的自然月账期和扣款日，列出本账期仍有待出账交易的账户，
+再逐个调 `StatementGenerationService.generate(...)`。
 
 刻意不是一个大事务：
 
-- 一个账户失败不连坐整批（账户级计数隔离）。
+- 一个账户失败不连坐整批（catch 住继续下一个，失败账户的交易仍是 UNBILLED，明天自然重试）。
 - 每账户独立 transaction boundary。
-- 行锁持有时间短，便于横向扩展。分片/扇出/lease/recover 的完整机制见 `claimable-jobs-cn.md`。
+- 行锁持有时间短，不会让出账循环长时间挡住在线还款。
 
-`StatementJobDispatcher` 的 lease 现在拆成两个维度：
-
-| 维度 | 字段 |
-| --- | --- |
-| lease deadline | `claim_until` |
-| finalize owner check | `claim_token` |
-| 可观测字段 | `claimed_by / claimed_at / claim_until` |
-
-`claim_until` 回答“worker 多久没回来就可以 recover”；
-`claim_token` 回答“这个迟到 finalize 是否仍属于本次 claim”。
-如果只用 timestamp 当 token，Java `Instant` 与 MySQL `TIMESTAMP(6)` 精度边界会让判断不够稳。
+**生产落差（面试要能主动说）**：真实発卡行不会用应用内 `@Scheduled` 跑締め処理，而是用
+job scheduler（JP1/AJS、A-AUTO、Control-M）编排 ジョブネット，或 Spring Batch / AWS Step Functions，
+跑在与在线 API 隔离的批处理系统上，有 リラン/リスタート 入口和与勘定系的突合。
+应用内 cron 的硬伤：与在线请求抢同一 JVM 和连接池、发版即重启批处理、没有 job 级可观测性和重跑入口。
+本项目只保留最小触发器，把学习重点放在下面 5.2 的事务边界和幂等上；
+规模化时的分片/租约设计记录在 `claimable-jobs-cn.md` §4。
 
 `StatementController` 只暴露 `GET /api/statements/{id}` 查询 read model。
-`GenerateStatementCommand` 由 `StatementJobHandler` 根据已规划的 cycle 构造，并校验：
+`GenerateStatementCommand` 由 `StatementBatchService` 根据已结束的 cycle 构造，并校验：
 
 - `periodEnd` 不能早于 `periodStart`。
 - `dueDate` 必须晚于 `periodEnd`。
 
-这样普通 API 不能绕过 reconciliation、shard 和 job lifecycle 直接触发关账。
+这样普通 API 不能绕过账期控制直接触发关账。
 
 ### 5.2 StatementGenerationService transaction boundary
 
@@ -1340,7 +1331,7 @@ PayPay Card interview提示：
 
 ## 8. 核心流程六：DelayJob 未来业务动作
 
-> 本节是 DelayJob 在主流程里的走读位置；DelayJob 与 Outbox/StatementJob 三大 claimable-job 家族的对比、lease/recover/退避机制见 `claimable-jobs-cn.md`。
+> 本节是 DelayJob 在主流程里的走读位置；DelayJob 与 Outbox 两个 claimable-job 家族的对比、lease/recover/退避机制见 `claimable-jobs-cn.md`。
 
 当前业务目标：
 
@@ -1638,7 +1629,7 @@ StatementController.get(id)
 
 ## 10. Outbox vs DelayJob 对比
 
-> 这部分已并入 `claimable-jobs-cn.md` 的三家族总对比表（DelayJob/Outbox/StatementJob），不在此重复。
+> 这部分已并入 `claimable-jobs-cn.md` 的总对比表（DelayJob/Outbox，含已移除的 StatementJob 设计记录），不在此重复。
 
 ## 11. interview容易追问的点
 

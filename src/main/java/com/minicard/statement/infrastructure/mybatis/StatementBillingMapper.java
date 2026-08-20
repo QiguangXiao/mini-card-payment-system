@@ -9,34 +9,21 @@ import org.apache.ibatis.annotations.Param;
 /**
  * Statement billing 专用 SQL mapper。
  *
- * <p>关键词：账单分片 SQL, 候选账户, SKIP LOCKED 前置查询,
- * statement billing mapper, shard query, 請求バッチSQL(せいきゅうバッチエスキューエル)。</p>
+ * <p>关键词：账单候选 SQL, 待出账账户, 行锁查询,
+ * statement billing mapper, billable accounts, 請求バッチSQL(せいきゅうバッチエスキューエル)。</p>
  */
 @Mapper
 public interface StatementBillingMapper {
 
     /**
-     * 统计本账期有 POSTED + UNBILLED 交易的账户数，用于估算 statement job 分片数量。
+     * 返回本账期仍有 POSTED + UNBILLED 交易的账户。
      *
-     * <p>这是 planner 的无锁参考计数，不承担防重复出账；真正一致性由 cycle/shard 唯一键、
-     * 单账户 row lock 和 statement/card-transaction 唯一约束保护。</p>
+     * <p>该查询不加锁，只负责给批处理 fan-out 账户列表；账户级生成事务会重新读取并
+     * {@code FOR UPDATE} 锁定真实候选行，所以这里读到的即使稍旧也不会造成重复出账。</p>
      */
-    long countBillableAccounts(
+    List<String> findBillableAccountIds(
             @Param("periodStartInclusive") Instant periodStartInclusive,
             @Param("periodEndExclusive") Instant periodEndExclusive
-    );
-
-    /**
-     * 按 {@code MOD(CRC32(credit_account_id), shardCount)} 返回当前分片负责的账户。
-     *
-     * <p>按账户而不是按交易分片，保证同一账户本期所有交易由同一个 job 处理。
-     * 该查询不加锁，只负责 fan-out；账户级生成事务会重新读取并锁定真实候选行。</p>
-     */
-    List<String> findAccountIdsForJob(
-            @Param("periodStartInclusive") Instant periodStartInclusive,
-            @Param("periodEndExclusive") Instant periodEndExclusive,
-            @Param("shardNo") int shardNo,
-            @Param("shardCount") int shardCount
     );
 
     /**

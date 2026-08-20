@@ -18,7 +18,7 @@ Authorization -> Presentment Posting -> Statement Batch -> Auto/Manual Repayment
 
 - `AuthorizationService.authorize(...)`
 - `PostingService.post(...)`
-- `StatementCycleService.createDueJobs()` / `StatementJobDispatcher` / `StatementJobHandler`（账单批处理已扁平化为 claimable job）
+- `StatementBatchService.run()`（月次账单批处理；曾经的分片 claimable job 实现已移除，见 `claimable-jobs-cn.md`）
 - `StatementGenerationService.generate(...)`（逐账户出账）
 - `AutoRepaymentService.debitStatement(...)`
 - `RepaymentService.receive(...)`
@@ -661,13 +661,12 @@ posted_at = 2026-07-01T10:05:00Z
 
 ### 7.1 触发者
 
-真实主路径是月度账单批处理（现已扁平化为 claimable job，详见 `claimable-jobs-cn.md`）：
+真实主路径是月度账单批处理（极简实现；为什么不做成分片 claimable job 见 `claimable-jobs-cn.md` 文首）：
 
 ```text
-BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
--> StatementCycleService.createDueJobs（扫描最近已过去 close cycles，缺失周期才算 cycle + 按账户数建分片 statement_jobs）
--> StatementJobDispatcher（claim 分片）
--> StatementJobHandler（取本片账户：CRC32(account)%shardCount）
+BillingCycleScheduler（每天 JST cron，单线程）
+-> StatementBatchService.run（账期 = 上一个自然月；dueDate = 次月 27 日顺延营业日）
+-> StatementBillingRepository.findBillableAccountIds（本账期仍有 POSTED + UNBILLED 交易的账户）
 -> StatementGenerationService.generate(...)（逐账户独立小事务出账）
 ```
 
@@ -675,72 +674,35 @@ BillingCycleScheduler（每天 JST cron，触发 reconciliation 心跳）
 
 | 名词 | 在当前实现里是什么 | 落在哪张表 |
 | --- | --- | --- |
-| `cycle` / 账期 | 一个值对象概念：`periodStart + periodEnd + dueDate`。例如 `2026-07-01 ~ 2026-07-31`，到期日 `2026-08-27`。 | 先落到 `statement_jobs.period_start/period_end/due_date`，真正出账后再落到 `statements.period_start/period_end/due_date` |
-| close cycle | 已经结束、理论上可以出账的账期。比如今天是 `2026-08-01`，`2026-07-31` 这个 close date 对应的 7 月账期已经可以规划出账。 | 不是单独表，只是 `StatementCycleService` 按日期推导 |
-| missing cycle / 缺失周期 | 这个 `period_start + period_end` 在 `statement_jobs` 里还没有任何 shard。 | 查 `statement_jobs` |
-| shard / 分片 | 一个 `statement_jobs` row，负责处理本 cycle 中一部分账户。 | `statement_jobs` |
+| `cycle` / 账期 | 一个值对象概念：`periodStart + periodEnd + dueDate`。例如 `2026-07-01 ~ 2026-07-31`，到期日 `2026-08-27`。 | 只在批处理运行期间存在于内存；真正出账后落到 `statements.period_start/period_end/due_date` |
+| close cycle | 已经结束、可以出账的账期。今天在 8 月的任何一天，close cycle 都是 7 月。 | 不是表，由 `StatementBatchService` 按 `Clock` 推导 |
+| 待出账账户 | 本账期仍有 `POSTED + UNBILLED` 交易的账户。 | 查 `card_transactions` |
 | statement | 某个账户某个 cycle 的账单头。 | `statements` |
 | statement line | 这张账单上的一行消费快照。 | `statement_lines` |
 
-“缺失周期”不是说每个账户都缺 statement，也不是查 `statements` 表。
-它只问这个 cycle 是否已经被规划成后台任务：
+**没有「执行状态表」是刻意的。** 「本期还有谁没出账」直接由业务数据回答：
 
 ```sql
-SELECT EXISTS(
-    SELECT 1
-    FROM statement_jobs
-    WHERE period_start = '2026-07-01'
-      AND period_end = '2026-07-31'
-    LIMIT 1
-);
-```
-
-当前判断是“有任意一条 shard 就算已规划”。这是因为 `StatementCycleService` 创建分片时，
-会在一个事务里一次性 `INSERT IGNORE` 整套 shard：
-
-```text
-statement_jobs
-period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 0, shard_count = 3
-period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 1, shard_count = 3
-period_start = 2026-07-01, period_end = 2026-07-31, shard_no = 2, shard_count = 3
-```
-
-所以正常路径不会只留下半套 shard；最终防重复还靠唯一键：
-
-```text
-uk_statement_jobs_cycle_shard(period_start, period_end, shard_no)
-```
-
-如果未来要防手工改库或迁移中断，可以升级成“检查 shard 数量是否等于 shard_count”，
-但当前项目为了学习清晰，先用 exists 做轻量补建判断。
-
-分片数量不是按全部账户数算，而是按“本账期有待出账 posted transaction 的账户数”算：
-
-```sql
-SELECT COUNT(DISTINCT credit_account_id)
+SELECT DISTINCT credit_account_id
 FROM card_transactions
 WHERE status = 'POSTED'
   AND billing_status = 'UNBILLED'
   AND posted_at >= '2026-07-01T00:00:00Z'
-  AND posted_at < '2026-08-01T00:00:00Z';
+  AND posted_at <  '2026-08-01T00:00:00Z';
 ```
 
-例子：
+账户一旦出账，它的交易被标成 `BILLED`，第二天就不在这个结果里了——查询本身就是 level-triggered 的
+desired state。所以重复跑批安全，漏跑一天也不会丢账期，不需要 `statement_jobs` 那样的任务状态表
+（该表已由 `0008-remove-statement-jobs.sql` 删除）。
 
-```text
-系统总账户数 = 100000
-7 月有 POSTED + UNBILLED 交易的账户数 = 2500
-targetAccountsPerJob = 1000
-shardCount = ceil(2500 / 1000) = 3
-```
-
-这样不会为了 10 万个无消费账户创建大量无意义任务。
-如果本期没有任何待出账账户，当前实现仍创建 1 个空 shard，让这个 cycle 有可观测的 DONE 生命周期。
+代价要能说出来：**没有并行度**（单线程逐账户，账户量大时跑不完）、**没有持久化的执行可观测性**
+（只有一行汇总日志，没有 DONE/DEAD 行）、**崩溃后没有秒级接管**（跑到一半挂了就等明天）。
+这三样正是分片 + claim/lease 设计买来的东西，规模化时的升级路径见 `claimable-jobs-cn.md` §4。
 
 当前默认产品规则：
 
 ```text
-close-day-of-month = 31
+账期 = 自然月（月末关账）
 payment-base-day-of-month = 27
 ```
 
@@ -753,10 +715,10 @@ dueDate     = 2026-08-27
 ```
 
 由于 2026-08-27 是日本营业日，本例 dueDate 不需要顺延。
-如果 27 日遇到周末、日本法定节假日、振替休日或国民の休日，当前代码会顺延到之后第一个营业日。
+如果 27 日遇到周末或 `statement.batch.bank-holidays` 里配置的银行休业日，会顺延到之后第一个营业日。
 
-当前不暴露公开 statement generate API。出账只由 billing-cycle reconciliation 规划 durable jobs；
-需要运营 backfill 时应触发受保护的 runbook/admin 入口，不让普通 API 绕过账期和分片控制。
+当前不暴露公开 statement generate API。出账只由每日 billing batch 驱动；
+需要运营 backfill 时应触发受保护的 runbook/admin 入口，不让普通 API 绕过账期控制。
 
 时间：
 
@@ -767,10 +729,9 @@ T3 = 2026-08-01T00:00:00Z
 入口：
 
 ```text
-Batch path（claimable job）:
+Batch path:
 BillingCycleScheduler.<daily cron>
--> StatementCycleService.createDueJobs（回看 close cycles；缺失的 cycle 才按待出账账户数建 statement_jobs）
--> StatementJobDispatcher claim 分片 -> StatementJobHandler 取本片账户
+-> StatementBatchService.run（推导已结束账期 + 列出待出账账户）
 -> StatementGenerationService.generate(...)（逐账户独立小事务）
 ```
 

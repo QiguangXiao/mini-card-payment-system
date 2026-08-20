@@ -163,7 +163,7 @@ begin tx → claim idempotency key → lock account row → 校验并改 domain 
 
 ### 3.3 `FOR UPDATE SKIP LOCKED`（队列表）
 
-Outbox / DelayJob / StatementJob 的 claim 用：
+Outbox / DelayJob / NotificationDelivery 的 claim 用：
 
 ```sql
 SELECT id, status, next_attempt_at FROM outbox_events
@@ -392,10 +392,10 @@ ALTER TABLE repayments ADD COLUMN failure_reason VARCHAR(200) NULL AFTER status;
    迁移不是单纯建表，还要考虑旧数据 backfill、consumer 切换、删除旧 lifecycle 字段、`UNIQUE(notification_id, channel)` 防重复投递。
 
 3. **Statement jobs flatten**
-   旧模型有 `statement_batches + statement_jobs(batch_id)`，后来改成 `statement_jobs(period_start, period_end, due_date, shard_no)`。原因是 batch parent 没有足够独立的业务生命周期，“本期是否完成”可以由 job 查询回答。`UNIQUE(period_start, period_end, shard_no)` 成为 job creation 的幂等键。
+   旧模型有 `statement_batches + statement_jobs(batch_id)`，后来扁平化成 `statement_jobs(period_start, period_end, due_date, shard_no)`，最后**整张表都删掉了**（`0008-remove-statement-jobs.sql`）：出账简化成单线程逐账户循环后，“本期还有谁没出账”由 `card_transactions.billing_status` 直接回答，不需要独立的任务状态表。这是一条值得讲的演进链——**每一步都在问“这张表承载的是业务事实，还是可以由业务事实推导出来的执行状态”**。
 
 4. **Lease token 拆开 owner 和 deadline**
-   `nextAttemptAt/claimUntil` 只表达 WHEN 到期，不表达 WHO 持有。Outbox、DelayJob、NotificationDelivery、StatementJob 都需要独立 `lease_token/claim_token`，worker finalize 前重新 `FOR UPDATE` 读 row 并比较 token，防止 stale worker 覆盖新 owner。
+   `nextAttemptAt/claimUntil` 只表达 WHEN 到期，不表达 WHO 持有。Outbox、DelayJob、NotificationDelivery 都需要独立 `lease_token`，worker finalize 前重新 `FOR UPDATE` 读 row 并比较 token，防止 stale worker 覆盖新 owner。
 
 5. **Statement version 服务 cache CAS**
    read model cache 不能用 `paidAmount` 这种业务字段推导版本；金额不变的状态变化也需要挡住迟到写。因此 `statements.version` 是正式单调版本，跟 statement 状态同事务更新，Redis L2 CAS/tombstone 用它做版本地板。
@@ -430,7 +430,7 @@ ALTER TABLE repayments ADD COLUMN failure_reason VARCHAR(200) NULL AFTER status;
 2. **状态机 invariant**：`authorizations`、`card_transactions`、`statements`、`repayments` 的状态字段和字段组合 CHECK。
 3. **CHECK 边界**：DB 守住 row-level consistency；late presentment、通知主题扩展这类策略留给 Java/domain。
 4. **幂等唯一键**：`idempotency_key`、`network_transaction_id`、`consumer_inbox`、`source_event_id`、`period/shard`。
-5. **异步可靠性**：`outbox_events`、`delay_jobs`、`notification_deliveries`、`statement_jobs` 的 `PROCESSING lease + token`。
+5. **异步可靠性**：`outbox_events`、`delay_jobs`、`notification_deliveries` 的 `PROCESSING lease + token`。
 6. **查询索引**：每个 `idx_...` 对应的 mapper SQL，是不是能支持 `WHERE` 和 `ORDER BY`。
 
 ---

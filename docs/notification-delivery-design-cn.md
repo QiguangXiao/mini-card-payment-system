@@ -12,7 +12,7 @@
 
 相关文档：
 - 事件 / Outbox / Inbox / Kafka 可靠投递与消费幂等细节见 [events-outbox-inbox-kafka-cn.md](events-outbox-inbox-kafka-cn.md)。
-- claimable job 家族对比（DelayJob / Outbox / StatementJob，本投递是它的第三个实例）见 [claimable-jobs-cn.md](claimable-jobs-cn.md)。
+- claimable job 家族对比（DelayJob / Outbox，本投递是同一模式的又一个实例）见 [claimable-jobs-cn.md](claimable-jobs-cn.md)。
 
 ---
 

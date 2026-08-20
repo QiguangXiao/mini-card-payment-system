@@ -17,78 +17,39 @@
         </constructor>
     </resultMap>
 
-    <select id="countBillableAccounts" resultType="long">
-        <!--
-          统计样例：periodStartInclusive='2026-06-01T00:00:00Z'，
-          periodEndExclusive='2026-07-01T00:00:00Z'。
-          访问路径：idx_card_transactions_billing_batch(status, billing_status, posted_at, credit_account_id)
-          先定位本账期 UNBILLED/POSTED 交易，再 COUNT(DISTINCT credit_account_id) 估算 job 数量。
-          这里不加锁，因为它只是生成 StatementJob 的参考计数；真正防重复在 job 唯一键和单账户出账锁里完成。
-        -->
-        SELECT COUNT(DISTINCT credit_account_id)
-        FROM card_transactions
-        WHERE status = 'POSTED'
-          AND billing_status = 'UNBILLED'
-          AND posted_at &gt;= #{periodStartInclusive}
-          AND posted_at &lt; #{periodEndExclusive}
-    </select>
-
     <!--
-      StatementJob 的账户分片查询。
+      批处理 fan-out：本账期还有待出账交易的账户。
+      查询样例：periodStartInclusive='2026-06-01T00:00:00Z'，periodEndExclusive='2026-07-01T00:00:00Z'。
+      访问路径：idx_card_transactions_billing_batch(status, billing_status, posted_at, credit_account_id)
+      先按 POSTED + UNBILLED 收窄，再按 posted_at 落到本账期，最后 DISTINCT 出账户。
 
-      核心表达式：
-        MOD(CRC32(credit_account_id), shardCount) = shardNo
+      为什么返回账户而不是交易：同一账户本期所有消费必须进同一张账单；
+      如果按交易 fan-out，同一账户的两笔消费会被并发处理，两个线程同时为同一账户同一账期出账。
 
-      CRC32 是 MySQL 内置的 deterministic checksum 函数：
-      - 输入同一个字符串 credit_account_id，每次都会得到同一个 32-bit 整数；
-      - 它不是加密 hash，只是足够便宜、稳定、分布大致均匀的分片 hash；
-      - 再对 shardCount 取模，就把账户稳定映射到 0..shardCount-1 的某个 shard。
+      这里不加锁：它只是给批处理列候选账户。真正的并发控制在单账户出账事务里
+      （锁 credit account + FOR UPDATE 锁候选交易 + statements cycle 唯一键）。
+      即使这份列表稍旧或含已被出账的账户，generate 也会幂等返回已有账单。
 
-      具体例子（数字是假设值，帮助理解）：
-        CRC32('account-A') = 101
-        CRC32('account-B') = 102
-        shardCount = 3
-        account-A -> MOD(101, 3) = 2，所以只会被 shardNo=2 的 job 处理
-        account-B -> MOD(102, 3) = 0，所以只会被 shardNo=0 的 job 处理
-
-      为什么按 account 分片，而不是按 card_transaction 分片：
-      - StatementGenerationService.generate(accountId, period) 会一次性锁住这个账户本账期所有候选交易；
-      - 同一账户的多笔消费必须进入同一张 statement；
-      - 如果按交易分片，同一个 account 的两笔交易可能落到两个 job，两个 job 会同时尝试生成同一账户同一期账单。
-
-      DISTINCT credit_account_id 的含义：
-      - 这里先找“本 shard 要处理哪些账户”，不是直接找所有交易；
-      - handler 后续逐账户调用 StatementGenerationService；
-      - 真正取该账户全部消费、FOR UPDATE 锁交易、生成 statement_lines 的查询在 findBillableLineSourcesForUpdate。
-
-      这里不加 FOR UPDATE：
-      - 本查询只是 dispatcher/handler 的 fan-out 列表；
-      - 真正并发控制在单账户生成时锁 credit account + candidate card_transactions rows；
-      - 即使两个 job 因重试等原因重复看到同一账户，statement cycle unique key 和 BILLED 标记仍会兜底。
-
-      索引注意：
-      - CRC32(credit_account_id) 是函数计算，MySQL 不能直接用普通 BTree 索引做范围定位；
-      - 所以前面的 status/billing_status/posted_at 条件先靠 idx_card_transactions_billing_batch 缩小候选集合；
-      - 然后再对候选 account 做 CRC32 + MOD 分片。
+      DISTINCT 的代价：候选集合大时 MySQL 需要去重排序。本项目账户量小不做优化；
+      真实规模下会改成按账户区间分片并行扫描（设计记录见 docs/claimable-jobs-cn.md）。
     -->
-    <select id="findAccountIdsForJob" resultType="java.lang.String">
+    <select id="findBillableAccountIds" resultType="java.lang.String">
         SELECT DISTINCT credit_account_id
         FROM card_transactions
         WHERE status = 'POSTED'
           AND billing_status = 'UNBILLED'
           AND posted_at &gt;= #{periodStartInclusive}
           AND posted_at &lt; #{periodEndExclusive}
-          AND MOD(CRC32(credit_account_id), #{shardCount}) = #{shardNo}
         ORDER BY credit_account_id
     </select>
 
     <!--
       生成 statement line 前同时锁住 card_transactions row。
-      statement_lines.card_transaction_id unique key 是数据库侧第二道防重复出账保护。
       查询样例：同一账户 2026-06 账期内，锁住所有 status='POSTED' 且 billing_status='UNBILLED' 的候选交易。
       索引样例：idx_card_transactions_statement_candidates
       (credit_account_id, status, billing_status, statement_id, posted_at) 能把候选范围压到单账户单账期。
-      如果没有 FOR UPDATE，两个 statement worker 可能同时读取同一批候选交易，再各自插入 statement_lines。
+      如果没有 FOR UPDATE，两个出账线程可能同时读取同一批候选交易，再各自插入 statement_lines；
+      statement_lines.card_transaction_id 唯一键是数据库侧第二道防重复出账保护。
     -->
     <select id="findBillableLineSourcesForUpdate" resultMap="statementLineSourceRowMap">
         SELECT
