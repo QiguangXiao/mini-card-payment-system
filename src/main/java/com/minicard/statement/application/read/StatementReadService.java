@@ -2,6 +2,7 @@ package com.minicard.statement.application.read;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -12,9 +13,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.minicard.repayment.application.ReceiveRepaymentCommand;
 import com.minicard.repayment.application.RepaymentService;
-import com.minicard.shared.domain.Money;
-import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.statement.domain.Statement;
+import com.minicard.statement.domain.StatementRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -105,26 +105,30 @@ public class StatementReadService {
             Long.class
     );
 
-    private final StatementGenerationService statementGenerationService;
+    // 读路径直接依赖 repository，而不是穿过写用例 StatementGenerationService：
+    // GET 不需要出账事务、行锁和 minimum payment 规则，读写两条路径耦合在一起只会让
+    // "改出账逻辑会不会影响账单查询"变成必须每次确认的问题。
+    private final StatementRepository statementRepository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final StatementReadCacheProperties properties;
     private final MeterRegistry meterRegistry;
-    // 跨 pod L1 失效广播。默认 no-op；开启后走 Redis Pub/Sub，让其他 pod 也清各自 L1。
+    // 跨 pod L1 失效广播：默认走 Redis Pub/Sub，让其他 pod 也清各自 L1；
+    // 关闭时注入 no-op 实现（集成测试没有 Redis 容器时用），此时跨 pod L1 stale 窗口退回 local-ttl。
     private final StatementReadCacheBroadcaster broadcaster;
     // L1 是每个 JVM 自己的本地内存 cache，速度快但不跨 pod 共享。
     // 所以 local TTL 必须比 Redis 短，避免其他 pod 写完后，本 pod 长时间拿旧值。
     private final Cache<UUID, StatementReadModel> localCache;
 
     public StatementReadService(
-            StatementGenerationService statementGenerationService,
+            StatementRepository statementRepository,
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
             StatementReadCacheProperties properties,
             MeterRegistry meterRegistry,
             StatementReadCacheBroadcaster broadcaster
     ) {
-        this.statementGenerationService = statementGenerationService;
+        this.statementRepository = statementRepository;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -207,7 +211,12 @@ public class StatementReadService {
      * <p>保持 source of truth 仍在 DB；写回 L2 后，本次返回值会由 Caffeine 自动放进 L1。</p>
      */
     private StatementReadModel rebuildFromDb(UUID id) {
-        StatementReadModel loaded = StatementReadModel.from(statementGenerationService.get(id));
+        // 找不到就抛 NoSuchElementException，由 GlobalExceptionHandler 映射成 404。
+        // 刻意不做 negative cache：statement id 是 UUID，不存在的 id 打不出热点，
+        // 但缓存 404 会在"账单刚生成、请求先到"的竞态下把空结果钉住一个 TTL。
+        Statement statement = statementRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("statement not found: " + id));
+        StatementReadModel loaded = StatementReadModel.from(statement);
         writeRedis(id, loaded);
         return loaded;
     }

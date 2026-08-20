@@ -15,8 +15,10 @@ import org.springframework.stereotype.Component;
  * <p>关键词：Redis Pub/Sub, PUBLISH, 缓存失效广播, fan-out, cache invalidation,
  * at-most-once, パブサブ。</p>
  *
- * <p>只在 {@code statement.read-cache.broadcast.enabled=true} 时装配；否则用
- * {@link NoOpStatementReadCacheBroadcaster}，evict 退化成"只清本 pod L1 + 删 L2"。</p>
+ * <p>默认装配（{@code statement.read-cache.broadcast.enabled} 缺省即为开启）；显式配成 false 时改用
+ * {@link NoOpStatementReadCacheBroadcaster}，evict 退化成"只清本 pod L1 + 写 L2 墓碑"。
+ * 反向事实：广播关掉后，多 pod 部署下还款已提交、L2 已写墓碑，其他 pod 的 Caffeine L1 仍可能在
+ * 最长 local-ttl（默认 30s）内返回还款前的旧账单。</p>
  *
  * <p>为什么是 Redis Pub/Sub 而不是 Kafka：缓存失效要的是<strong>广播给所有 pod</strong>，而 Kafka
  * 消费者组是竞争消费（一条消息只有一个 pod 收到），要广播得给每个 pod 配唯一 group，别扭且慢。
@@ -24,7 +26,8 @@ import org.springframework.stereotype.Component;
  * docs/caching-and-rate-limiting-cn.md 第三部分。</p>
  */
 @Component
-@ConditionalOnProperty(prefix = "statement.read-cache.broadcast", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "statement.read-cache.broadcast", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
 public class RedisStatementReadCacheBroadcaster implements StatementReadCacheBroadcaster {

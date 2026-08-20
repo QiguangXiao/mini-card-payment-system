@@ -328,10 +328,11 @@ statement:
     zone: Asia/Tokyo
     # 学习项目先采用产品级固定账单日，不做客户自定义 billing day。
     # 默认 31 表示月末关账；次日批处理上一周期，避免关账日白天迟到交易漏入账单。
-    # 对应代码：StatementCycleService.isCloseDate()/periodStartFor()，短月自动落到当月最后一天（dayInMonth）。
+    # 对应代码：StatementCycleService.recentCloseDatesOnOrBefore()/periodStartFor()，
+    # 短月自动落到当月最后一天（dayInMonth），例如 2 月会收敛到 2/28（闰年 2/29）。
     close-day-of-month: 31
     # 25 日常见为工资日；默认 27 日扣款，若 27 日是周末或日本节假日则顺延到下一个营业日。
-    # 对应代码：StatementCycleService.paymentDateAfter() + JapaneseBusinessDayCalendar；
+    # 对应代码：StatementCycleService.paymentDateAfter() + ConfiguredBusinessDayCalendar（见下方 bank-holidays）；
     # 结果写入 statement_jobs.due_date，最终成为 statements.due_date 和自动扣款 DelayJob 的触发日。
     payment-base-day-of-month: 27
     # 每天醒来时对最近几个已过去关账周期做 reconciliation，防止 missed cron 导致账单分片永远不创建。
@@ -340,6 +341,50 @@ statement:
     # 每个 durable statement_job 目标账户数；百万账户会被拆成约 1000 个分片任务。
     # 对应字段：statement_jobs.shard_no/shard_count。对应代码：StatementCycleService.shardCount()。
     target-accounts-per-job: 1000
+    # 银行休业日主数据（祝日マスター / holiday master），由 ConfiguredBusinessDayCalendar 读取，
+    # 与周末一起决定 due date 能不能落在这一天（payment-base-day-of-month 遇休业日顺延）。
+    # 为什么是配置而不是代码：祝日是数据。祝日法改过（山の日 2020/2021 移动、天皇誕生日 2019 换日），
+    # 春分/秋分由官方每年公布，用天文近似公式算出来的日期在远年会漂移。
+    # 真实发卡公司从可更新的祝日マスター（或全銀协日历）取数，所以这里也把它建模成数据。
+    # 反向事实：如果这份数据过期没续，日历会退化成"只跳周末"，把口座振替排到祝日上导致整批扣款失败；
+    # ConfiguredBusinessDayCalendar 因此对"未覆盖的年份"打一次 warn 日志，让续期变成可观测事件。
+    # 下面是日本 2026/2027 年的国民の祝日 + 振替休日（含 2026-05-06 振替休日、2026-09-22 国民の休日）。
+    bank-holidays:
+      - 2026-01-01  # 元日
+      - 2026-01-12  # 成人の日（1 月第 2 月曜）
+      - 2026-02-11  # 建国記念の日
+      - 2026-02-23  # 天皇誕生日
+      - 2026-03-20  # 春分の日
+      - 2026-04-29  # 昭和の日
+      - 2026-05-03  # 憲法記念日（日曜）
+      - 2026-05-04  # みどりの日
+      - 2026-05-05  # こどもの日
+      - 2026-05-06  # 振替休日（5/3 が日曜のため GW 明けに振替）
+      - 2026-07-20  # 海の日（7 月第 3 月曜）
+      - 2026-08-11  # 山の日
+      - 2026-09-21  # 敬老の日（9 月第 3 月曜）
+      - 2026-09-22  # 国民の休日（祝日に挟まれた平日）
+      - 2026-09-23  # 秋分の日
+      - 2026-10-12  # スポーツの日（10 月第 2 月曜）
+      - 2026-11-03  # 文化の日
+      - 2026-11-23  # 勤労感謝の日
+      - 2027-01-01  # 元日
+      - 2027-01-11  # 成人の日
+      - 2027-02-11  # 建国記念の日
+      - 2027-02-23  # 天皇誕生日
+      - 2027-03-21  # 春分の日（日曜）
+      - 2027-03-22  # 振替休日
+      - 2027-04-29  # 昭和の日
+      - 2027-05-03  # 憲法記念日
+      - 2027-05-04  # みどりの日
+      - 2027-05-05  # こどもの日
+      - 2027-07-19  # 海の日
+      - 2027-08-11  # 山の日
+      - 2027-09-20  # 敬老の日
+      - 2027-09-23  # 秋分の日
+      - 2027-10-11  # スポーツの日
+      - 2027-11-03  # 文化の日
+      - 2027-11-23  # 勤労感謝の日
   jobs:
     # 分片 job 的执行配置。注意 statement_jobs 的 lease 字段和 outbox/delay-jobs 不同：
     # 用 claim_until（deadline）+ claim_token（owner identity），而不是 next_attempt_at + lease_token；
@@ -402,11 +447,13 @@ statement:
     rebuild-lock-wait-attempts: 5
     rebuild-lock-wait-interval: 20ms
     broadcast:
-      # 跨 pod L1 失效广播（Redis Pub/Sub）。默认关闭：单实例/测试不需要，跨 pod L1 由 local-ttl 兜底。
+      # 跨 pod L1 失效广播（Redis Pub/Sub）。默认开启：L2 已经把 Redis 变成硬依赖，
+      # 多 pod 部署下 L1 只靠 local-ttl 兜底意味着还款后最多 30s 还能读到旧账单。
       # 开启后，还款 after-commit 会 PUBLISH 一条失效消息，所有 pod 的订阅者清各自 Caffeine L1，
       # 把跨 pod L1 stale 窗口从 local-ttl 压到一次广播延迟。它是 best-effort，丢消息时退回 local-ttl。
       # 它只关 L1 窗口，不解决 L2 late-write 竞态（那要版本号/CAS）。
-      enabled: false
+      # 关成 false 时注入 NoOpStatementReadCacheBroadcaster；集成测试没有 Redis 容器就是这么关的。
+      enabled: true
 
 repayment:
   auto-debit:

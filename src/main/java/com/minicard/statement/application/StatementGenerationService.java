@@ -9,7 +9,6 @@ import java.time.ZoneId;
 import java.util.Currency;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
@@ -87,15 +86,6 @@ public class StatementGenerationService {
                         command.periodEnd()
                 )
                 .orElseGet(() -> createStatement(command, account, now));
-    }
-
-    /**
-     * 查询单张 statement，不改变账单状态。
-     */
-    @Transactional(readOnly = true)
-    public Statement get(UUID id) {
-        return statementRepository.findById(id)
-                .orElseThrow(() -> new NoSuchElementException("statement not found: " + id));
     }
 
     /**

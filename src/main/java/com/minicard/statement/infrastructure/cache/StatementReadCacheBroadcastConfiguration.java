@@ -22,7 +22,8 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
  * 既不占业务请求线程，也独立于 publish 用的连接。容器随 Spring 生命周期启动/优雅关闭。</p>
  */
 @Configuration
-@ConditionalOnProperty(prefix = "statement.read-cache.broadcast", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "statement.read-cache.broadcast", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 public class StatementReadCacheBroadcastConfiguration {
 
     @Bean

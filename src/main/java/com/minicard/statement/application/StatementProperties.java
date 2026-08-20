@@ -1,7 +1,9 @@
 package com.minicard.statement.application;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -48,9 +50,19 @@ public record StatementProperties(
             /** 每次 scheduler 回看多少个已过去 cycle，用于补应用停机期间漏掉的关账任务。 */
             int reconciliationLookbackCycles,
             /** 每个 durable statement job 期望处理的账户数，用于由候选账户数计算 shardCount。 */
-            int targetAccountsPerJob
+            int targetAccountsPerJob,
+            /**
+             * 银行休业日（祝日マスター/holiday master）数据，由 ConfiguredBusinessDayCalendar 使用。
+             *
+             * <p>祝日是数据不是算法：祝日法会修改、春分/秋分每年官方公布，所以放配置而不是写死在代码里。
+             * 缺某一年数据时日历会 fail-open 成"只跳周末"并打 warn 日志，不会让批处理停摆。</p>
+             */
+            Set<LocalDate> bankHolidays
     ) {
         public Batch {
+            // 未配置时按空集合处理：日历退化成"只跳周末"，并由 ConfiguredBusinessDayCalendar 告警。
+            // Set.copyOf 顺手做不可变防御拷贝，避免绑定后的集合被别处修改影响扣款日推导。
+            bankHolidays = bankHolidays == null ? Set.of() : Set.copyOf(bankHolidays);
             // planner 参数在应用启动绑定时 fail fast；运行中才发现无效时区/负分片规模会留下缺失 cycle。
             requireText(cron, "cron");
             requireText(zone, "zone");

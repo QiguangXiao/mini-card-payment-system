@@ -170,7 +170,7 @@ created_at / updated_at / last_error
 ```text
 6/30 关账，7/1 01:00 JST  BillingCycleScheduler 触发 → StatementCycleService.createDueJobs
   → periodEnd=6/30 是关账日 → cycle: periodStart=6/1, periodEnd=6/30, dueDate=7/27
-    （27 日落周末按 JapaneseBusinessDayCalendar 顺延工作日）
+    （27 日落周末/祝日按 ConfiguredBusinessDayCalendar 顺延工作日）
   → countBillableAccounts=2500 → shardCount=ceil(2500/1000)=3
   → INSERT IGNORE 建 shard 0/1/2（重复触发靠 uk 幂等跳过）
 每 1s  StatementJobDispatcher.dispatch：短事务 FOR UPDATE SKIP LOCKED 领 PENDING

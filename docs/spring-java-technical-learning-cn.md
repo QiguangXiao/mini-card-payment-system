@@ -1679,28 +1679,29 @@ cycle.dueDate()
 
 调用点更可读，也降低传参错位风险。
 
-### 14.14 `TreeSet` 与 `Set.copyOf`
+### 14.14 `Set.copyOf` 做不可变防御拷贝（record 紧凑构造器）
 
-位置：`JapaneseBusinessDayCalendar`
-
-`TreeSet<LocalDate>` 让 holiday set 天然排序。功能上 `HashSet` 也能判断 contains，但调试和测试时顺序不稳定。
-
-`Set.copyOf(holidays)` 用在遍历时追加替代休日：
+位置：`StatementProperties.Batch`（银行休业日主数据）
 
 ```java
-for (LocalDate holiday : Set.copyOf(holidays)) {
-    ...
-    holidays.add(substitute);
+public record Batch(..., Set<LocalDate> bankHolidays) {
+    public Batch {
+        // 未配置时退化成空集合；同时做不可变防御拷贝。
+        bankHolidays = bankHolidays == null ? Set.of() : Set.copyOf(bankHolidays);
+    }
 }
 ```
 
-如果直接遍历原集合同时 add：
+两个知识点：
 
-```text
-ConcurrentModificationException
-```
+- **record 的紧凑构造器可以给参数重新赋值**，赋值结果才写进 final 字段。这是 record 里做归一化/防御拷贝的标准位置。
+- **`Set.copyOf` 返回不可变副本**：Spring 绑定出来的集合是可变的，直接存进 record 字段等于把内部状态交出去。
+  反向事实：别处拿到这个 Set 后 `add` 一天，扣款日推导就被悄悄改了，而 record 看起来仍然是"不可变值对象"。
 
-这不是多线程问题，而是 Java fail-fast iterator 对“遍历中结构修改”的保护。
+> 这一节原本讲的是已删除的 `JapaneseBusinessDayCalendar`（用 `TreeSet` 存祝日、用 `Set.copyOf` 做遍历快照
+> 避免 `ConcurrentModificationException`）。祝日已经改成配置数据（`statement.batch.bank-holidays`），
+> 那段代码规则连同它的天文公式一起删掉了——`ConcurrentModificationException` 是 Java fail-fast iterator
+> 对"遍历中结构修改"的保护，这个知识点本身仍然值得记，只是项目里不再有它的实例。
 
 ### 14.15 `JdbcTemplate` adapter 里的 `Instant -> Timestamp`
 
@@ -2256,7 +2257,7 @@ covered Java files: 136 / 226 = 60.2%
 8. 读 `ExternalRiskClient`、`ExternalRiskGatewayAdapter`，理解 Feign、AOP 和 circuit breaker。
 9. 读 `RequestNotificationService`、`ConsumerInboxMapper.xml`，理解 stable consumer name、Inbox claim 和 duplicate key。
 10. 读 `OutboxEvent`、`DelayJob`、`OutboxEventMapper.xml`、`CardTransactionMapper.xml`，理解 backoff、XML escaping 和 MyBatis `<foreach>`。
-11. 读 `StatementCycleService`、`JapaneseBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
+11. 读 `StatementCycleService`、`ConfiguredBusinessDayCalendar`、`StatementGenerationService`，理解 `YearMonth`、private record、`Set.copyOf`、`getFirst()` 和 rounding。
 12. 读 `JdbcRiskVelocityCounter`、`AuthorizationOutboxAdapter`、Notification listeners，理解 adapter 边界里的 SQL temporal conversion、ObjectNode payload 和 typed parsing。
 
 每读一个点，都问一句：

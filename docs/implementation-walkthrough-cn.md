@@ -760,13 +760,18 @@ dueDate     = 7 月 27 日
   `StatementJobRepository.existsForCycle(periodStart, periodEnd)` 看该周期是否已经有 `statement_jobs`。
 - 缺失的周期才计算 `dueDate`、账户数和 shardCount，并用 `INSERT IGNORE` 写入
   `(period_start, period_end, shard_no)` 唯一保护的分片 rows。多实例同时补建也安全，最多一个实例真正插入。
-- `createDueJobs(LocalDate runDate)` 仍保留为 runbook/测试入口，用于人工精确补跑某个账务日。
+- 只有 `createDueJobs()` 一个入口。"今天是哪天"完全来自注入的 `Clock`（`statement.batch.zone` 决定时区），
+  所以测试用 fixed clock 就能驱动真实 scheduler 语义，不需要一个只有测试会走的 `createDueJobs(runDate)` 重载。
+  反向事实：留着那个重载，生产代码里就多一条 edge-triggered 分支，而真正每天跑的 level-triggered 补跑路径反而没被测到。
 
 为什么扣款日用 27 日并顺延到日本营业日：
 
 - 25 日常见为工资日，当天银行入账和资金可用可能有时间差。
 - 默认 27 日扣款更保守，给工资入账和用户资金准备留出缓冲。
-- `JapaneseBusinessDayCalendar` 会把周末、日本法定节假日、振替休日和国民の休日视为非营业日。
+- `ConfiguredBusinessDayCalendar` 把周末 + `statement.batch.bank-holidays` 里配置的银行休业日视为非营业日。
+  祝日是**数据不是算法**：祝日法改过（山の日、天皇誕生日），春分/秋分由官方每年公布，代码里的天文近似公式在远年会漂移，
+  所以这里建模成可更新的祝日マスター（holiday master），换成银行日历接口时只替换这一个 bean。
+  数据没覆盖到的年份 fail-open 成"只跳周末"并打一次 warn 日志——反向事实：静默退化会把口座振替排到祝日上，整批扣款失败却无人知道。
 - 如果 27 日不是日本营业日，就顺延到之后第一个营业日。
 
 当前不提供公开的手动 generate API。真实出账只由 billing-cycle reconciliation 规划 durable jobs；
@@ -1546,7 +1551,9 @@ curl http://localhost:8080/api/repayments/{repaymentId}
 处理：
 
 - authorization/repayment 查询用 `@Transactional(readOnly = true)` 直接读 DB。
-- statement GET 先读 read model cache，miss 后通过 `StatementGenerationService.get(id)` 回源 DB。
+- statement GET 先读 read model cache，miss 后通过 `StatementRepository.findById(id)` 回源 DB。
+  读路径直接依赖 repository，不穿过写用例 `StatementGenerationService`：GET 不需要出账事务和行锁，
+  两条路径解耦后，改出账逻辑不必每次确认「会不会影响账单查询」。
 - 不写 outbox。
 - 不写 delay job。
 - 不修改额度。
@@ -1566,7 +1573,7 @@ StatementController.get(id)
 -> StatementReadService.get(id)
    -> Caffeine L1
    -> Redis L2
-   -> StatementGenerationService.get(id)
+   -> StatementRepository.findById(id)
    -> StatementRepository.findById(id)
 -> StatementResponse.from(readModel)
 ```
@@ -1582,7 +1589,7 @@ StatementController.get(id)
 1. 先查 Caffeine L1。
 2. L1 miss 后查 Redis L2。
 3. L2 hit 时回填 L1。
-4. L1/L2 都 miss 时调用 `StatementGenerationService.get(id)` 从 MySQL 读取 aggregate，再映射成 `StatementReadModel`。
+4. L1/L2 都 miss 时调用 `StatementRepository.findById(id)` 从 MySQL 读取 aggregate，再映射成 `StatementReadModel`；找不到抛 `NoSuchElementException`，由 `GlobalExceptionHandler` 映射成 404（刻意不做 negative cache）。
 5. Redis 读写失败时降级回 DB，不让低风险缓存影响 GET 可用性。
 
 为什么 Redis TTL 要加 jitter：

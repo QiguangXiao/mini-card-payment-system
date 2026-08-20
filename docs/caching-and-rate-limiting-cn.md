@@ -90,7 +90,7 @@ cache name = `statement-read-model-v3`（带版本号，见 §2.6）。配置前
 | `rebuild-lock-enabled` | **true** | 跨 pod 重建锁防击穿（见 §3.2），**默认开启** |
 | `rebuild-lock-ttl` | 2s | 重建锁持有时间（也是持锁者崩溃后的自动释放上限） |
 | `rebuild-lock-wait-attempts` × `-wait-interval` | 5 × 20ms | loser 最多自旋 ~100ms 等 winner 填好 L2，超时 fail-open 自己回源 |
-| `broadcast.enabled` | **false** | 跨 pod L1 失效广播（Redis Pub/Sub，见 §3.5），**默认关闭** |
+| `broadcast.enabled` | **true** | 跨 pod L1 失效广播（Redis Pub/Sub，见 §3.5），**默认开启**；集成测试没有 Redis 容器，用 `application-it.yml` 关成 `false`（注入 `NoOpStatementReadCacheBroadcaster`） |
 
 ### 2.2 读路径
 
@@ -101,7 +101,7 @@ GET /api/statements/{id}
    -> Caffeine L1（localCache.get(id, loader)，自带同 JVM single-flight）
    -> [miss] readRedis(id)            // L2
    -> [L2 miss] 重建：rebuildWithSingleFlight 或 rebuildFromDb
-       -> StatementGenerationService.get(id) -> MySQL
+       -> StatementRepository.findById(id) -> MySQL
        -> CAS 写回 L2
 ```
 
@@ -231,9 +231,11 @@ return 1
 
 > **怎么根治（如果业务要"崩溃也不丢失效"）**：把失效做成**事务内 outbox 事件 + relay 至少一次**——在还款事务里同时 `INSERT INTO outbox (statement.invalidate, id, version)`，由已有的 Outbox relay 至少一次地执行"写墓碑 + 广播"（写墓碑/广播本身幂等）。代价是失效从亚毫秒变成 ~1s 的 poll 延迟 + 一次 DB 写。本项目刻意停在 after-commit（账单容忍秒级 stale，强一致直接读 DB），但**能说清升级路径**就是成熟度信号。
 
-### 3.5 跨 pod L1 失效广播：Redis Pub/Sub（默认关闭）
+### 3.5 跨 pod L1 失效广播：Redis Pub/Sub（默认开启）
 
-evict 只清了本 pod 的 L1，其他 pod 的 Caffeine 仍留旧值最长 `local-ttl`。开启 `broadcast.enabled=true` 后，evict 再 PUBLISH 一条 Redis 消息，所有 pod 的订阅者 `invalidateLocal`，把跨 pod L1 窗口从 `local-ttl` 压到一次广播延迟。
+evict 只清了本 pod 的 L1，其他 pod 的 Caffeine 仍留旧值最长 `local-ttl`。`broadcast.enabled=true`（默认）时，evict 再 PUBLISH 一条 Redis 消息，所有 pod 的订阅者 `invalidateLocal`，把跨 pod L1 窗口从 `local-ttl` 压到一次广播延迟。
+
+> **为什么默认从 false 改成 true**：L2 已经让 Redis 成为这条读路径的硬依赖，再把广播默认关掉，等于多 pod 部署下还款后最长 30s 仍可能读到旧账单——而省下的只是一个订阅连接。关掉的开关仍然保留：`NoOpStatementReadCacheBroadcaster` 是 null object，集成测试不起 Redis 容器时用它，避免 `RedisMessageListenerContainer` 在启动期反复重连刷日志。
 
 **为什么失效广播用 Pub/Sub 而不是 Kafka（重要选型题）：**
 
@@ -398,7 +400,7 @@ Redis-backed 限流库通常也需要 Lua 或等价的服务端原子机制，�
 - Race B（迟到写落空 key）：墓碑版本地板 + CAS。
 - 提交前失效→旧值固化：失效排到 after-commit。
 - 乱序还款/乱序 evict：版本单调，CAS 让高版本恒胜。
-- 跨 pod L1 stale：Pub/Sub 广播（**仅在 `broadcast.enabled=true` 时**，默认关）。
+- 跨 pod L1 stale：Pub/Sub 广播（`broadcast.enabled`，默认开；关掉则退回 `local-ttl` 收敛）。
 - 缓存故障放大成 GET 故障：读失败 fallback 回源 DB。
 
 **⚠️ 仍然存在（按重要性，且都已知/可接受）：**

@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.minicard.statement.domain.StatementJob;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,25 +33,35 @@ import static org.mockito.Mockito.mock;
  */
 class StatementCycleServiceTest {
 
-    private static final Clock CLOCK =
+    /** JST 2026-07-01 09:00：6/30（月末）是刚结束的关账日。 */
+    private static final Clock JST_2026_07_01 =
             Clock.fixed(Instant.parse("2026-07-01T00:00:00Z"), ZoneOffset.UTC);
 
     private StatementJobRepository jobRepository;
     private StatementBillingRepository billingRepository;
     private BusinessDayCalendar businessDayCalendar;
-    private StatementCycleService service;
 
     @BeforeEach
     void setUp() {
         jobRepository = mock(StatementJobRepository.class);
         billingRepository = mock(StatementBillingRepository.class);
         businessDayCalendar = mock(BusinessDayCalendar.class);
-        service = new StatementCycleService(
+    }
+
+    /**
+     * 按"当前业务时间 + 回看窗口"装配 planner。
+     *
+     * <p>scheduler 只有一个入口 {@code createDueJobs()}，"今天是哪天"完全由注入的 {@link Clock} 决定。
+     * 反向事实：如果为了测试保留一个 {@code createDueJobs(runDate)} 重载，生产代码就多一条
+     * 只有测试会走的分支（而且它是 edge-triggered 语义），真实 scheduler 的补跑行为反而测不到。</p>
+     */
+    private StatementCycleService service(Clock clock, int lookbackCycles) {
+        return new StatementCycleService(
                 jobRepository,
                 billingRepository,
-                statementProperties(),
+                statementProperties(lookbackCycles),
                 businessDayCalendar,
-                CLOCK
+                clock
         );
     }
 
@@ -67,7 +78,7 @@ class StatementCycleServiceTest {
         when(businessDayCalendar.nextBusinessDayOnOrAfter(LocalDate.parse("2026-07-27")))
                 .thenReturn(LocalDate.parse("2026-07-27"));
 
-        int shardCount = service.createDueJobs(LocalDate.parse("2026-07-01"));
+        int shardCount = service(JST_2026_07_01, 1).createDueJobs();
 
         // 2500 账户 / 每片 1000 = 3 个分片。
         assertThat(shardCount).isEqualTo(3);
@@ -85,15 +96,29 @@ class StatementCycleServiceTest {
     }
 
     @Test
-    // 测试目的：验证非关账日后的普通日期不会误创建 statement jobs。
-    // variant：runDate=7/2，昨天不是 close date，跳过 billing account 统计和 job insert。
-    void skipsWhenRunDateDoesNotFollowACloseDate() {
-        // runDate=7/2 的“昨天”7/1 不是关账日（关账日是月末），不应创建任何 job。
-        int shardCount = service.createDueJobs(LocalDate.parse("2026-07-02"));
+    @SuppressWarnings("unchecked")
+    // 测试目的：验证 planner 只规划"已经关账"的周期，当期账单不会被提前出账。
+    // variant：今天是 7/15，7 月关账日 7/31 还没到，回看只应命中 6 月 cycle。
+    void doesNotPlanTheCurrentCycleBeforeItsCloseDateHasPassed() {
+        Clock midJuly = Clock.fixed(Instant.parse("2026-07-15T00:00:00Z"), ZoneOffset.UTC);
+        when(billingRepository.countBillableAccounts(any(), any())).thenReturn(10L);
+        when(businessDayCalendar.nextBusinessDayOnOrAfter(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThat(shardCount).isZero();
-        verify(billingRepository, never()).countBillableAccounts(any(), any());
-        verify(jobRepository, never()).insertAll(any());
+        int shardCount = service(midJuly, 1).createDueJobs();
+
+        assertThat(shardCount).isEqualTo(1);
+        // 7 月 cycle（7/1~7/31）尚未关账，连"是否已规划"都不该去查。
+        verify(jobRepository, never()).existsForCycle(
+                eq(LocalDate.parse("2026-07-01")),
+                eq(LocalDate.parse("2026-07-31"))
+        );
+        ArgumentCaptor<List<StatementJob>> captor = ArgumentCaptor.forClass(List.class);
+        verify(jobRepository).insertAll(captor.capture());
+        assertThat(captor.getValue()).singleElement().satisfies(job -> {
+            assertThat(job.periodStart()).isEqualTo(LocalDate.parse("2026-06-01"));
+            assertThat(job.periodEnd()).isEqualTo(LocalDate.parse("2026-06-30"));
+        });
     }
 
     @Test
@@ -103,7 +128,7 @@ class StatementCycleServiceTest {
         when(jobRepository.existsForCycle(LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30")))
                 .thenReturn(true);
 
-        int shardCount = service.createDueJobs(LocalDate.parse("2026-07-01"));
+        int shardCount = service(JST_2026_07_01, 1).createDueJobs();
 
         assertThat(shardCount).isZero();
         verify(billingRepository, never()).countBillableAccounts(any(), any());
@@ -126,7 +151,7 @@ class StatementCycleServiceTest {
         when(businessDayCalendar.nextBusinessDayOnOrAfter(LocalDate.parse("2026-07-27")))
                 .thenReturn(LocalDate.parse("2026-07-27"));
 
-        int shardCount = service.createDueJobs();
+        int shardCount = service(JST_2026_07_01, 2).createDueJobs();
 
         assertThat(shardCount).isEqualTo(2);
         verify(jobRepository).existsForCycle(
@@ -159,7 +184,7 @@ class StatementCycleServiceTest {
         when(businessDayCalendar.nextBusinessDayOnOrAfter(LocalDate.parse("2026-07-27")))
                 .thenReturn(LocalDate.parse("2026-07-28"));
 
-        int shardCount = service.createDueJobs(LocalDate.parse("2026-07-01"));
+        int shardCount = service(JST_2026_07_01, 1).createDueJobs();
 
         assertThat(shardCount).isEqualTo(1);
         ArgumentCaptor<List<StatementJob>> captor = ArgumentCaptor.forClass(List.class);
@@ -168,9 +193,14 @@ class StatementCycleServiceTest {
                 .satisfies(job -> assertThat(job.dueDate()).isEqualTo(LocalDate.parse("2026-07-28")));
     }
 
-    private StatementProperties statementProperties() {
+    private StatementProperties statementProperties(int reconciliationLookbackCycles) {
         return new StatementProperties(
-                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 2, 1000),
+                // bank-holidays 传空集合：这些测试用 mock 的 BusinessDayCalendar 控制顺延，
+                // 真实祝日数据的行为由 ConfiguredBusinessDayCalendarTest 覆盖。
+                new StatementProperties.Batch(
+                        true, "0 0 1 * * *", "Asia/Tokyo", 31, 27,
+                        reconciliationLookbackCycles, 1000, Set.of()
+                ),
                 new StatementProperties.Jobs(true, 1000, 10000, 10, 3, 300, 4, 20),
                 new StatementProperties.Policy(
                         new BigDecimal("0.10"),

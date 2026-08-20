@@ -25,6 +25,11 @@ statement:
     enabled: false
   jobs:
     enabled: false
+  read-cache:
+    broadcast:
+      # MySQL 集成测试不起 Redis 容器；关掉 Pub/Sub 广播后注入 NoOp broadcaster，
+      # 避免 RedisMessageListenerContainer 在启动期反复重连不存在的 Redis 刷日志。
+      enabled: false
 notification:
   delivery:
     enabled: false

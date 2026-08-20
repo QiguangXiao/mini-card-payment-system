@@ -6,13 +6,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Currency;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.minicard.statement.application.StatementGenerationService;
 import com.minicard.shared.domain.Money;
 import com.minicard.statement.domain.Statement;
 import com.minicard.statement.domain.StatementLineSource;
+import com.minicard.statement.domain.StatementRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,7 +50,7 @@ class StatementReadServiceTest {
     private static final Duration REMOTE_TTL = Duration.ofMinutes(5);
     private static final Duration REMOTE_TTL_JITTER = Duration.ofSeconds(30);
 
-    private StatementGenerationService statementGenerationService;
+    private StatementRepository statementRepository;
     private StringRedisTemplate redisTemplate;
     private ValueOperations<String, String> valueOperations;
     private ObjectMapper objectMapper;
@@ -59,7 +60,7 @@ class StatementReadServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        statementGenerationService = mock(StatementGenerationService.class);
+        statementRepository = mock(StatementRepository.class);
         redisTemplate = mock(StringRedisTemplate.class);
         valueOperations = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -69,7 +70,7 @@ class StatementReadServiceTest {
         // loser/fail-open 路径由各自的用例显式覆盖这个 stub。
         when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
         service = new StatementReadService(
-                statementGenerationService,
+                statementRepository,
                 redisTemplate,
                 objectMapper,
                 new StatementReadCacheProperties(
@@ -102,14 +103,14 @@ class StatementReadServiceTest {
         Statement statement = statement();
         String redisKey = redisKey(statement.id());
         when(valueOperations.get(redisKey)).thenReturn(null);
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         StatementReadModel first = service.get(statement.id());
         StatementReadModel second = service.get(statement.id());
 
         assertThat(first).isSameAs(second);
         assertThat(first.id()).isEqualTo(statement.id());
-        verify(statementGenerationService, times(1)).get(statement.id());
+        verify(statementRepository, times(1)).findById(statement.id());
         // 写回 L2 走版本化 CAS（execute），信封 = "<version>|<json>"，TTL 在 [remoteTtl, remoteTtl+jitter]。
         ArgumentCaptor<Object> casArgs = ArgumentCaptor.forClass(Object.class);
         verify(redisTemplate).execute(any(RedisScript.class), eq(List.of(redisKey)),
@@ -132,7 +133,7 @@ class StatementReadServiceTest {
         );
         String redisKey = redisKey(statement.id());
         when(valueOperations.get(redisKey)).thenReturn(null);
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         StatementReadModel readModel = service.get(statement.id());
 
@@ -160,7 +161,7 @@ class StatementReadServiceTest {
         StatementReadModel readModel = service.get(statement.id());
 
         assertThat(readModel.id()).isEqualTo(statement.id());
-        verify(statementGenerationService, never()).get(statement.id());
+        verify(statementRepository, never()).findById(statement.id());
     }
 
     @Test
@@ -171,12 +172,12 @@ class StatementReadServiceTest {
         Statement statement = statement();
         String redisKey = redisKey(statement.id());
         when(valueOperations.get(redisKey)).thenReturn("100|");
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         StatementReadModel readModel = service.get(statement.id());
 
         assertThat(readModel.id()).isEqualTo(statement.id());
-        verify(statementGenerationService).get(statement.id());
+        verify(statementRepository).findById(statement.id());
     }
 
     @Test
@@ -230,14 +231,14 @@ class StatementReadServiceTest {
         // 抢到锁的 winner 回源 DB 后必须释放锁：execute(RELEASE_SCRIPT, [lockKey], token)。
         Statement statement = statement();
         when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);   // L2 miss
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         service.get(statement.id());
 
         // 释放锁的 keys 是 rebuild-lock key、只有一个 ARGV(token)，与 3-arg 的 CAS 写互不混淆。
         verify(redisTemplate).execute(
                 any(RedisScript.class), eq(List.of(rebuildLockKey(statement.id()))), anyString());
-        verify(statementGenerationService, times(1)).get(statement.id());
+        verify(statementRepository, times(1)).findById(statement.id());
     }
 
     @Test
@@ -256,7 +257,7 @@ class StatementReadServiceTest {
         StatementReadModel readModel = service.get(statement.id());
 
         assertThat(readModel.id()).isEqualTo(statement.id());
-        verify(statementGenerationService, never()).get(statement.id());
+        verify(statementRepository, never()).findById(statement.id());
     }
 
     @Test
@@ -267,12 +268,12 @@ class StatementReadServiceTest {
         Statement statement = statement();
         when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);   // L2 始终空
         when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(false);
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         StatementReadModel readModel = service.get(statement.id());
 
         assertThat(readModel.id()).isEqualTo(statement.id());
-        verify(statementGenerationService, times(1)).get(statement.id());
+        verify(statementRepository, times(1)).findById(statement.id());
     }
 
     @Test
@@ -284,12 +285,12 @@ class StatementReadServiceTest {
         when(valueOperations.get(redisKey(statement.id()))).thenReturn(null);
         when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
                 .thenThrow(new RedisConnectionFailureException("redis down"));
-        when(statementGenerationService.get(statement.id())).thenReturn(statement);
+        when(statementRepository.findById(statement.id())).thenReturn(Optional.of(statement));
 
         StatementReadModel readModel = service.get(statement.id());
 
         assertThat(readModel.id()).isEqualTo(statement.id());
-        verify(statementGenerationService, times(1)).get(statement.id());
+        verify(statementRepository, times(1)).findById(statement.id());
     }
 
     private Statement statement() {

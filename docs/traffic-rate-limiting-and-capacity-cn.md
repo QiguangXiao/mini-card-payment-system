@@ -351,7 +351,7 @@ Statement GET 的负载整形配置：
 | rebuild lock TTL | `2s` | L2 miss 时跨 Pod single-flight |
 | loser wait | `5 × 20ms = 100ms` | 等 winner 填缓存的最大额外延迟，之后 fail-open 回源 |
 | tombstone TTL | `10s` | 防迟到旧快照覆盖还款后的新版本 |
-| L1 invalidation broadcast | `false` | 当前跨 Pod stale 主要靠 30s L1 TTL 收敛 |
+| L1 invalidation broadcast | `true` | 还款 after-commit 广播失效；丢消息时退回 30s L1 TTL 收敛 |
 
 `rebuild lock` 控制的是同一个 cache key 同时回源的并发，不是全局 QPS。锁失败、等待超时或 Redis
 不可用都会 fail-open 回 MySQL；因此 miss storm 最终仍需要 Hikari/DB 容量和入口限流兜底。
@@ -844,7 +844,7 @@ stale-while-revalidate、Bloom filter、更多 distributed-lock 方案。
 | 删除候选 | 为什么可以删 | 删除后保留什么 |
 | --- | --- | --- |
 | `JdbcRiskVelocityCounter` + `risk.velocity.store` 切换 | 默认一直用 Redis；JDBC 版主要是算法对照，每笔 COUNT 会给主库加压 | 保留 Redis sliding window 和文档中的 SQL 对比即可 |
-| 默认关闭的 Statement L1 Pub/Sub broadcast 路径 | L1 30s TTL 已是 correctness fallback；Pub/Sub 只缩短跨 Pod stale window | 保留 L1/L2、version/tombstone、rebuild lock |
+| ~~默认关闭的 Statement L1 Pub/Sub broadcast 路径~~（**已改为默认开启，不再是删除候选**） | 原理由：L1 30s TTL 已是 correctness fallback。改判理由：Redis 已是 L2 硬依赖，多 pod 下 30s stale 窗口的代价高于一个订阅连接 | 保留 L1/L2、version/tombstone、rebuild lock、Pub/Sub 失效 |
 | 文档中重复的生产规格表 | 不能代替压测，容易随代码漂移 | 保留本文一份 sizing 表和公式 |
 
 这三个是“可删候选”，不是 correctness bug。真正删除时要同步测试、配置、文档，不能只删一个 bean 留下

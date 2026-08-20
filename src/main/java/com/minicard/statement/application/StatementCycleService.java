@@ -79,55 +79,6 @@ public class StatementCycleService {
     }
 
     /**
-     * 为某个 runDate 对应的 billing cycle 创建 sharded jobs，作为测试和 runbook 精确补跑入口。
-     *
-     * <p>只有“runDate 的昨天”是 close date 时才创建。
-     * runDate 是“调度器醒来的业务日”，periodEnd 是“刚完整结束的关账日”。
-     * 例如 runDate=2026-08-01，periodEnd=2026-07-31。</p>
-     *
-     * <p>
-     * 创建是幂等的（INSERT IGNORE + cycle/shard 唯一键），重复触发不会产生重复分片。
-     * 如果不幂等，scheduler 多实例、手工补跑或当天重跑会把同一周期的分片创建多份。</p>
-     *
-     * <p>事务归属：外部测试或手工入口可以直接调用本方法，因此保留 {@code @Transactional}。
-     * scheduler 的自动补偿入口是 {@link #createDueJobs()}，不会依赖本方法的 self-invocation。</p>
-     *
-     * @return 本期分片数；非 close date 返回 0。
-     */
-    @Transactional
-    public int createDueJobs(LocalDate runDate) {
-        // 阶段 1：手工/测试入口按 runDate 的前一天判断是否是 close date。
-        LocalDate periodEnd = runDate.minusDays(1);
-        if (!isCloseDate(periodEnd)) {
-            return 0;
-        }
-
-        // 阶段 2：先用 cycle 身份(periodStart + periodEnd)判断是否已规划过，减少重复计算。
-        // existsForCycle 只要看到任意 shard 就返回 true，语义是“这个 cycle 已经被 planner 接管过”。
-        // 这不是在判断所有账户是否都已经生成 statement；账户级完成度要看 statement_jobs 的 DONE/DEAD
-        // 或 statements 的自然键，而不是由 scheduler 再扫一遍全量账户。
-        //
-        // 为什么“有一个 shard 就算有”在当前实现成立：
-        // 1) createJobsForCycle 在同一个事务里生成本 cycle 的整套 shard；
-        // 2) insertAll 内部逐条 INSERT IGNORE，但事务未提交前外部看不到半套结果；
-        // 3) uk_statement_jobs_cycle_shard(period_start, period_end, shard_no) 保证重复 planner 不会制造第二套 shard。
-        //
-        // 什么时候需要升级成全局检查：
-        // - 如果未来允许运维手工删除/重建某个 shard；
-        // - 如果改成分批提交 shard，而不是一个事务里插入整套；
-        // - 如果需要在 scheduler 层主动修复“只有 shard 0，没有 shard 1/2”的 DB 损坏。
-        // 那时可以改成检查 COUNT(*) 是否等于 MAX(shard_count)，或加 cycle-level read model。
-        // 幂等最终仍靠 INSERT IGNORE + 唯一键兜底，多实例同时进来也不会重复创建。
-        LocalDate periodStart = periodStartFor(periodEnd);
-        if (jobRepository.existsForCycle(periodStart, periodEnd)) {
-            return 0;
-        }
-        // 阶段 3：确定账期和 due date 后，落成 sharded statement_jobs。
-        BillingCycle cycle = billingCycle(periodEnd);
-        return createJobsForCycle(cycle);
-    }
-
-    /**
      * 对最近几个已过去的关账周期做 desired-state reconciliation，缺失的周期会被补建分片。
      *
      * <p>事务归属：只由 {@link #createDueJobs()} 调用，加入 scheduler 心跳的同一个事务。
@@ -175,8 +126,7 @@ public class StatementCycleService {
     /**
      * 为一个确定的 billing cycle 创建分片 jobs。
      *
-     * <p>事务归属：由 {@link #createDueJobs(LocalDate)} 或 {@link #reconcileDueCycles(LocalDate)}
-     * 在各自已打开的 job creation 事务中调用。</p>
+     * <p>事务归属：由 {@link #reconcileDueCycles(LocalDate)} 在已打开的 job creation 事务中调用。</p>
      */
     private int createJobsForCycle(BillingCycle cycle) {
         // 阶段 1：把业务账期日期转成查询交易流水的时间窗口。
@@ -222,9 +172,6 @@ public class StatementCycleService {
      * <p>例子：close-day-of-month=31，today=2026-08-03，则 latestDate=2026-08-02。
      * 最近已过去 close date 包括 2026-07-31、2026-06-30。这样服务如果错过 8/1 的 cron，
      * 8/3 恢复后仍能补建 7 月账单 job。</p>
-     *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #reconcileDueCycles(LocalDate)}
-     * 在 scheduler reconciliation 事务中调用。</p>
      */
     private List<LocalDate> recentCloseDatesOnOrBefore(LocalDate latestDate, int maxCycles) {
         List<LocalDate> closeDates = new ArrayList<>();
@@ -244,9 +191,6 @@ public class StatementCycleService {
      *
      * <p>accountCount 是 {@code COUNT(DISTINCT credit_account_id)}，来源于本账期
      * {@code POSTED + UNBILLED} 的交易候选，不是系统全量账户数。这样空账户不会参与分片。</p>
-     *
-     * <p>事务归属：纯计算方法；当前由 {@link #createJobsForCycle(BillingCycle)}
-     * 在 job creation 事务中调用，但不依赖事务能力。</p>
      */
     private int shardCount(long accountCount) {
         if (accountCount == 0) {
@@ -263,9 +207,6 @@ public class StatementCycleService {
      * <p>cycle 是“这次要出账的业务窗口”，不是数据库 row：
      * periodStart/periodEnd 决定哪些 posted transactions 能进入账单，
      * dueDate 决定 AUTO_REPAYMENT DelayJob 和用户还款期限。</p>
-     *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}
-     * 或 {@link #reconcileDueCycles(LocalDate)} 在 job creation 事务中调用。</p>
      */
     private BillingCycle billingCycle(LocalDate periodEnd) {
         return new BillingCycle(
@@ -280,10 +221,6 @@ public class StatementCycleService {
      *
      * <p>先算 periodStart，是因为 cycle 是否缺失只需要 {@code periodStart + periodEnd}；
      * dueDate 只有在真正缺失、需要创建 jobs 时才计算。</p>
-     *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #createDueJobs(LocalDate)}、
-     * {@link #reconcileDueCycles(LocalDate)} 和 {@link #billingCycle(LocalDate)}
-     * 在 job creation 事务中调用。</p>
      */
     private LocalDate periodStartFor(LocalDate periodEnd) {
         YearMonth previousMonth = YearMonth.from(periodEnd).minusMonths(1);
@@ -291,20 +228,9 @@ public class StatementCycleService {
     }
 
     /**
-     * 判断某一天是否是配置中的关账日。
-     *
-     * <p>事务归属：纯日期判断；当前由 {@link #createDueJobs(LocalDate)} 在事务开始后调用，
-     * 但它本身不访问数据库。</p>
-     */
-    private boolean isCloseDate(LocalDate date) {
-        return date.equals(dayInMonth(YearMonth.from(date), properties.batch().closeDayOfMonth()));
-    }
-
-    /**
      * 计算严格晚于关账日的还款到期日，并按营业日规则顺延。
      *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #billingCycle(LocalDate)}
-     * 在 job creation 事务中间接调用。</p>
+     * <p>顺延规则来自 {@link BusinessDayCalendar}：扣款日不能落在周末或配置的银行休业日。</p>
      */
     private LocalDate paymentDateAfter(LocalDate periodEnd) {
         YearMonth candidateMonth = YearMonth.from(periodEnd);
@@ -323,8 +249,7 @@ public class StatementCycleService {
     /**
      * 取某个月的配置日；短月份会落到当月最后一天。
      *
-     * <p>事务归属：纯日期计算方法；当前由 {@link #billingCycle(LocalDate)}
-     * 和 {@link #isCloseDate(LocalDate)} 间接服务 job creation 事务。</p>
+     * <p>例子：close-day=31 时 2 月会收敛到 2/28（闰年 2/29），不会抛 invalid date。</p>
      */
     private LocalDate dayInMonth(YearMonth month, int configuredDay) {
         return month.atDay(Math.min(configuredDay, month.lengthOfMonth()));
@@ -332,9 +257,6 @@ public class StatementCycleService {
 
     /**
      * 返回账单批处理使用的业务时区。
-     *
-     * <p>事务归属：纯配置读取方法，不依赖事务；当前服务 {@link #createDueJobs()}、
-     * {@link #createDueJobs(LocalDate)} 和 {@link #createJobsForCycle(BillingCycle)}。</p>
      */
     private ZoneId batchZone() {
         return ZoneId.of(properties.batch().zone());

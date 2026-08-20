@@ -74,7 +74,7 @@ CardTransaction PENDING → POSTED   （授权 hold 变成正式交易，可进�
 
 ### 2.3 Statement 账单（周期批处理，已扁平化为 claimable job）
 
-- 不是外部实时请求，而是周期性批处理。当前产品级固定日期：**每月月末关账，次日由 `BillingCycleScheduler`（每天 JST cron）触发 reconciliation 心跳，补建缺失的出账分片；次月 27 日为扣款基准日；27 日非日本营业日则按 `JapaneseBusinessDayCalendar` 顺延到下一营业日**。
+- 不是外部实时请求，而是周期性批处理。当前产品级固定日期：**每月月末关账，次日由 `BillingCycleScheduler`（每天 JST cron）触发 reconciliation 心跳，补建缺失的出账分片；次月 27 日为扣款基准日；27 日非日本营业日则按 `ConfiguredBusinessDayCalendar`（周末 + 配置的祝日マスター `statement.batch.bank-holidays`）顺延到下一营业日**。
 - 当前实现（claimable job，详见 `claimable-jobs-cn.md`）：
   - `BillingCycleScheduler` 每天 cron 触发 → `StatementCycleService` 扫描最近已过去的 close cycles，缺失周期才计算 billing cycle（period/dueDate）、按账户数算 shardCount、`INSERT IGNORE` 建分片 `statement_jobs`。
   - `StatementJobDispatcher` claim 分片 → `StatementJobHandler` 取本片账户 → 逐账户调 `StatementGenerationService.generate(...)`（**每账户独立小事务**），按 billing cycle 汇总未出账的 `POSTED` 交易。

@@ -8,8 +8,10 @@ import java.time.LocalDate;
  * <p>关键词：业务日历, 营业日, 顺延, business day, calendar, roll forward,
  * 営業日(えいぎょうび), 祝日(しゅくじつ), 翌営業日(よくえいぎょうび)。</p>
  *
- * <p>Statement batch 只依赖这个接口，不直接写日本节假日规则；这样未来如果改成银行提供的
- * holiday master（祝日マスター），只需要替换实现 bean。</p>
+ * <p>Statement batch 只依赖这个接口，不直接写节假日规则。当前实现
+ * {@link ConfiguredBusinessDayCalendar} 把 weekend + 配置的祝日マスター（holiday master）
+ * 当成非营业日；未来换成银行提供的日历接口或 DB 表时，只需要替换实现 bean，
+ * {@link StatementCycleService} 的账期逻辑一行都不用改。</p>
  */
 public interface BusinessDayCalendar {
 

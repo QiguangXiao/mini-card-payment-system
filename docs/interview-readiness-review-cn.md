@@ -91,8 +91,9 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 - `BigDecimal + Currency`，按 ISO 4217 法定小数位 `setScale(fractionDigits, RoundingMode.UNNECESSARY)`：
   尾零安全降级（DB 的 `100000.00` → JPY 100000）通过，真丢精度（`1234.50` JPY）fail-fast。
 - 最低还款取整 `CEILING` 且 scale 由币种决定，避免对 JPY 算出"分以下日元"。
-- 账期按 **JST**（`Asia/Tokyo`）切割而不是 UTC；due date 按日本营业日历顺延
-  （`JapaneseBusinessDayCalendar`）。对日本发卡行是显性加分项。
+- 账期按 **JST**（`Asia/Tokyo`）切割而不是 UTC；due date 按营业日历顺延
+  （`ConfiguredBusinessDayCalendar` = 周末 + 配置的祝日マスター）。对日本发卡行是显性加分项，
+  且"祝日是数据不是算法"本身就是一个能讲的判断：祝日法会改、春分秋分官方公布，写死在代码里迟早算错。
 
 ### 1.7 韧性配置有推导过程
 
@@ -371,8 +372,11 @@ outbox/delayjob/notification/statement dispatcher 的轮询和"与业务同事�
 用 `existsForCycle(periodStart, periodEnd)` 找缺失周期并补建。`existsForCycle` 命中
 `uk_statement_jobs_cycle_shard` 最左前缀；它只是 fast path，多实例并发的最终幂等仍由
 `INSERT IGNORE` + cycle/shard 唯一键兜底。`@Transactional` 保持在公共入口，
-reconcile 为私有方法，无 self-invocation 问题；`createDueJobs(LocalDate)` 保留为
-runbook 精确补跑入口。
+reconcile 为私有方法，无 self-invocation 问题。
+
+> **后续收敛（2026-08）**：当时保留的 `createDueJobs(LocalDate)` 重载后来被删除——它只有测试在调，
+> 而且保留的是被判定为错误的 edge-triggered 语义。现在只剩 `createDueJobs()` 一个入口，
+> 测试改用 fixed `Clock` 驱动，真实 scheduler 路径才是被测到的那条。
 
 **修复后残留取舍（要能主动说出）**：
 - **迟到补建的 dueDate 可能已在过去**（极端：7/31 周期 8/28 才补建，dueDate=8/27 已过）

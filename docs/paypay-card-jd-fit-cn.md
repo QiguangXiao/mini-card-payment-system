@@ -359,7 +359,7 @@ Experience with RDBMS, NoSQL databases along with distributed cache.
 StatementReadService
 -> Caffeine L1
 -> Redis L2
--> StatementGenerationService.get(id)
+-> StatementRepository.findById(id)
 -> MySQL
 ```
 

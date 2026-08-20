@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import com.minicard.statement.domain.StatementJob;
 import com.minicard.statement.domain.StatementJobExecutionResult;
@@ -100,7 +101,9 @@ class StatementJobDispatcherTest {
 
     private StatementProperties properties() {
         return new StatementProperties(
-                new StatementProperties.Batch(true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 2, 1000),
+                new StatementProperties.Batch(
+                        true, "0 0 1 * * *", "Asia/Tokyo", 31, 27, 2, 1000, Set.of()
+                ),
                 new StatementProperties.Jobs(true, 1000, 10000, 10, 3, 300, 1, 10),
                 new StatementProperties.Policy(new BigDecimal("0.10"), Map.of("JPY", new BigDecimal("1000.00")))
         );
