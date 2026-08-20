@@ -119,8 +119,8 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 | RDBMS + NoSQL + distributed cache（required） | MySQL 深；Redis 用于 velocity 滑窗 + L2 缓存 + 重建锁；Caffeine L1 | 强；"NoSQL"实际只有 Redis，不要自称有 document/KV store 经验 |
 | APIs / Pub/Sub / database clients（required） | REST + Kafka + MyBatis（含一处 JdbcTemplate 对照） | 覆盖良好 |
 | Microservices & event-driven（required） | 事件驱动很实；但**这是模块化单体** | 事件驱动强；微服务只有"可拆分的边界"，需口头补拆分与跨服务一致性 |
-| High-traffic system design（required） | 分片批处理、两级缓存、bulkhead、SKIP LOCKED | 有设计、**无数字**（没有压测/容量证据、没有热点行落地方案） |
-| Data structures / algorithms / OOP（required） | CRC32 分片、EnumMap dispatch、值对象、聚合 | 达标，但这项主要靠 coding 面 |
+| High-traffic system design（required） | 两级缓存、bulkhead、SKIP LOCKED、账户级锁边界与分片扩展设计 | 有设计、**无数字**（没有压测/容量证据、没有热点行落地方案） |
+| Data structures / algorithms / OOP（required） | EnumMap dispatch、值对象、聚合、状态机 | 达标，但这项主要靠 coding 面 |
 | DDD（preferred） | 聚合不变量、值对象、bounded context、防腐层 | 强 |
 | Java / Spring Boot（preferred） | Java 21 / SB3（JD 是 11/17 混合 + 遗留 Java EE） | 强；备一句"为什么用 21、迁 17 有什么差异" |
 | gRPC（preferred） | **无** | 缺口，口头补 |
@@ -136,7 +136,7 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 
 - **核心必选项（约占 60% 权重）得分 ~90%**：并发/幂等/事务边界/事件驱动/MySQL+Redis
   是这份 JD required 的主体，项目在这些点上的深度**超过 5 年经验候选人的常见水平**。
-- **高流量设计（~15% 权重）约 50%**：有正确的结构（分片、缓存、隔舱、SKIP LOCKED），
+- **高流量设计（~15% 权重）约 50%**：有正确的结构（缓存、隔舱、SKIP LOCKED、按账户分片的扩展路径），
   但没有负载数字、没有瓶颈定位、没有"单账户热点行"的落地方案。JD 写的是
   *experience designing high-traffic systems*，面试官会追流量数字，项目本身给不了。
 - **微服务（~10% 权重）约 60%**：bounded context 划分真实，但进程内跨聚合事务
@@ -159,7 +159,7 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 | 1 | **授权链路**（幂等 claim → 风控 → 行锁 → 额度预占 → outbox） | 旗舰。准备 5 分钟白板版本：一个事务讲完幂等、锁、不变量、事件、事务边界五个主题 |
 | 2 | **可认领任务框架**（lease token、崩溃恢复、stale worker 防覆盖） | JD 并发题的天然素材；重点讲三条件 lease 校验和"为什么 deadline 不能当 owner 身份" |
 | 3 | **Outbox→Kafka→Inbox 全链路** | 重点讲"ack 后崩溃"场景和 consumer 双重去重；主动说出 per-key 乱序的已知取舍 |
-| 4 | **账单批处理**（CRC32 分片、JST 账期、周期级幂等、单账户小事务） | 讲"批处理也要有事务边界"：为什么不是一个大事务、失败怎么隔离 |
+| 4 | **账单批处理**（JST 账期、周期级幂等、单账户小事务、UNBILLED→BILLED） | 讲"批处理也要有事务边界"：为什么不是一个大事务、业务数据如何表达待处理状态、规模化时怎么升级 |
 | 5 | **还款 + 自动扣款**（双聚合事务边界） | 修复 §6.2 后，这里是"我发现并修复了竞态"故事的素材 |
 | 6 | **Schema 约束设计** | 被问 DB 时展开：状态机进 CHECK 的取舍（改状态机要发 migration） |
 | 7 | **两级缓存** | **只在被问缓存时展开**；主叙事止步于 cache-aside + after-commit 失效，tombstone/CAS 留给追问 |
@@ -225,14 +225,15 @@ retry/DEAD/观测都在应用内、教学可解释）。规模大了先加索引
 
 要点：按 `credit_account_id` 分片（授权/入账/还款/出账全部账户内闭环，锁和事务不跨片）；
 幂等键唯一性从全局唯一索引降级为"分片内唯一 + 路由函数决定分片"；
-账单批处理天然按账户分片，CRC32 shard 函数直接换成分片路由；
+账单批处理当前已经按账户 fan-out；规模化时可把候选账户查询改为按 `credit_account_id` 区间/路由分片；
 跨片的只有全局报表类查询 → 走读模型/数仓。
 
-### Q9. "账单 job 全部重试失败后呢？谁会知道？"
+### Q9. "某个账户一直出账失败，谁会知道？"
 
-要点（修复 §6.3 前的诚实答案）："进 DEAD 后没人知道，这是我已识别的 gap；
-修复方式是 DEAD 计数 gauge + 告警 + runbook（DEAD 置回 PENDING 即可安全重放，
-因为全链路幂等：statement 周期唯一键 + BILLED 标记 + line 唯一键）。"
+要点：当前 Statement 没有 job/DEAD 状态；单账户失败只记 warn，交易保持 `UNBILLED`，
+当月下一次 daily tick 会重试。真实 gap 是只有日志、没有失败账户 metric/告警，而且进入下个月后
+旧账期不会自动再扫。最小升级是 `statement_batch_failed` 指标 + 告警 + 受保护的
+`run(YearMonth)` backfill 入口，不需要恢复整套 StatementJob 引擎。
 
 ### Q10. "JPY 没有小数，你怎么处理金额的？"
 
@@ -255,13 +256,11 @@ Kafka consumer lag per group；断路器状态变化。项目里只有 actuator 
 ### Q13. "你的 daily cron 在触发时刻宕机了会怎样？Spring @Scheduled 有 misfire 补偿吗？"
 
 要点：`@Scheduled` 没有 misfire 语义（对比 Quartz 的 JDBC JobStore + FIRE_ONCE_NOW）。
-我的答案分两层：①系统里几乎所有定时工作都是 **level-triggered**——计划落库
+我的答案分两层：①Outbox/DelayJob/Notification 是 **level-triggered**——计划落库
 （DelayJob/outbox row），poller 按 `next_attempt_at <= now` 扫表，宕机跨过触发点后
-恢复即自愈；②唯一的 edge-triggered 定时器（账单周期规划的 daily cron）我在自查中
-发现并改成了 **reconciliation**：每天对最近 N 个关账周期做 desired-state 对账，
-缺哪期补哪期，幂等由 INSERT IGNORE + 唯一键兜底（完整经过见 §6.9）。
-加分延伸：补偿机制自己也可能坏 → 独立的"已过关账日但无 jobs / 有 DEAD"告警兜底；
-迟到补建的次生效应（dueDate 已过 → 立即扣款）要主动交底。
+恢复即自愈；②Statement 的极简 daily cron 不落 job row，但它每天都处理“上一自然月仍是
+`POSTED + UNBILLED`”的 desired state，所以当月漏一次 tick 会在第二天收敛。
+诚实边界：它不扫上上月，跨月宕机或跨月失败账户需要显式 backfill，当前尚未实现。
 
 ---
 
@@ -354,42 +353,21 @@ IT 只有 3 个。还款同 key 并发、posting-vs-expiry 竞态、presentment 
 `bin/`、`build/`、`.idea/` 入库；`bin/main` 下有一套可能过期的 schema/mapper 副本，
 评审者可能读错版本。`.gitignore` + `git rm -r --cached`，5 分钟修完。
 
-### 6.9 【已修复】Daily cron 错过关账日 → 周期永不出账 — 原严重度 High
+### 6.9 Daily cron 与补跑边界 — 当前严重度 Medium
 
-**发现经过（本身是面试素材）**：两轮 review 都没发现——它是**缺失机制型缺陷（absence bug）**，
-逐行审查 `createDueJobs` 每行都对；直到讨论方法重载、对"错过触发时刻"做推演才暴露。
-事后把全部定时入口按 **edge-triggered（错过即丢）vs level-triggered（扫表自愈）** 分类排查：
-outbox/delayjob/notification/statement dispatcher 的轮询和"与业务同事务落库的 DelayJob 计划"
-都自愈，`BillingCycleScheduler` 是全系统**唯一**的 edge-triggered 定时器。
+**历史经验**：早期实现只在“昨天是否关账日”为真时建 job，
+Spring `@Scheduled` 又没有 misfire 补偿，所以错过唯一 tick 会让整个账期永远没有执行状态。
+这个 absence bug 促成了 edge-triggered vs level-triggered 的系统化检查，它仍然是很好的 interview 复盘素材。
 
-**原缺陷时序**：
+**当前实现已经不再是那套 reconciliation/job 规划器**：`StatementBatchService`
+每天都推导上一自然月，并查询该账期仍为 `POSTED + UNBILLED` 的账户。
+因此在同一个月内错过 8/1，8/2 仍会处理 7 月，不需要 `statement_jobs`、`INSERT IGNORE`
+或 `reconciliation-lookback-cycles`。幂等依靠账单周期唯一键、账户行锁和 `UNBILLED→BILLED` 业务状态收敛。
 
-```
-7/31 = 关账日
-8/1 00:50  应用宕机；01:00 cron 该触发，没人在 → 错过
-8/2 01:00  恢复后 cron 醒来：periodEnd = 8/1 不是 close date → 返回 0
-结局       7 月周期的 statement_jobs 永远不会被创建——不是晚出账，是不出账，
-           且比 DEAD job 更隐蔽：表里连一行可观测的尸体都没有
-```
-
-**修复（已实施）**：把 scheduler 从 edge-triggered 改成 **level-triggered reconciliation**：
-每天醒来扫描最近 `reconciliation-lookback-cycles`（默认 2）个已过去的关账日，
-用 `existsForCycle(periodStart, periodEnd)` 找缺失周期并补建。`existsForCycle` 命中
-`uk_statement_jobs_cycle_shard` 最左前缀；它只是 fast path，多实例并发的最终幂等仍由
-`INSERT IGNORE` + cycle/shard 唯一键兜底。`@Transactional` 保持在公共入口，
-reconcile 为私有方法，无 self-invocation 问题。
-
-> **后续收敛（2026-08）**：当时保留的 `createDueJobs(LocalDate)` 重载后来被删除——它只有测试在调，
-> 而且保留的是被判定为错误的 edge-triggered 语义。现在只剩 `createDueJobs()` 一个入口，
-> 测试改用 fixed `Clock` 驱动，真实 scheduler 路径才是被测到的那条。
-
-**修复后残留取舍（要能主动说出）**：
-- **迟到补建的 dueDate 可能已在过去**（极端：7/31 周期 8/28 才补建，dueDate=8/27 已过）
-  → 自动扣款 delay job 立即执行，用户零通知期。完整修法是
-  `dueDate = max(计算值, 补建日 + N 营业日)`；当前作为已接受行为。
-- 全新环境首跑会回填 lookback 窗口内的历史周期（本项目无害；生产需"首个受管周期"配置）。
-- 两 pod 并发补建且账户数恰好变化时，可能合并出混合 shard_count 的分片集——
-  覆盖仍完备，重复扫描被单账户出账幂等吸收，但这依赖下游幂等。
+**诚实边界**：恢复日如果已经进入下一个月，批处理只看上月，不会自动扫上上月。
+同理，某账户失败到跨月后，旧账期也不会自然重试。对学习项目这是接受的简化；
+如果要补最小运营能力，增加受保护的 `run(YearMonth)` backfill + 失败账户指标即可，
+不必恢复分片 claim/lease/recover 引擎。
 
 ### 6.10 其他中低风险（一句话备忘）
 
@@ -445,13 +423,15 @@ reconcile 为私有方法，无 self-invocation 问题。
 
 > I built a mini credit-card issuer backend in Java 21 and Spring Boot 3, covering the full
 > issuer-side lifecycle: card authorization with credit reservation, presentment posting,
-> monthly statement generation as a sharded batch, and both manual and automatic repayment.
+> monthly statement generation as a simple per-account batch, and both manual and automatic repayment.
 > The goal was never feature count — it was to get the hard correctness problems right:
 > every write path is idempotent under concurrent retries, credit balances are protected by
 > row-level locking with a consistent lock ordering across all use cases, state changes and
 > their events are committed atomically through a transactional outbox, and every background
-> job — outbox publishing, authorization expiry, statement batches — follows the same
-> claim-lease-finalize-recover pattern so it survives crashes and never runs twice.
+> durable job — outbox publishing, authorization expiry, and notification delivery — follows
+> claim-lease-finalize-recover and relies on idempotent handlers because execution is at least once.
+> Statement deliberately stays simpler: a daily JST trigger, one transaction per account, and
+> business-state convergence through posted/unbilled to billed.
 > It's deliberately a modular monolith with event-driven boundaries, so each bounded context
 > could be extracted into a service later. Storage is MySQL as the source of truth, with Redis
 > for velocity counting and a two-level read cache, and Kafka for cross-context event delivery.
@@ -534,16 +514,16 @@ reconcile 为私有方法，无 self-invocation 问题。
 
 ### 9.6 可认领任务框架（Claimable Jobs with Lease Tokens）
 
-**One-liner:** *All background work follows claim-lease-finalize-recover: short-transaction claiming with SKIP LOCKED, work outside the lock, and a UUID lease token that stops a stale worker from overwriting a newer owner's result.*
+**One-liner:** *Durable Outbox, DelayJob, and notification delivery work follows claim-lease-finalize-recover: short-transaction claiming with SKIP LOCKED, work outside the lock, and a UUID lease token that stops a stale worker from overwriting a newer owner's result.*
 
 **Full version:**
 
-> Outbox publishing, delayed jobs like authorization expiry and auto-debit, and statement
-> batch shards all share one lifecycle: claim, work, finalize, recover. A claimer runs a short
+> Outbox publishing, delayed jobs like authorization expiry and auto-debit, and notification
+> deliveries share one lifecycle: claim, work, finalize, recover. A claimer runs a short
 > transaction that selects due PENDING rows with FOR UPDATE SKIP LOCKED — so multiple instances
 > can poll concurrently without fighting over the same rows — flips them to PROCESSING, writes
 > a fresh UUID lease token and a lease deadline, and commits. The worker then does the actual
-> work — a Kafka publish, a bank debit, generating statements — *without* holding any job row
+> work — a Kafka publish, a bank debit, or a provider delivery — *without* holding any job row
 > lock, because external latency should never stretch a database lock. To finalize, the worker
 > re-locks the row and verifies three things: the status is still PROCESSING, it holds a token,
 > and its token matches the database. If a recoverer already reclaimed the job after a lease
@@ -555,23 +535,25 @@ reconcile 为私有方法，无 self-invocation 问题。
 
 ### 9.7 账单批处理（Statement Generation Batch)
 
-**One-liner:** *A daily scheduler plans the cycle into CRC32-sharded jobs; each account is generated in its own small transaction, idempotent per account-cycle, with billing dates cut in JST.*
+**One-liner:** *A daily scheduler processes the previous calendar month directly; each account is generated in its own small transaction, idempotent per account-cycle, with billing dates cut in JST.*
 
 **Full version:**
 
 > Statement generation is a batch problem, but I still treat transaction boundaries carefully.
-> A daily scheduler checks whether yesterday was the closing date and, if so, idempotently
-> plans the cycle into sharded jobs — accounts are partitioned by CRC32 of the account ID
-> modulo the shard count, so shards are stable and disjoint. Workers claim shards through the
-> same lease mechanism as other jobs. Crucially, there is no giant batch transaction: each
+> A daily scheduler derives the previous calendar month, queries accounts that still have
+> posted and unbilled transactions in that period, and processes them in a single-threaded
+> loop. There is no statement job table, shard lease, or worker pool in the current learning
+> implementation. Crucially, there is also no giant batch transaction: each
 > account gets its own transaction that locks the credit account, snapshots the unbilled posted
 > transactions into immutable statement lines, computes the total and the minimum payment,
 > marks those transactions as billed, and schedules the due-date auto-debit — all committing
 > together. One bad account fails alone; it never rolls back a thousand neighbors.
-> Generation is idempotent at the account-plus-cycle level via a unique key, so a retried shard
+> Generation is idempotent at the account-plus-cycle level via a unique key, so a repeated daily run
 > can't produce a duplicate statement. And all billing dates are cut in Japan Standard Time
-> with a business-day calendar for the due date — using UTC here would misassign transactions
-> near midnight JST to the wrong cycle.
+> with a configured business-day calendar for the due date — using UTC here would misassign
+> transactions near midnight JST to the wrong cycle. The trade-off is explicit: this simple
+> shape has no parallel fan-out, durable execution status, or cross-month backfill; at real
+> issuer scale I would move it to a dedicated batch platform and partition work by account.
 
 ### 9.8 还款与自动扣款（Repayment & Auto-debit）
 
@@ -699,9 +681,10 @@ reconcile 为私有方法，无 self-invocation 问题。
 > If we split services, that becomes a saga: confirm the hold, post, and compensate by
 > re-releasing the hold on failure, with idempotency keys carried through every step.
 > For database scale, I'd shard by credit account ID, because authorization, posting,
-> repayment, and statement generation are all account-local — locks and transactions never
-> need to cross a shard, and the statement batch's CRC32 sharding maps directly onto physical
-> shards. The hardest single problem is a hot account hammering one row lock; the realistic
+> repayment, and statement generation are all account-local — locks and transactions need not
+> cross a shard. The current statement batch is not sharded, but its account-oriented fan-out
+> gives a clear upgrade path to range or route work by credit account ID. The hardest single
+> problem is a hot account hammering one row lock; the realistic
 > options are splitting the limit into sub-buckets, pre-reserving quota into memory with
 > asynchronous reconciliation, or routing each account to a single writer — each trades
 > consistency granularity for throughput, and I'd pick based on how strict the over-limit
@@ -710,7 +693,7 @@ reconcile 为私有方法，无 self-invocation 问题。
 
 ### 9.15 自愈调度与一次真实的缺陷发现（Level-triggered Scheduling — 发现→修复故事）
 
-**One-liner:** *Almost every timer in the system is level-triggered — durable plans in MySQL scanned by pollers — and when I found the one edge-triggered cron that could silently skip a billing cycle, I converted it into a reconciliation loop.*
+**One-liner:** *Durable timers are level-triggered through MySQL, while the simplified statement cron rechecks last month's unbilled business state every day and openly leaves cross-month backfill as an upgrade.*
 
 **Full version:**
 
@@ -723,15 +706,14 @@ reconcile 为私有方法，无 self-invocation 问题。
 > correct; the defect was an *absence* — nothing owned the missed tick. I only found it by
 > classifying every timed entry point as edge-triggered or level-triggered: the outbox,
 > delay jobs, and notification pollers all scan durable state, so a crash across the trigger
-> moment self-heals; this cron was the single edge-triggered exception. The fix follows the
-> control-loop idea: instead of reacting to "today", the scheduler now reconciles desired
-> state — it scans the last few closed billing cycles, finds any cycle with no planned jobs,
-> and back-fills it. Idempotency needs no new machinery: an existence check is just a fast
-> path, and the real guarantee stays with INSERT IGNORE on the cycle-and-shard unique key,
-> so even two pods reconciling concurrently can't double-plan. And I'd volunteer the residual
-> trade-off: a cycle recovered very late can carry a due date that's already passed, which
-> would trigger an immediate auto-debit — in production I'd floor the due date at
-> recovery-date-plus-N-business-days.
+> moment self-heals; this cron was the single edge-triggered exception. An intermediate design
+> fixed it with durable sharded jobs and a reconciliation lookback, but that duplicated the
+> claim-and-lease framework and was later removed. The current learning-focused shape derives
+> the previous calendar month on every daily tick and queries posted, unbilled business state,
+> so missing the first day of the month is harmless: the second day processes the same cycle.
+> I would also volunteer the remaining boundary: if the application is down across the entire
+> month, the current loop moves on and needs an explicit YearMonth backfill entry point. That is
+> a conscious simplification, not a production-complete recovery claim.
 
 ---
 

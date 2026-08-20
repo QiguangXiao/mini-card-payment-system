@@ -8,7 +8,9 @@
 > 那次合并把通用两级快照缓存（`TwoLevelSnapshotCache` / `CachedCardRepository`）整体移除，
 > 改成"Redis 滑窗限速 + statement GET 的 L1/L2 cache-aside（Lua CAS + Pub/Sub 失效）"，
 > 新增了第三套 claimable job（StatementJob）和 Testcontainers 集成测试，并把 `Money` 提为 shared-kernel VO。
-> 下面的事实与锚点都已对齐到该状态。
+> 这些是当时的评审基线；**当前代码已在 2026-08 删除 StatementJob**，
+> 收敛为 `BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService`。
+> 本文保留“当时判断 → 后续收敛”的时间线，当前架构以三次复盘更新和代码为准。
 
 > [!CAUTION]
 > **二次复盘（2026-06-30 更新）——我有了一个新判断，而且它不太舒服。**
@@ -55,7 +57,7 @@
 | 测试代码 | 6,990 行 / 64 个测试类（+1 类），含 Testcontainers 集成测试 | 测试占比 ~45%，健康且有真实集成测试 |
 | Bounded context | 多个业务与机制边界（Notification 保留独立 consumer） | 广度足够，不再增加投影型 context |
 | 文档 | **29,228 行 / 36 个文件**（上次 26,835 / 28，**+2,393 行 / +8 文件**） | ⚠️ 是生产代码的 **~1.86 倍**（上次 ~1.7），**review 警告后仍在涨**，是最固执的过度 |
-| 可靠性基建 | Outbox + Inbox + **三套** claimable job（DelayJob/Outbox/StatementJob，本月又给三套统一加了 explicit lease token；*StatementJob 已于 2026-08 删除，见 §3.2 三次复盘*）+ Resilience4j + DLT + statement L1/L2 缓存（Lua CAS + Pub/Sub 失效） | ✅ 顶配但**继续在已饱和处加投入**（见 §3.2）|
+| 可靠性基建 | Outbox + Inbox + **当前两套** durable claimable job（DelayJob/Outbox）+ Resilience4j + DLT + statement L1/L2 缓存；历史 StatementJob 已删除 | ✅ 仍然充足，不应继续在同类可靠性骨架上加投入（见 §3.2）|
 | 云 / 部署落地 | 只有 `docker-compose.yml`；**仍无 Dockerfile、无 CI、无 IaC、无压测数据**（一个月零变化） | ❌ 与公司栈（ECS/CFN/CodePipeline）最大的真实差距，且**纹丝未动** |
 
 这张表基本框定了所有结论：**正确性维度过度饱和，部署/工程化维度有真实缺口（且一个月零进展），文档维度严重过度（且仍在恶化）。**
@@ -157,7 +159,7 @@
 - `paypay-card-jd-fit-cn.md` 砍到 800 行以内：保留映射表 + Q&A 模板，删掉重复铺陈。
 - **从今天起，新增文档前先问：这行字会让面试表现更好，还是只让我感觉良好？**
 
-### 3.2 三套作业引擎（轻度过度）
+### 3.2 三套作业引擎（历史过度，已收敛）
 
 `Outbox`、`DelayJob`、以及这次重构新增的 `StatementJob`，是**三套高度相似的 claim-lease-recover job runner**
 （claimer/poller/worker/recoverer/dispatcher）。展示一次模式就够了，做三遍属于重复。

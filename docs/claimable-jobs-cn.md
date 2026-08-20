@@ -65,10 +65,11 @@
 
 ## 2. 家族（A、B 在代码里；C 已移除，保留设计记录）
 
-> 严格说项目里有第四个同构家族：Notification delivery（同样是 poller/claimer/worker/recoverer
+> 严格说项目里还有第三个当前同构家族：Notification delivery（同样是 poller/claimer/worker/recoverer
 > + lease，但叠加了 Resilience4j 限流/熔断/两层重试预算），它独立成篇见
 > [`notification-delivery-design-cn.md`](notification-delivery-design-cn.md)。
-> 面试口径说"四套 claim 循环"（见问答总库新追问 13）；本文聚焦下面三个通用家族。
+> 因此当前运行代码共有三套 claim 循环：DelayJob、Outbox、Notification delivery；
+> 本文的主对比只聚焦前两个，StatementJob 另作已移除的历史设计记录。
 
 ### 2.1 家族 A：`delayjob`（通用延迟业务动作）
 
@@ -175,13 +176,13 @@ BillingCycleScheduler（每日 JST cron，单线程 scheduler）
 （跑到一半挂了就等明天，而不是被 recoverer 秒级接管）。**这三样正是 §4.1–§4.4 那套分片设计买来的东西**，
 也是回答「规模上来了怎么办」时要讲的升级路径：先按账户区间分片 + claim/lease，再往 Spring Batch / 调度平台搬。
 
-### 4.1 为什么从"两层 batch"扁平化成"单层分片 job"
+### 4.1 历史演进：为什么从"两层 batch"扁平化成"单层分片 job"
 
 PR #1 之前是 **parent batch + 子任务两层**：`statement_batches`（父，status RUNNING/COMPLETED/PARTIALLY_FAILED）`1──<` `statement_jobs`（子分片），每个 job finalize 后还要 re-lock 父 batch、summarize 子任务状态、推进 batch 终态——约 12 个类（`StatementBatch/Service/Repository/Status/...`）。
 
-**现在扁平化成单层**：`StatementCycleService` 直接创建 sharded job（无 batch 行），cycle 身份落在 job 上；`StatementJobDispatcher` 去掉所有 batch 完成度推进逻辑。**净删约 12 个类、800 行**。
+**第二个历史阶段扁平化成单层**：`StatementCycleService` 直接创建 sharded job（无 batch 行），cycle 身份落在 job 上；`StatementJobDispatcher` 去掉所有 batch 完成度推进逻辑。这一步净删约 12 个类、800 行；**随后整个单层 StatementJob 引擎也已删除**。
 
-| 维度 | 之前（batch + jobs） | 现在（flat jobs） |
+| 维度 | 第一历史阶段（batch + jobs） | 第二历史阶段（flat jobs） |
 | --- | --- | --- |
 | 表数量 | 2（batches + jobs） | 1（jobs） |
 | "整批是否完成" | 父 batch 行 + 完成度 re-lock + summary | 对 jobs 的 `GROUP BY status` 查询（按需） |
@@ -190,9 +191,9 @@ PR #1 之前是 **parent batch + 子任务两层**：`statement_batches`（父�
 
 **取舍**：失去"一行就能看到整批状态"的视图和 `PARTIALLY_FAILED` 批级语义；换来更少表/类/概念、claim 机制成为唯一主角。需要批级 SLA/看板时，再加一个**读模型查询**或轻量 batch 视图即可，不必长期维护父表 + 生命周期。
 
-### 4.2 数据模型
+### 4.2 历史数据模型
 
-`statement_jobs`（当前由 `0001-initial-schema.sql` baseline 建立）核心列：
+`statement_jobs`（曾由 `0001-initial-schema.sql` baseline 建立，后由 `0008-remove-statement-jobs.sql` 删除）的核心列：
 
 ```text
 id;  period_start / period_end / due_date           ← cycle 身份直接落在 job 上
@@ -206,7 +207,7 @@ created_at / updated_at / last_error
 
 约束：`uk(period_start, period_end, shard_no)`（创建幂等）；`idx(status, claim_until, created_at)`（claim/recover 扫描）；`chk` 保证 PROCESSING 必有完整 lease metadata + `claim_token`、`period_end >= period_start AND due_date > period_end`。
 
-### 4.3 一次月度出账并发 walkthrough
+### 4.3 历史分片引擎的一次月度出账 walkthrough
 
 ```text
 6/30 关账，7/1 01:00 JST  BillingCycleScheduler 触发 → StatementCycleService.createDueJobs
@@ -224,7 +225,7 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 > *反向事实*：若一个分片用一个大事务处理上千账户，会长时间持有一组账户行锁，和 posting/repayment 抢锁，放大锁等待。所以**一个账户一个小事务**。
 
-### 4.4 三道幂等防线 + 账户级故障隔离
+### 4.4 历史分片引擎的三道幂等防线 + 账户级故隔离
 
 - **创建分片幂等**：`uk(period_start, period_end, shard_no)` + `INSERT IGNORE`（多实例/当天重跑不重复建片）。
 - **单账户出账幂等**：`statements` 自然键 `unique(credit_account_id, period_start, period_end)`，且先锁 account 再 `findByCycleForUpdate`（一账户一期只一张账单，重试不重复出账）。
@@ -274,20 +275,21 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 | --- | --- |
 | Outbox worker 无 handler dispatch，DelayJob 有 | Outbox 动作永远是 publish；DelayJob 执行多种业务动作，需按 `jobType` 派发 |
 | 终态 `PUBLISHED` vs `DONE` | 一个完成消息发布，一个完成业务动作执行 |
-| StatementJob 合 1 类 dispatcher，delay/outbox 拆 4 类 | **framework vs one-off**：delay/outbox 是跨 domain 复用的平台机制（拆类换可测/复用）；statement 是单一消费者的领域批（合 1 类端到端一眼读完，拆 4 类反而 over-engineering） |
-| StatementJob 多列 lease + 无退避，delay/outbox 单列 + 退避 | fan-out 需要 `claimed_by/at` 的运维可见性；批处理失败少、立即重领够用（但见 §7 gap） |
+| 历史 StatementJob 合 1 类 dispatcher，delay/outbox 拆 4 类 | **framework vs one-off** 是当时的打包取舍；后来发现“第三套同构引擎”本身就是更大的 over-engineering，因此整体移除 |
+| 历史 StatementJob 多列 lease + 无退避，delay/outbox 轻量 lease + 退避 | 这些差异记录了 fan-out 对运维可见性的要求，但已不是当前运行时模型 |
 
-> **关键**：正确性语义必须一致（三者共享 §1 那七条不变量），只是类数量/lease 列/退避不同。新 domain 加任务时只能从这两种参考形状里选，不许发明第三种 naive `@Scheduled`。
+> **关键**：当前只有 DelayJob 和 Outbox 两个 durable 家族共享 §1 的正确性语义。
+> Statement 的极简 `@Scheduled` 不宣称 lease/recover 保证；如果未来必须恢复这些能力，应迁移到正式批平台或重用经过验证的模式，不再新写一套相似骨架。
 
 ---
 
 ## 7. 优点与真实 gap（已对齐代码核对）
 
-**优点**：一套心智模型覆盖三种场景；正确性细节齐备（SKIP LOCKED 竞争领取、claim 后才执行不持锁、lease-token 防迟到覆盖、recoverer 兜底、有界重试→DEAD、创建幂等）；平台资源隔离干净（分池/命名/优雅关闭/开关）；取舍有意识（framework 拆 4 类 vs one-off 合 1 类）。
+**优点**：当前 DelayJob/Outbox 共享一套可对照的心智模型；正确性细节齐备（SKIP LOCKED 竞争领取、claim 后才执行不持锁、lease-token 防迟到覆盖、recoverer 兜底、有界重试→DEAD、创建幂等）；Statement 历史设计记录则用来说明模式何时会变成重复建设。
 
 **真实 gap（不是 bug，是上生产还差的工程化）**：
 
-1. **DEAD 全家族缺可观测与重放（最该补）**。三者达 maxAttempts 转 DEAD 后只是躺在表里，**无指标/告警/"DEAD→重新入队"运维入口**。授权过期没释放额度、自动扣款没扣、某分片没出账——目前只能人去查表。注意：消费侧虽已有 Kafka DLT 写入，但同样没有 monitor group、告警和受控 replay 工具，尚未形成运维闭环。
+1. **DEAD 家族缺可观测与重放（最该补）**。DelayJob/Outbox 达 maxAttempts 转 DEAD 后只是躺在表里，**无指标/告警/"DEAD→重新入队"运维入口**。授权过期没释放额度、自动扣款没扣目前只能人去查表。Statement 没有 DEAD row，它对应的 gap 是失败账户只在日志里。消费侧虽已有 Kafka DLT，但同样没有完整的告警和受控 replay 工具。
 2. **完成态行无保留策略**。`delay_jobs` 的 DONE 和 `outbox_events` 的 PUBLISHED **永不清理**，表无界增长。`delay_jobs` 还有个微妙点：`uk(job_type,agg_type,agg_id)` 让一个聚合的 DONE 行**永久占用唯一键**（这本身是想要的 idempotency），所以清理时要保留 key 或迁冷表，不能裸删。
 3. ~~**StatementJob 单账户失败连坐整片（账户级重试隔离缺口）**~~（**已随分片实现一并移除**：现在单账户失败只记日志并计入 failed，其交易仍是 UNBILLED，明天的批处理自然重试，不存在"连坐整片"）。原文保留供对照：`failedAccountCount>0` 就把**整个 shard** 标失败回 PENDING 重领。账户级幂等让重跑安全且代价小（UNBILLED 过滤让重试自然收敛到失败账户），但重试**预算**记在 job 上：一个**永久失败**的账户每轮都烧掉一次 attempt，把整片 cycle 推到 DEAD；且 DEAD 在 shard 粒度**看不出哪个账户坏了**（账户级明细只在日志里）。当前主要风险是持续数据库错误或未分类的永久数据异常，不再包含等待异步账本投影的依赖。
    - **方案已知但刻意不建**：失败账户单独落表（accountId/原因/attempt/next_retry_at）+ 独立退避重试循环，job 在所有账户终态后才 DONE/DEAD。不建的原因是成本收益：新表+迁移+新调度循环，对冲的却是"DLT 积压叠加账期收尾"的低概率场景——先靠 DLT 告警兜底，等真实发生率证明需要再上基建。
@@ -302,14 +304,14 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 - **Database-backed work queue**：一张表 + 状态列当队列。优点：入队与业务状态**同库同事务**（无 dual-write）、运维简单、`SKIP LOCKED` 即得竞争消费；缺点：轮询延迟、表增长、不适合极高吞吐。
 - **Competing Consumers + `SELECT … FOR UPDATE SKIP LOCKED`**：多消费者并发领取互不重叠，无需额外 MQ。MySQL 8.0+ / PostgreSQL 都支持。
 - **Lease / Visibility Timeout**：领取者只拿一段时间的处理权，超时被回收。等价于 SQS visibility timeout、Kafka `max.poll.interval`。
-- **Optimistic lease token**：finalize 前比对随机 owner token（轻量家族用 `lease_token`，StatementJob 用 `claim_token`），防迟到 worker 覆盖新状态。
+- **Optimistic lease token**：finalize 前比对随机 owner token（当前家族用 `lease_token`；历史 StatementJob 用 `claim_token`），防迟到 worker 覆盖新状态。
 - **Claim-then-execute**：claim 短事务提交后才干活，避免持 row lock 跑长业务/等外部。
 - **At-least-once execution + Idempotent handler = Effectively-once**：lease 到期但老 worker 仍活会重复执行，所以 handler 必须幂等（`AUTO_REPAYMENT` 用确定性键 `auto-debit:<statementId>` + 银行侧去重；`AUTHORIZATION_EXPIRY` 用聚合状态检查"已释放则跳过"）。
 - **Idempotent enqueue**：唯一键 + `insertIfAbsent`/`INSERT IGNORE` = 入队侧 exactly-once；执行侧再靠幂等 = effectively-once。两段分别治理。
 - **Bounded worker pool + Backpressure**：core=max 固定、队列有界、满则拒绝并 requeue，避免压垮 DB。
 - **Exponential backoff + Dead Letter**：可恢复故障退避重试（设上限避免恢复后睡太久），poison job 进 DEAD。
-- **Sharding / Fan-out**：大批量用 `hash(key) % shardCount` 切片并行（`CRC32(account_id) % shardCount`），每片再拆账户级小事务隔离失败。
-- **Time-triggered vs Event-triggered**：cron（billing daily）负责**何时开始**，claimable job 负责**并发执行 + 重试 + 恢复**——组合，不互相替代。
+- **Sharding / Fan-out**：大批量可用 `hash(key) % shardCount` 切片并行；历史 StatementJob 用过 `CRC32(account_id) % shardCount`，当前极简批处理只按账户逐个 fan-out，没有并行 shard。
+- **Time-triggered vs durable work**：Outbox/DelayJob 由持久化工作行负责重试与恢复；当前 billing daily cron 直接执行账户循环，没有 claimable-job 保证，这是刻意简化。
 - **可注入 `Clock`**：时间是依赖，便于测固定 now（lease 超时/退避/关账日），并统一 billing 时区（Asia/Tokyo，JST 月末日切不能用 UTC）。
 
 ---
@@ -319,16 +321,16 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 **Q1. 为什么用数据库表当队列，而不是直接上 Kafka/RabbitMQ？什么时候必须换？**
 "任务计划"要和业务状态**同事务**落地避免 dual-write（账单生成与"到期扣款计划"、授权批准与"7 天过期计划"必须同生共死，写 MQ 是另一个系统无法和 MySQL 原子提交）；DB 表 + `SKIP LOCKED` 直接得到竞争消费/重试/恢复，运维简单。缺点：轮询秒级延迟、表增长（要归档）、DB 单点；**每秒数万任务的极高吞吐/低延迟**场景会压垮 DB，那时上专用 MQ。本项目万级/十万级 jobs/day、秒级延迟可接受，DB 队列是最优性价比。
 
-**Q2. PROCESSING lease 是什么？为什么 delay/outbox/notification 用 `lease_token`，statement 用多列 claim？**
+**Q2. PROCESSING lease 是什么？为什么 deadline 不能同时当 owner identity？**
 lease 是"限时处理权"。delay/outbox/notification 一个 row 是单一工作单元，所以保留轻量模型：
 `next_attempt_at` 表示下次可执行/lease deadline，`lease_token` 表示本轮 owner。
-statement 是分片 fan-out，需要 `claimed_by/claimed_at/claim_until` 的运维可见性，并用
-`claim_token` 作为真正 owner token。
+历史 StatementJob 曾因分片 fan-out 额外保留 `claimed_by/claimed_at/claim_until/claim_token`，
+但这只是已删除设计的可观测性取舍。
 - *追问：为什么不用时间戳当 token？* Java `Instant` 与 MySQL `TIMESTAMP(6)` 有精度边界；
   timestamp 适合表达 deadline，随机 token 更适合回答"这次 finalize 是否仍属于我"。
 
 **Q3. 为什么 claim 和 execute 分两段事务？execute 成功但 finalize 失败呢？**
-claim 短事务提交即放锁，再交 worker；否则跑长业务（上千账户）或等 Kafka ack 期间一直持 job row lock，高峰行锁+连接池一起爆。finalize 失败 → job 仍 PROCESSING，lease 到期 recoverer 放回 → 重新执行（at-least-once，靠 handler 幂等兜底）。
+claim 短事务提交即放锁，再交 worker；否则等 Kafka ack、银行或 provider 期间会一直持 job row lock，高峰行锁+连接池一起爆。finalize 失败 → job 仍 PROCESSING，lease 到期 recoverer 放回 → 重新执行（at-least-once，靠 handler 幂等兜底）。
 
 **Q4. 多 pod，一个 job 会被执行两次吗？at-least-once 还是 exactly-once？**
 claim 用 SKIP LOCKED 正常只一个 pod 领到；但 **lease 到期而老 worker 其实还活着**时 recoverer 会放回、另一 worker 重做 → 可能执行两次。所以是 **at-least-once 执行 + 幂等 handler = effectively-once**。lease 解决"卡死可见性"，**不是"绝不重复"**——别把 lease 当锁保证 exactly-once。
@@ -336,20 +338,24 @@ claim 用 SKIP LOCKED 正常只一个 pod 领到；但 **lease 到期而老 work
 **Q5. worker pool 满了、或正在 shutdown，job 会怎样？**
 `execute` 抛 `TaskRejectedException` → `markRejectedForRetry` → 从 PROCESSING 放回 retry，不卡死；shutdown 时 `waitForTasksToCompleteOnShutdown=true` 尽量跑完，剩下靠 lease 恢复。这是对 DB 的背压。
 
-**Q6. 为什么 DelayJob/Outbox 拆 4 类，StatementJob 合 1 类？这不是不一致吗？**
-不是，是 **framework-vs-one-off** 有意取舍。delay/outbox 是跨 domain 复用的平台机制、被多 handler 消费 → 拆 4 类换可测/复用；statement 是单一消费者的领域批 → 合 1 dispatcher 端到端一眼读完，拆 4 类是 over-engineering。
-- *追问：怎么保证两种打包不退化成两套各有 bug 的实现？* 正确性语义必须一致（共享 §1 七条不变量），只类数不同；新 domain 只能从这两种形状里选。
+**Q6. StatementJob 既然设计完整，为什么后来整体删除？**
+因为 DelayJob/Outbox 已经展示 claim-lease-recover，Statement 再实现一套的边际学习价值很低；
+而真实 issuer 账单批更可能迁移到 JP1/Control-M/Spring Batch/Step Functions 等独立平台。
+当前保留周期幂等、行锁、交易快照、`UNBILLED→BILLED` 和单账户事务，把分片引擎降级为扩展设计记录。
 
-**Q7. statement 为什么分片？shardCount 怎么定、建 job 后来了新账户怎么办？**
-百万账户单事务/单 worker 不可行（锁太久、失败全回滚）；`CRC32(account_id) % shardCount` 扇出并行，每片再开账户级小事务隔离失败。shardCount=`ceil(账户数/targetPerJob)`，**建 job 时算一次并存到 job 上**。建后来的新账户用 job 上**已存的 shardCount** 做 hash，仍恰好落到某一个 shard，不漏不重——分片数固定在创建时，避免"中途 shardCount 变化导致同账户落到不同片"的重复出账。
+**Q7. 当前 statement 不分片，百万账户时怎么升级？**
+当前是单线程逐账户，小项目可读性优先。规模上来后先按 `credit_account_id` 区间分页/分片，
+保持同账户所有交易在同一工作单元内，每账户仍是小事务。历史 CRC32 方案可作白板参考，
+但生产更重要的是独立批平台、batch window、检查点、重跑和与上游的依赖编排。
 
-**Q8. 怎么防止同一周期/聚合被重复建 job？**
-唯一键 + 幂等插入。delay：`uk(job_type, agg_type, agg_id)` + `insertIfAbsent`；statement：`uk(period_start, period_end, shard_no)` + `INSERT IGNORE`。多实例/当天重跑都不重复——等价于 exactly-once enqueue。
+**Q8. 怎么防止同一逻辑工作重复？**
+DelayJob 用 `uk(job_type, agg_type, agg_id)` + `insertIfAbsent`；Outbox 以 event id 和消费侧唯一键保护。
+Statement 不再 enqueue job；它的重跑幂等依靠 `uk_statements_cycle`、账户行锁、`statement_lines.card_transaction_id` 唯一键和 `BILLED` 标记。
 
 **Q9. job 进了 DEAD 之后呢？**（当前 gap）两个家族的 DEAD 都只停在表里，缺指标/告警/重放。生产应有 `status=DEAD` 计数指标、告警，以及把 DEAD 改回 PENDING 的运维路径（类似消费侧 DLT 重放）。消费侧已有 Kafka DLT，但执行侧没有对等物。
 
 **Q10. 这套和 Quartz / Spring `@Scheduled` / K8s CronJob 有什么区别？**
-`@Scheduled` 只负责周期触发，不带分布式领取/重试/恢复；Quartz 也能 DB-backed 但更重、偏"调度"而非"工作队列"；K8s CronJob 是容器级定时。本项目是**轻量自建 claimable job**：`@Scheduled` 触发轮询，并发/租约/重试/恢复由 Claimer/Worker/Recoverer 承载。billing 用 cron（何时开始）+ statement job（如何并发执行）组合，正好示范"time-trigger 与 work-queue 各司其职"。
+`@Scheduled` 只负责周期触发，不带分布式领取/重试/恢复；Quartz 也能 DB-backed 但更重、偏"调度"而非"工作队列"；K8s CronJob 是容器级定时。本项目的 Outbox/DelayJob 是轻量 DB-backed work queue：`@Scheduled` 触发轮询，并发/租约/重试/恢复由 Claimer/Worker/Recoverer 承载。当前 billing 只用 cron 直接跑极简批处理，这也正是它不具备 durable work-queue 保证的原因。
 
 ---
 

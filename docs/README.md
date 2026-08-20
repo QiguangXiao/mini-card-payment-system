@@ -30,7 +30,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`implementation-walkthrough-cn.md`](implementation-walkthrough-cn.md) | ✅ | **保留**主走读；对齐 statement 到 claimable job、§7/§8 加机制文档指针、裁 §10/§12 重复、文末融入 `authorization-design` 设计决策（§14）；并修正 `StatementService`/`BankDebitStatus` 等过时类名 |
+| [`implementation-walkthrough-cn.md`](implementation-walkthrough-cn.md) | ✅ | **保留**主走读；当前 statement 主路径已对齐为 `BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService`，已移除的 StatementJob 分片方案只在 `claimable-jobs-cn.md` 作历史设计记录 |
 
 ### 3. 消息与异步（Messaging & Async）
 
@@ -63,7 +63,7 @@
 
 | 文档 | 状态 | 说明 / 合并来源 |
 | --- | --- | --- |
-| [`jvm-threads-runtime-cn.md`](jvm-threads-runtime-cn.md) | ✅ | **已合并** `jvm-monitoring-learning` + `thread-runtime-learning`；去掉两份重复的本地快照/线程状态/Runbook/Q&A（2307→~360 行），保留全部知识点+反向事实；对齐 `statement-batch`→`billing-cycle`+`statement-job` 线程池 |
+| [`jvm-threads-runtime-cn.md`](jvm-threads-runtime-cn.md) | ✅ | **已合并** `jvm-monitoring-learning` + `thread-runtime-learning`；去掉两份重复的本地快照/线程状态/Runbook/Q&A（2307→~360 行），保留全部知识点+反向事实；当前 statement 只有 `billing-cycle-scheduler-*` 直接执行逐账户批处理，不再有 statement job scheduler/worker 池 |
 | [`traffic-rate-limiting-and-capacity-cn.md`](traffic-rate-limiting-and-capacity-cn.md) | ✅ | **已合并并重写** `high-traffic-system-design` + `production-runtime-sizing`；按当前代码列出 API/Kafka/worker/provider 的生产与消费速率、RateLimiter/Semaphore/CircuitBreaker、主动限制与被动瓶颈、容量公式和压测路径；两份原文档已归档 |
 | `aws-ecs-deployment-cn.md` | ⏳ | 保留，对齐现状、裁掉与高流量/容量重复的部分 |
 
@@ -76,7 +76,7 @@
 | [`paypay-card-jd-fit-cn.md`](paypay-card-jd-fit-cn.md) | ✅ | 瘦身为纯"JD 对照与证据"（JD 映射 + 项目锚点 + gap + 面试官视角，5564→781 行）；问答迁至问答总库，distributed lock 专题独立，复习流程迁至 guide |
 | [`paypay-card-backend-interview-guide-cn.md`](paypay-card-backend-interview-guide-cn.md) | ✅ | 冲刺手册：主链路速记 + 九个高频专题 + 自测清单 + 复习路线/最后一周计划/最后一轮顺序/压缩素材/反向提问（后四者自 jd-fit 迁入）；顺带修正了迁入段落里指向已归档文档的旧引用 |
 | [`paypay-card-jd-alignment-review-cn.md`](paypay-card-jd-alignment-review-cn.md) | ✅ | 独立评审（已对齐最新代码），保留；§8 三次复盘（2026-07-12）：复习边界（收窄/删除/略读/学透四档）+ 面试数字清单（12 个锚点数字与"只记公式"规则） |
-| [`interview-readiness-review-cn.md`](interview-readiness-review-cn.md) | ✅ | 面试就绪评审（2026-07-02）：优秀设计证据、JD 对齐评分 78%、展示排序、题库答题要点（含 Q13 missed-cron）、三个缺陷时序推演（missed-cron 已按 reconciliation 修复，见 §6.9）、过度工程清单、ROI 改进计划，**文末附 15 条英文背诵材料** |
+| [`interview-readiness-review-cn.md`](interview-readiness-review-cn.md) | ✅ | 面试就绪评审：优秀设计证据、JD 对齐评分、展示排序、缺陷复盘、ROI 改进计划和英文背诵材料；Statement 章节已从分片 claimable job 更新为当前极简月次批处理，历史分片方案只作扩展路径 |
 
 ### 9. 参考（Reference）
 

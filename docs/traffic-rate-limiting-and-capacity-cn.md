@@ -86,10 +86,9 @@ Kafka listener threads                 当前最多 4
 Outbox workers                         4
 DelayJob DB workers                    4
 Auto-repayment workers                 4
-Statement workers                      4
 Notification delivery workers          4
                                       ──
-后台 worker 合计                       20
+后台 worker 合计                       16
 ```
 
 Kafka 的 4 不是一个全局 concurrency 值，而是当前 listener containers 的上限合计：
@@ -144,7 +143,7 @@ Tomcat 过载时要按四层理解，不能把 `accept-count` 当成业务 reque
 | Kafka partitions / hot topic | `3` | `24~48` 起步 | 按峰值 event rate、单 partition 实测吞吐、顺序 key 决定 |
 | consumer concurrency / Pod | `2~3` | `3~6` | 全 group 总 concurrency 不必超过 partitions |
 | Outbox workers / Pod | `4` | `8~16` | Kafka ack 与 DB finalize 都必须有余量 |
-| Statement workers | `4` 同进程 | 独立部署总计 `16~32` | 以 batch window、每账户耗时和 DB lock wait 校准 |
+| Statement batch | scheduler 线程单线程执行 | 规模化时迁移到独立批平台 | 当前无专用 worker pool；先实测单账户耗时和 batch window |
 
 生产连接预算示例：
 
@@ -168,7 +167,7 @@ migration/admin/headroom           = 30
 | DelayJob max-per-run / Pod | `16` | `32` | 两类 worker 各 8；最好先实现 capacity-aware claim |
 | Notification batch / workers / Pod | `40 / 4` | 示例 `160 / 16` | 假设每渠道 80/s/Pod、约 100ms provider latency |
 | Notification limiter / channel / Pod | `20/s` | 示例 `80/s` | 全局 quota 1000/s ÷ 10 Pods × 80% headroom |
-| Statement max-per-run / workers | `8 / 4` | 每 Pod `16 / 8` 或独立总 worker `16~32` | capacity-aware claim、batch window 和 DB lock wait 验证 |
+| Statement accounts / execution | 本期候选账户全量 / 单线程 | 按账户区间分片后在独立批平台并行 | 当前无 claim batch 参数；以 batch window 和 DB lock wait 决定是否升级 |
 
 Notification 生产示例的计算不是固定行业值：
 
@@ -187,8 +186,7 @@ Notification 生产示例的计算不是固定行业值：
 | Outbox | `1` | `4` | `100` | `50` | `1s` |
 | DelayJob | `2` | DB `4` + auto-repay `4` | 各 `100` | 混合 `16` | `1s` |
 | Notification delivery | `2` | `4` | `100` | `40` | `1s` |
-| Statement jobs | `2` | `4` | `100` | `8` | `1s` |
-| Billing cycle | `1` | 无专用 worker | 不适用 | 每天补建周期/jobs | 每日 01:00 JST |
+| Billing cycle / Statement | `1` | 无专用 worker | 不适用 | 直接遍历上月待出账账户 | 每日 01:00 JST |
 
 这些 poller 都是 `fixedDelay`：一轮方法结束后再等 1 秒，不是严格整点每秒触发。
 单轮领取上限只是“最多 claim 多少”，不代表 worker 真能处理这么多。
@@ -233,7 +231,6 @@ executor 可用 capacity 的原因。
 | Outbox | `30s` | `5s` | Kafka send `5s` | `10` |
 | DelayJob | `60s` | `5s` | bank read timeout `2s` | `10` |
 | Notification | `30s` | `5s` | provider read timeout `2s`，一次 durable attempt 内最多 3 calls | `8` |
-| Statement | `300s` | `10s` | 每账户 DB transaction | `10` |
 
 lease 不是处理速率，但决定拥塞时能否正确恢复。必须满足：
 
@@ -251,7 +248,6 @@ lease > queue wait + 正常执行时间 + finalize 时间
 Outbox crash recovery       最坏约 30s lease + 最多 5s 扫描间隔
 DelayJob crash recovery     最坏约 60s lease + 最多 5s 扫描间隔
 Notification crash recovery 最坏约 30s lease + 最多 5s 扫描间隔
-Statement crash recovery    最坏约 300s lease + 最多 10s 扫描间隔
 ```
 
 这是 durable lease 的预期行为，不是消息丢失；代价是“提前 claim 越多，单 Pod 崩溃后暂时不可见的任务越多”。
@@ -394,10 +390,11 @@ BulkheadFullException
 | Kafka Outbox publish | `4` | broker 慢不占其他机制线程 |
 | 纯 DB DelayJob | `4` | row lock 并发受控 |
 | Bank auto repayment | `4` | 银行 brownout 不拖授权过期任务 |
-| Statement generation | `4` | 月末批处理不无限压 DB |
 | Notification provider | `4` | provider 慢不无限创建线程 |
 
-这五个池彼此隔离是合理的；但它们仍共享同一个 Hikari 和同一 JVM，所以不是完整资源隔离。
+这四个池彼此隔离是合理的；但它们仍共享同一个 Hikari 和同一 JVM，所以不是完整资源隔离。
+当前 Statement 直接占用 `billing-cycle-scheduler-*` 执行逐账户循环，没有独立 worker pool；
+这是低流量学习项目的简化，不应被解读为生产 workload isolation。
 真正生产中可通过不同 profile/部署单元把 API、consumer、statement batch 分开，再分别配置 DB pool 和 CPU。
 
 ### 4.3 MySQL row lock 是 correctness serialization
@@ -458,13 +455,13 @@ wait = 200ms, 400ms
 | Outbox | `10` | `1,2,4,8,16,32,60...s` |
 | DelayJob | `10` | `1,2,4,8,16,32,60...s` |
 | Notification delivery | `8` | `1,2,4,8,16,32,60s` |
-| Statement job | `10` | 当前失败后立即回 PENDING，无 backoff |
 | Kafka consumer | 总调用 `3` | 固定 `1s` × 2 |
 
 Bank debit 刻意没有 Resilience4j Retry：资金调用只保留 DelayJob durable retry，复用同一个
 idempotency key，避免“框架 retry × job retry”相乘。这个取舍合理。
 
-Statement job 没 backoff 是当前风险点：永久失败分片会每秒附近重新 claim，快速烧 attempt，和正常批次抢 DB。
+Statement 不在这张 durable retry 表里：单账户失败被记录后继续处理其他账户，
+其交易保持 `UNBILLED`，当月的下一次 daily tick 再尝试。它没有 attempts/DEAD/backoff 持久化状态。
 
 ---
 
@@ -619,20 +616,20 @@ dispatcher 提交前感知 executor capacity。
 Statement：
 
 ```text
-每天 01:00 JST reconciliation
-→ 每 job 目标 1000 accounts
-→ 每轮 claim 8 jobs
-→ 4 workers
+每天 01:00 JST 触发
+→ 推导上一个已结束的自然月
+→ DISTINCT 查出该账期 POSTED + UNBILLED 的账户
+→ billing-cycle scheduler 单线程逐账户处理
 → 每个账户独立 transaction
 ```
 
-它没有固定 accounts/s 限流。若每账户平均 10ms，粗估 `4/0.01=400 accounts/s`；若 50ms，约 80/s。
-百万账户分别约需 42 分钟或 3.5 小时，必须用真实 SQL/锁等待压测验证。
+它没有固定 accounts/s 限流。若每账户平均 10ms，单线程粗估约 `1/0.01=100 accounts/s`；
+若 50ms，约 20/s。百万账户分别约需 2.8 小时或 13.9 小时，必须用真实 SQL/锁等待压测验证。
 
-风险在于 dispatcher 每秒都能继续 claim 8 个，而不是只在“4 个 worker 空闲”时 claim。
-queue=100 时最多可能出现约 4 个运行 + 100 个已 claim 排队，300 秒 lease 从 claim 时就开始烧。
-如果单 job 很慢，队尾 job 尚未开始就可能被 recover，形成重复工作。`max-per-run=2×pool` 只限制单轮，
-没有限制多轮累计已 claim 数。这是当前 statement capacity 配置中最需要修正的点。
+当前主要风险是单次候选账户全量加载、单线程可能超出 batch window，
+以及执行中宕机后只能等下一次 daily tick；它不存在 worker queue 或 lease 过期竞态。
+如果账户量真的上升，升级点是按账户区间分页/分片、独立批处理部署和持久化执行可观测性，
+而不是调大一个已经不存在的 statement worker pool。
 
 Auto repayment：
 
@@ -746,7 +743,7 @@ Tomcat 容量更大只会让排队更深，不会增加资金写吞吐。
 | transaction / connection / row lock | external risk 虽在 account lock 前却仍占 transaction/Hikari；同账户为什么必须串行 | `AuthorizationService`、`ExternalRiskGatewayAdapter` |
 | rate / concurrency / queue | RateLimiter、Semaphore、worker pool、queue 各限制什么；能用 Little's Law 粗算 | 本文 §1、`WorkerExecutorConfiguration` |
 | at-least-once 与幂等 | Outbox 为什么可能重复发，Inbox/unique key 如何防重复副作用，DLT 不等于修复 | `OutboxWorker`、`RequestNotificationService`、Kafka listeners |
-| lease deadline 与 owner token | claim 为什么短事务、外部动作为什么事务外、迟到 worker 为什么不能 finalize | Outbox/DelayJob/Notification/Statement workers |
+| lease deadline 与 owner token | claim 为什么短事务、外部动作为什么事务外、迟到 worker 为什么不能 finalize | Outbox/DelayJob/Notification workers |
 | retry 分类与放大 | permanent、transient、throttled、circuit-open 为什么走不同路径；双层 retry 如何相乘 | `InvalidIntegrationEventException`、Notification/Bank retry |
 | 过载 HTTP 语义 | 429、503、business decline、500 分别表示什么；状态变更 retry 必须复用 Idempotency-Key | interceptor、`GlobalExceptionHandler` |
 
@@ -778,9 +775,9 @@ Kafka ack 成功但 Outbox finalize 前宕机 → 为什么会重复发且必须
 
 ### 9.4 当前有点过度，应该收在哪里
 
-#### 1. 五套 worker/scheduler 隔离都在一个小应用里
+#### 1. 四套 worker pool 都在一个小应用里
 
-当前 Outbox、DelayJob、Auto Repayment、Notification、Statement 各有独立 worker pool，scheduler 也按机制拆开。
+当前 Outbox、DelayJob、Auto Repayment、Notification 各有独立 worker pool，Statement 只有一个 billing-cycle scheduler 线程。
 
 判断：**设计上说得通，但展示密度偏高**。它证明了 bounded pool / bulkhead / workload isolation，
 不需要再为未来 job type 新增第六、第七个 pool。
@@ -893,7 +890,7 @@ stale-while-revalidate、Bloom filter、更多 distributed-lock 方案。
 | Risk 800ms 时约 `5 calls/s/Pod` | `4 / 0.8s` |
 | Notification 约 `20 events/s/Pod` | 每 event 两渠道，各渠道20/s |
 | Bank timeout 时约 `2 calls/s/Pod` | `4 workers / 2s timeout` |
-| Statement 完成窗口 | `账户数 × 单账户耗时 / workers` |
+| Statement 完成窗口 | 当前单线程是 `账户数 × 单账户耗时`；分片升级后才除以有效并行度 |
 | 总 DB connections | `Pod 数 × 每 Pod pool + admin/batch headroom` |
 | backlog drain time | `backlog / (恢复消费率 - 当前生产率)` |
 
@@ -962,7 +959,7 @@ P3  Lua 细节、所有生产推荐数字、每个 scheduler/worker 类的重复
 | Kafka | per-group/per-partition lag、rebalance、DLT | 是总并发不足还是单 partition 热点 |
 | Notification | PENDING age、throttled、provider latency、CB state | quota 限制还是 provider brownout |
 | DelayJob | due backlog、queue reject、DEAD、oldest overdue | worker/银行/DB 哪一层不够 |
-| Statement | jobs by status、accounts/s、cycle completion time | 能否在 batch window 内完成 |
+| Statement | candidates/generated/skipped/failed、accounts/s、cycle completion time | 能否在 batch window 内完成，是否有长期失败账户 |
 | JVM | CPU、GC pause、heap、thread states | CPU/GC 是否真的先于外部资源达限 |
 
 判断 backlog 是否失控，不能只看数量：
@@ -990,7 +987,7 @@ drain time ≈ backlog / (recovery consumption rate - current production rate)
 | provider 正常且通知灌入 | >20 events/s | notification throttled/PENDING age 上升 |
 | provider 2s/5xx | delivery backlog | Retry 放大后 breaker OPEN，worker 先饱和 |
 | due auto repayment 洪峰 | 1000 jobs | 4 专用 workers、queue reject、bank CB |
-| statement 100万账户 | 10/50ms 每账户 | 验证 42min/3.5h 粗估与 lease 是否足够 |
+| statement 100万账户 | 10/50ms 每账户 | 验证单线程约 2.8h/13.9h 粗估、内存占用与 batch window |
 
 压测不能只看成功 QPS，还要验证：
 

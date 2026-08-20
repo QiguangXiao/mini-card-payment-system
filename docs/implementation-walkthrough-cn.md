@@ -772,8 +772,11 @@ dueDate     = 7 月 27 日
   数据没覆盖到的年份 fail-open 成"只跳周末"并打一次 warn 日志——反向事实：静默退化会把口座振替排到祝日上，整批扣款失败却无人知道。
 - 如果 27 日不是日本营业日，就顺延到之后第一个营业日。
 
-当前不提供公开的手动 generate API。真实出账只由 billing-cycle reconciliation 规划 durable jobs；
-如果未来需要运营 backfill，应使用受保护的 runbook/admin 入口，不让普通 HTTP 请求绕过账期与分片控制。
+当前不提供公开的手动 generate API。出账由 `BillingCycleScheduler` 每日触发
+`StatementBatchService.run()`，直接处理上一个自然月的待出账账户，不再规划 durable statement jobs。
+当前没有指定历史账期的 backfill 入口；这是极简实现的明确边界。
+未来如果需要运营补跑，应增加受保护的 `run(YearMonth)`/admin 入口，
+不让普通 HTTP 请求绕过账期控制。
 
 入口：
 

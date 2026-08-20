@@ -2,10 +2,10 @@
 
 > 本文合并自两份旧文档：`jvm-monitoring-learning-cn.md`（JVM 内存/GC/监控/排查）与
 > `thread-runtime-learning-cn.md`（线程模型/线程状态/线程路径）。合并时去掉两者重复的本地实测快照、
-> 线程状态解释、排查 Runbook、interview 问答和复习清单，并**对齐代码**：旧文档把 statement 批处理
-> 当成"单个 `statement-batch-scheduler` 每 60s 扫描"，但 PR #1 已把它扁平化成 **claimable job**
-> （`billing-cycle-scheduler` 每天触发 + `statement-job-scheduler` 的 claim/recover + `statement-job-worker`），
-> 旧的 `StatementBatchPoller/Service` 类已删除。原两份已归档在 `docs/archive/`。
+> 线程状态解释、排查 Runbook、interview 问答和复习清单，并**对齐当前代码**：
+> statement 只保留 `billing-cycle-scheduler-*` 一个调度线程，由它直接调
+> `StatementBatchService` 做单线程逐账户出账；曾经的 `statement-job-scheduler-*` / `statement-job-worker-*`
+> 已随分片 StatementJob 引擎一起删除。原两份已归档在 `docs/archive/`。
 
 > 关键词：JVM, heap, young/old gen, metaspace, GC roots, G1, safepoint, thread dump, platform thread,
 > RUNNABLE/BLOCKED/WAITING, lease, row lock, Hikari, Actuator, ヒープ, スレッドダンプ。
@@ -36,7 +36,7 @@ thread dump（1914 行）的线程类别（已对齐当前结构）：
 | Tomcat request worker `http-nio-8080-exec-*` | 10 | 空闲等 Tomcat task queue |
 | Tomcat acceptor/poller | 2 | `http-nio-8080-Acceptor` / `-Poller` |
 | Spring Kafka listener / heartbeat / metrics / 内部 scheduler | ~60 | 多个 listener container × concurrency + 各 consumer 的 heartbeat/metrics 叠加（采集时 listener container 多于现在的 2 个，收缩后此项会更小） |
-| 本工程 scheduler | 多个 | `outbox-scheduler-*`、`delay-job-scheduler-*`、`billing-cycle-scheduler-*`、`statement-job-scheduler-*`、`notif-delivery-scheduler-*`（采集当时 statement 调度尚为单一 `statement-batch-scheduler`，现已拆为 billing-cycle + statement-job 两个池） |
+| 本工程 scheduler | 多个 | 历史快照里有 `statement-batch-scheduler`；当前是 `outbox-scheduler-*`、`delay-job-scheduler-*`、`billing-cycle-scheduler-*`、`notif-delivery-scheduler-*` |
 | Outbox worker | 1 | 请求触发 publish 后 lazy 创建 |
 | DelayJob worker | 0 | 采样期间无 due job，pool 未创建实际线程 |
 | Hikari housekeeper / MySQL cleanup / Kafka producer network | 各 1 | |
@@ -119,8 +119,8 @@ mini-card JVM
 ├── JVM internal：GC / JIT / Reference Handler / Common-Cleaner / Signal Dispatcher
 ├── Tomcat：acceptor / poller / request worker(http-nio-8080-exec-*)
 ├── Spring scheduler 池：outbox-scheduler-* / delay-job-scheduler-* /
-│                        billing-cycle-scheduler-* / statement-job-scheduler-* / notif-delivery-scheduler-*
-├── Business worker 池：outbox-worker-* / delay-job-worker-* / statement-job-worker-* / notif-delivery worker
+│                        billing-cycle-scheduler-* / notif-delivery-scheduler-*
+├── Business worker 池：outbox-worker-* / delay-job-worker-* / auto-repay-worker-* / notif-delivery worker
 ├── Kafka：consumer listener / producer network / admin/metadata/heartbeat
 └── DB helper：Hikari housekeeper 等（业务 SQL 仍在调用线程里跑）
 ```
@@ -161,7 +161,10 @@ mini-card JVM
 
 > 设计原则：**`@Scheduled` thread 只周期性醒来、短事务 claim、提交 worker；长业务交给 worker pool**。好处：scheduler 不被 Kafka ack/银行扣款/业务 row lock 长时间占住；claim 事务短，减少 DB lock 持有；worker 宕机可经 PROCESSING lease recover；线程名清晰。outbox pool=1（poller 与 recoverer 不并发，发布也偏轻）；delay pool=2（poll 与 recover 可并行）。**唯一的例外是出账 batch**：它每月才有一次真正的工作量，单线程跑完即可，所以没有单独的 worker 池——代价是这一次 tick 会长时间占住 `billing-cycle-scheduler-1`，但该 scheduler 上没有别的任务。**若看到 `*-scheduler-*` 长时间卡 JDBC 栈，先查 claim/recover SQL、索引、DB 锁，不要先加线程数**。
 
-> 注意：statement 现在是 **claimable job**（cron planner 建分片 → dispatcher claim → `statement-job-worker-*` 逐账户小事务出账），不再是旧的"单 scheduler 60s 扫描全部账户"。分片/扇出/账户级故障隔离见 `claimable-jobs-cn.md`。
+> Statement 是这条通用原则的刻意例外：它现在不是 claimable job，
+> `billing-cycle-scheduler-*` 会直接跑 `StatementBatchService` 的逐账户循环。
+> 一账户一个事务仍然提供故障隔离，但没有分片并行、lease 接管或持久化 DONE/DEAD。
+> 这是学习项目的明确取舍；历史分片设计与规模化升级路径见 `claimable-jobs-cn.md` §4。
 
 ### 4.6 Worker 线程：执行后台业务
 
@@ -170,9 +173,10 @@ mini-card JVM
 | `outboxWorkerExecutor` | `outbox-worker-` | 4/4 | 100 | Kafka publish + Outbox finalize |
 | `delayJobWorkerExecutor` | `delay-job-worker-` | 4/4 | 100 | Authorization expiry 等纯 DB 小事务 job |
 | `autoRepaymentDelayJobWorkerExecutor` | `auto-repay-worker-` | 4/4 | 100 | AUTO_REPAYMENT：调外部银行网关（Feign），brownout 只钉本池 |
-| `statementJobWorkerExecutor` | `statement-job-worker-` | 有界 | 有界 | 一个分片的逐账户出账 |
 
-`core=max` 固定上限不无限扩；queue 有界是显式背压。线程按需创建、长期保留、空闲等 queue task；shutdown `waitForTasksToCompleteOnShutdown=true`。进程在 worker 执行中宕机 → row 仍 `PROCESSING` → recoverer 在 lease timeout 后放回 retry/DEAD（PROCESSING lease 的意义）。
+`core=max` 固定上限不无限扩；queue 有界是显式背压。线程按需创建、长期保留、空闲等 queue task；shutdown `waitForTasksToCompleteOnShutdown=true`。
+Outbox、DelayJob 和 Notification delivery 在 worker 执行中宕机时，持久化 row 仍是 `PROCESSING`，recoverer 可在 lease timeout 后放回 retry/DEAD。
+Statement 没有这个 worker/lease 语义：进程中途宕机后，已提交的账户保留，仍为 `UNBILLED` 的账户等下一次 daily tick。
 
 **Outbox worker** 典型状态：空闲 `WAITING` → 构造 record `RUNNABLE` → 等 broker ack `TIMED_WAITING`（`get(timeout)` 最多 `send-timeout-ms=5000`）→ finalize `findByIdForUpdate` 的 JDBC I/O。若 4 个 `outbox-worker-*` 都在等 ack，说明 publish 能力被 Kafka ack 限制，`PENDING` backlog 会增长——**别第一反应把 pool 调大**，先看 broker/network/partition/producer timeout/DB finalize。
 

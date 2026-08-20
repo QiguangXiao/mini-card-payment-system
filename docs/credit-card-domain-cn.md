@@ -2,9 +2,9 @@
 
 > 本文合并自两份旧文档：`credit-card-lifecycle-cn.md`（刷卡到还款的业务全流程 + 分支）与
 > `remaining-domain-roadmap-cn.md`（剩余领域学习路线图）。合并时把两者重复的 "Ledger vs Reconciliation 区别" 与
-> "后续领域优先级" 统一讲一次，并**对齐代码**：旧文档把账单批处理描述成 `StatementBatchPoller`/
-> `StatementBatchService`/`StatementService.generate`，但 PR #1 已改成 claimable job
-> （`BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService`）。
+> "后续领域优先级" 统一讲一次，并**对齐当前代码**：账单批处理主路径是
+> `BillingCycleScheduler` → `StatementBatchService` → `StatementGenerationService`；曾经存在的
+> `statement_jobs` 分片 claimable-job 引擎已移除，只在 `claimable-jobs-cn.md` 保留设计记录。
 > 原两份已归档在 `docs/archive/`。
 > 从 HTTP 到锁/状态的逐请求细节见 `domain-state-flow-cn.md`；实现走读见 `implementation-walkthrough`。
 
@@ -72,10 +72,10 @@ CardTransaction PENDING → POSTED   （授权 hold 变成正式交易，可进�
 
 > **为什么不叫 Capture**：`Capture` 偏商户/收单语言（"我把 authorization capture 掉准备收钱"）；issuer 视角更自然是 "Presentment received → Posting → CardTransaction POSTED"。
 
-### 2.3 Statement 账单（周期批处理，已扁平化为 claimable job）
+### 2.3 Statement 账单（周期批处理，当前为极简月次循环）
 
-- 不是外部实时请求，而是周期性批处理。当前产品级固定日期：**每月月末关账，次日由 `BillingCycleScheduler`（每天 JST cron）触发 reconciliation 心跳，补建缺失的出账分片；次月 27 日为扣款基准日；27 日非日本营业日则按 `ConfiguredBusinessDayCalendar`（周末 + 配置的祝日マスター `statement.batch.bank-holidays`）顺延到下一营业日**。
-- 当前实现（claimable job，详见 `claimable-jobs-cn.md`）：
+- 不是外部实时请求，而是周期性批处理。当前产品规则是**自然月账期：每天 01:00 JST 触发，但始终处理上一个已结束的自然月；次月 27 日为扣款基准日，非营业日则按 `ConfiguredBusinessDayCalendar` 顺延**。
+- 当前实现：
   - `BillingCycleScheduler` 每天 cron 触发 → `StatementBatchService` 推导刚结束的自然月账期和扣款日，列出本账期仍有 `POSTED + UNBILLED` 交易的账户。
   - 逐账户调 `StatementGenerationService.generate(...)`（**每账户独立小事务**），汇总该账户本期未出账的 `POSTED` 交易。
   - 生产落差：真实発卡行的 締め処理 跑在独立批处理系统上（JP1/A-AUTO 编排 ジョブネット、Spring Batch、Step Functions），不是应用内 `@Scheduled`；本项目刻意只保留最小触发器，规模化设计记录见 `claimable-jobs-cn.md` §4。
@@ -86,7 +86,7 @@ CardTransaction PENDING → POSTED   （授权 hold 变成正式交易，可进�
 6 月账单：便利店 1,000 + 餐厅 3,000 → statementBalance = 4,000，dueDate = 7/27
 ```
 
-> **interview 重点**：哪些交易能进账单？账单生成后历史交易能改吗？refund 在账单前后处理有何不同？batch 怎么防重复出账？batch 与 posting 并发怎么办？失败账户会不会拖垮整批？（账户级隔离见 claimable-jobs）
+> **interview 重点**：哪些交易能进账单？账单生成后历史交易能改吗？refund 在账单前后处理有何不同？batch 怎么防重复出账？batch 与 posting 并发怎么办？为什么一账户一个小事务？大规模时如何升级为分片批平台？
 
 ### 2.4 Payment 还款
 

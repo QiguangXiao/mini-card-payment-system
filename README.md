@@ -46,15 +46,14 @@ observability, version negotiation), and hardcore interview Q&A. (Merged from th
 former kafka-outbox-design, kafka-learning, and event-outbox-messaging-design
 notes, now archived under docs/archive/.)
 See [Claimable Jobs (DelayJob / Outbox)](docs/claimable-jobs-cn.md)
-for the three database-backed job families: the shared claim-lease-recover model
-and seven invariants, the per-family details (4-class framework vs 1-class
-dispatcher, single vs multi-column lease, backoff vs none, sharded fan-out), the
-master comparison table, the removed StatementJob sharded batch kept as a design record (why a third copy of the same claim-lease-recover skeleton was deleted) with its
-data model and per-account fault isolation, the scheduler-vs-worker pool platform
-resources, the real gaps (DEAD observability, completed-row retention), and Q&A.
+for the two current database-backed job families, DelayJob and Outbox: their shared
+claim-lease-recover model, seven invariants, scheduler-vs-worker resource split,
+real gaps (DEAD observability and completed-row retention), and interview Q&A.
+The document also keeps the removed StatementJob sharded batch as an explicitly
+historical design record, including why a third copy of the same mechanism was
+deleted and what would need to return at much larger billing scale.
 (Merged from the former async-workflows-comparison, statement-job-design, and
-claimable-job-families notes — and corrects the stale "statement batch is not a
-claimable job" description — now archived under docs/archive/.)
+claimable-job-families notes, now archived under docs/archive/.)
 See [PayPay Card Backend Interview Guide](docs/paypay-card-backend-interview-guide-cn.md)
 for interview-focused key points, answer patterns, and common follow-up
 questions grounded in this project.
