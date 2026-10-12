@@ -342,7 +342,7 @@ A resumes and writes stale result
 | Authorization 幂等 winner | `authorizations.idempotency_key` unique；winner 直接使用 pending，loser `FOR SHARE` 读取 | winner 选择和业务记录在同一个 DB |
 | Credit account 额度 | `credit_accounts` row 的 `SELECT ... FOR UPDATE` | 余额 source of truth 就是这行 DB row |
 | Presentment 幂等 | `card_transactions.network_transaction_id` unique | 外部交易身份由 DB 唯一约束保护 |
-| Repayment 幂等 | `repayments.idempotency_key` unique + row lock | 防重复还款必须和 statement/account 更新同事务 |
+| Repayment 幂等 | account X -> statement X -> `repayments.idempotency_key` unique；loser FOR SHARE | 外键隐式锁纳入顺序；幂等与余额更新同事务 |
 | Statement cycle | `credit_account_id + period_start + period_end` unique + row lock | 防重复账单和账单快照同事务 |
 | Outbox publish claim | `FOR UPDATE SKIP LOCKED` + `PROCESSING` lease | 多 worker claim 和 row 状态在一个 DB 表 |
 | DelayJob claim | `FOR UPDATE SKIP LOCKED` + `PROCESSING` lease | future business action 的 ownership 由 DB lease 表达 |

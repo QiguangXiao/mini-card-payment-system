@@ -132,18 +132,18 @@ repaymentId2 = 99999999-9999-9999-9999-999999999992
 
 ### 4.2 锁多大
 
-本文主链路中，锁的粒度都是行级：
+本文主链路主要按索引记录加锁；未命中查询或范围扫描还可能取得 gap/next-key lock，不能只看 SQL 名字：
 
 | SQL | 锁住的范围 | 用途 |
 | --- | --- | --- |
-| `authorizations WHERE idempotency_key = ? FOR UPDATE` | 一个 authorization row | 同一个授权幂等键只能有一个最终结果 |
+| `authorizations WHERE idempotency_key = ? FOR SHARE` | 已有 authorization 的共享锁 | loser 读取最新结果；winner 由 INSERT 取得排他锁 |
 | `authorizations WHERE id = ? FOR UPDATE` | 一个 authorization row | posting 和 expiry 不能同时改同一授权 |
 | `credit_accounts WHERE id = ? FOR UPDATE` | 一个 account row | 串行化额度计算和余额变化 |
-| `card_transactions WHERE network_transaction_id = ? FOR UPDATE` | 一个 card transaction row | 同一个 presentment 不能重复入账 |
+| `card_transactions WHERE network_transaction_id = ? FOR SHARE` | 已有交易的共享锁 | INSERT 冲突后的最新结果读取；首次普通查重不加锁 |
 | `card_transactions` statement candidate query `FOR UPDATE` | 本账户、本周期内未出账的 posted transaction rows | 防止同一交易进入两张账单 |
 | `statements WHERE credit_account_id + period FOR UPDATE` | 同一账户同一周期 statement row | 同一周期只能生成一张账单 |
 | `statements WHERE id = ? FOR UPDATE` | 一个 statement row | 并发 repayment 不能把 `paid_amount` 改乱 |
-| `repayments WHERE idempotency_key = ? FOR UPDATE` | 一个 repayment row | 同一个还款幂等键只能有一个结果 |
+| `repayments WHERE idempotency_key = ? FOR SHARE` | 已有 repayment 的共享锁 | loser 读取最新结果；winner 直接使用 INSERT 的 pending |
 
 唯一索引也很重要：
 
@@ -170,7 +170,7 @@ transaction commit 或 rollback 时释放
 - Controller 参数校验阶段不持有锁。
 - Kafka publish 不在主事务里执行，不持有业务锁。
 - Notification 发送不在主事务里执行，不持有业务锁。
-- 真正持锁的是 service 里从 `SELECT ... FOR UPDATE` 开始，到方法成功返回并 commit 为止。
+- INSERT、外键检查及 locking read 都可能加锁；锁一般保留到事务 commit/rollback，不能只看显式 SELECT。
 
 ### 4.4 全链路最重要的锁顺序
 
@@ -183,7 +183,7 @@ credit account row lock -> 其他业务 row lock
 典型例子：
 
 - `StatementGenerationService.generate(...)`：先锁 `credit_accounts`，再锁待出账 `card_transactions`。
-- `RepaymentService.receive(...)`：先锁 `credit_accounts`，再锁 `statements`。
+- `RepaymentService.receive(...)`：先锁 `credit_accounts`，再锁 `statements`，然后 INSERT repayment，避免 FK 隐式锁提前取得。
 - `PostingService.post(...)`：会锁 authorization，然后锁 account，再 claim card transaction。
 
 这个顺序的目标是减少死锁和漏账：
@@ -197,7 +197,7 @@ credit account row lock -> 其他业务 row lock
 | --- | --- |
 | 不用 `credit_accounts ... FOR UPDATE` | 两笔并发授权都看到同一份额度，分别批准，最后超过 credit limit |
 | 不用 idempotency unique key | 客户端 retry 会被当成新请求，重复 hold 或重复 repayment |
-| 不锁 presentment 的 `network_transaction_id` | 卡组织重放同一请款时，同一笔交易可能被 posted 两次 |
+| 不用 presentment 的 `network_transaction_id` 唯一键 | 卡组织重放同一请款时，同一笔交易可能被 posted 两次 |
 | 不锁 statement cycle natural key | batch retry 或多实例同时跑时，同一账户同一期出现多张账单 |
 | 不锁未出账 transactions | statement batch 可能和 posting 交错，漏掉刚 posted 的交易或把交易归入两张账单 |
 | 不保持统一锁顺序 | 一个事务拿 account 等 transaction，另一个拿 transaction 等 account，形成 deadlock |
@@ -511,8 +511,7 @@ PresentmentController.postPresentment(...)
    ```sql
    SELECT ...
    FROM card_transactions
-   WHERE network_transaction_id = 'ntx-20260701-0001'
-   FOR UPDATE;
+   WHERE network_transaction_id = 'ntx-20260701-0001';
    ```
 
    如果已存在：
@@ -522,7 +521,8 @@ PresentmentController.postPresentment(...)
 
    如果不存在：
 
-   - 继续走新入账流程。
+   - 继续走新入账流程，但不取得缺失记录的 gap lock；最终 ownership 必须靠 INSERT 唯一键。
+   - 如果这里用 FOR UPDATE/FOR SHARE，多个新请求可能先持有 gap，再争 account 或 INSERT，形成循环。
 
 4. 校验 authorization 可入账。
 
@@ -576,12 +576,13 @@ PresentmentController.postPresentment(...)
    - `uk_card_transactions_network_transaction` 保证同一个 presentment 不会插入两次。
    - 即使两个线程都先查到不存在，最终也只有一个 insert 成功。
 
-8. 再次按 `network_transaction_id` 锁定 card transaction row。
+8. 按 INSERT 结果分支。
 
    目的：
 
-   - 让 duplicate retry 等 winner 完成后读取最终状态。
-   - 后续更新 `PENDING -> POSTED` 在同一 row lock 下执行。
+   - winner 直接使用 pending，INSERT 排他锁保持到事务结束，不需要回读。
+   - loser 的 INSERT 唯一键检查通常已等 winner 提交；再 FOR SHARE 读取最新结果并校验身份。
+   - loser 不进入余额变更或事件发布；共享锁避免重复键 S -> X 升级。
 
 9. 三个领域状态一起变化。
 
@@ -981,182 +982,58 @@ RepaymentController.receive(...)
 
 ### 8.2 执行过程
 
-1. 非锁定读取 statement。
+请求：`Idempotency-Key: demo-repayment-500-001`，还 statement
+`bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1`，金额 500 JPY。
 
-   SQL：
-
-   ```sql
-   SELECT ...
-   FROM statements
-   WHERE id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1';
-   ```
-
-   不加锁的原因：
-
-   - 这里只是确认 statement 存在，并拿 `credit_account_id`。
-   - 真正的金额和状态判断后面会在 `FOR UPDATE` 锁住 statement 后重做。
-   - 先查存在性可以避免 repayment claim 先撞 FK，导致数据库异常不清晰。
-
-2. `Repayment.pending(...)` 创建新 repayment aggregate。
-
-   示例生成：
-
-   ```text
-   repayments.id = 99999999-9999-9999-9999-999999999991
-   idempotency_key = demo-repayment-500-001
-   statement_id = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1
-   amount = 500.00
-   status = PENDING
-   created_at = 2026-08-10T09:00:00Z
-   ```
-
-   状态转换：
-
-   ```text
-   无 repayment row -> PENDING
-   ```
-
-3. `repaymentRepository.claim(...)` 插入 repayment row。
-
-   防什么冲突：
-
-   - `uk_repayments_idempotency_key` 保证同一个还款 key 只有一个 winner。
-   - duplicate callback / retry 不会重复减少 `posted_balance`。
-
-4. 锁 repayment row。
-
-   SQL：
+1. `findCreditAccountIdById(statementId)` 非锁定查询账户归属，不加载 statement lines。
 
    ```sql
-   SELECT ...
-   FROM repayments
-   WHERE idempotency_key = 'demo-repayment-500-001'
-   FOR UPDATE;
+   SELECT credit_account_id FROM statements WHERE id = ?;
    ```
 
-   锁大小：
+   这里只做路由；金额、币种和剩余应还必须基于后面的 locked aggregate。
 
-   - 一条 `repayments` row。
+2. 先 `credit_accounts FOR UPDATE`，再 `statements FOR UPDATE`。
 
-   锁时间：
+   ```text
+   account X -> statement X -> INSERT repayment
+   ```
 
-   - 从 SQL 执行后，到 repayment 事务 commit/rollback。
+   保留外键时，INSERT 也会隐式取父 statement 的 S 锁。若先 INSERT 再等 account，
+   两笔还同一账单的请求可能形成 account X / statement S 的循环；显式锁必须先于外键检查。
 
-   防什么冲突：
+3. 创建 pending 并 `repaymentRepository.claim(...)`。
 
-   - 同一个还款请求重复进来时，duplicate 等 winner 完成后读取 `RECEIVED`。
-   - 相同 key 但不同 amount / statement 会被 fingerprint 拒绝。
+   UUID、金额和微秒时间在应用侧确定；唯一键 `uk_repayments_idempotency_key` 裁决 ownership。
+   同账户请求通常先在 account 锁处排队；跨账户同 key 还可能在 INSERT 唯一键检查处等待。
+   只有该幂等约束冲突才是 loser，其他约束错误继续抛出。
 
-5. 锁 credit account row。
-
-   SQL：
+4. winner 直接使用 pending；loser 共享锁回读。
 
    ```sql
-   SELECT id, credit_limit, reserved_amount, posted_balance, currency, status
-   FROM credit_accounts
-   WHERE id = '11111111-1111-1111-1111-111111111111'
-   FOR UPDATE;
+   SELECT ... FROM repayments WHERE idempotency_key = ? FOR SHARE;
    ```
 
-   锁大小：
+   current read 避免初始查询建立的旧 RR 快照，也避免重复 INSERT 的 S 锁主动升级为 X。
+   loser 校验 fingerprint：相同请求返回 RECEIVED，不同请求报冲突，遗留 PENDING 拒绝。
+   loser 不修改余额，不注册新的缓存失效。
 
-   - 一条 `credit_accounts` row。
+5. 只有 winner 校验 PAID、remaining amount、币种和账户归属。
 
-   锁时间：
+   如果在 claim 前就因 PAID 拒绝，全额还款后的 retry 会错误失败。
+   后面的应用阶段不再重新查询账户和账单，直接使用阶段 2 已锁定的两个 aggregate。
 
-   - 从 SQL 执行后，到 repayment 事务 commit/rollback。
-
-   防什么冲突：
-
-   - repayment 和 authorization 并发：还款释放额度，授权读取 available credit，必须串行。
-   - repayment 和 posting 并发：都改 `posted_balance`，必须串行。
-   - repayment 和 statement generation 并发：保持 account-first 锁顺序，避免死锁。
-
-6. 锁 statement row。
-
-   SQL：
-
-   ```sql
-   SELECT ...
-   FROM statements
-   WHERE id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1'
-   FOR UPDATE;
-   ```
-
-   锁大小：
-
-   - 一条 `statements` row。
-
-   锁时间：
-
-   - 从 SQL 执行后，到 repayment 事务 commit/rollback。
-
-   防什么冲突：
-
-   - 两笔不同 repayment 同时给同一张 statement 还款，导致 `paid_amount` 超过 `total_amount`。
-   - repayment 和未来 overdue scheduler 同时改 statement status。
-
-7. 在锁内重新校验。
-
-   当前锁内看到：
+6. 同事务推进状态并持久化。
 
    ```text
-   statement.total_amount = 1500.00
-   statement.paid_amount = 0.00
-   statement.remainingAmount = 1500.00
-   statement.status = CLOSED
-
-   account.posted_balance = 1500.00
+   credit_accounts.posted_balance -= 500
+   statements.paid_amount += 500，status/version 推进
+   repayment PENDING -> RECEIVED
    ```
 
-   校验：
+   任何异常整体 rollback；缓存失效只在 commit 后执行。winner 少一次还款回读和一次初始明细查询，
+   duplicate 则会经过 account/statement 锁，这是保留 FK 并统一锁顺序的成本。
 
-   - repayment currency 必须等于 statement/account currency。
-   - statement 不能已经 `PAID`。
-   - repayment amount `500.00 <= statement.remainingAmount 1500.00`。
-   - repayment amount `500.00 <= account.posted_balance 1500.00`。
-
-8. 更新 `CreditAccount`。
-
-   `account.applyRepayment(500)`：
-
-   ```text
-   posted_balance: 1500.00 -> 1000.00
-   reserved_amount: 0.00 -> 0.00
-   availableCredit: 98500.00 -> 99000.00
-   ```
-
-9. 更新 `Statement`。
-
-   `statement.applyRepayment(500, T4)`：
-
-   ```text
-   paid_amount: 0.00 -> 500.00
-   status: CLOSED -> PARTIALLY_PAID
-   updated_at = 2026-08-10T09:00:00Z
-   remainingAmount: 1000.00
-   ```
-
-10. 更新 `Repayment`。
-
-   `repayment.markReceived(...)`：
-
-   ```text
-   status: PENDING -> RECEIVED
-   credit_account_id = 11111111-1111-1111-1111-111111111111
-   received_at = 2026-08-10T09:00:00Z
-   ```
-
-11. 注册 Statement cache after-commit 失效，然后事务 commit。
-
-   还款路径不额外写 Outbox；`repayments`、`credit_accounts`、`statements` 是这次入账的
-   source of truth。只有 commit 成功才清缓存，rollback 时不会让旧事务结果污染缓存时序。
-
-   释放锁：
-
-   - `repayments` row lock 释放。
-   - `credit_accounts` row lock 释放。
-   - `statements` row lock 释放。
 
 ### 8.3 请求四结束后的状态
 

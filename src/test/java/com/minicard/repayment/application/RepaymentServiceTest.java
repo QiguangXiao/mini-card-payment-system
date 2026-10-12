@@ -9,7 +9,6 @@ import java.util.Currency;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.minicard.shared.domain.Money;
 import com.minicard.creditaccount.domain.CreditAccount;
@@ -80,7 +79,7 @@ class RepaymentServiceTest {
         Statement statement = statement("1500.00");
         CreditAccount account = account("1500.00");
         arrangeNewRepayment();
-        when(statementRepository.findById(command.statementId())).thenReturn(Optional.of(statement));
+        when(statementRepository.findCreditAccountIdById(command.statementId())).thenReturn(Optional.of(ACCOUNT_ID));
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
         when(statementRepository.findByIdForUpdate(command.statementId())).thenReturn(Optional.of(statement));
 
@@ -92,32 +91,41 @@ class RepaymentServiceTest {
         assertThat(statement.status()).isEqualTo(StatementStatus.PARTIALLY_PAID);
         assertThat(statement.paidAmount().amount()).isEqualByComparingTo("500.00");
         assertThat(statement.version()).isEqualTo(1);
-        InOrder lockOrder = inOrder(statementRepository, creditAccountRepository);
-        lockOrder.verify(statementRepository).findById(command.statementId());
+        InOrder lockOrder = inOrder(statementRepository, creditAccountRepository, repaymentRepository);
+        lockOrder.verify(statementRepository).findCreditAccountIdById(command.statementId());
         lockOrder.verify(creditAccountRepository).findByIdForUpdate(ACCOUNT_ID);
         lockOrder.verify(statementRepository).findByIdForUpdate(command.statementId());
+        lockOrder.verify(repaymentRepository).claim(any());
         verify(creditAccountRepository).update(account);
         verify(statementRepository).updatePayment(statement);
         verify(statementReadService).evictAfterCommit(statement);
         verify(repaymentRepository).update(repayment);
+        verify(repaymentRepository, never()).findByIdempotencyKeyForShare(any());
+        verify(statementRepository, never()).findById(any());
     }
 
     @Test
     // 测试目的：验证同 idempotency key 的还款重试返回第一次 RECEIVED 结果。
-    // variant：claim=false 代表 duplicate loser，不再锁 statement/account，也不重复执行入账。
+    // variant：claim=false 代表 duplicate loser；即使账单已 PAID，仍返回原结果且不重复入账。
     void returnsExistingRepaymentForIdempotentRetry() {
         ReceiveRepaymentCommand command = command("500.00");
         Repayment existing = receivedRepayment(command);
-        when(statementRepository.findById(command.statementId())).thenReturn(Optional.of(statement("1500.00")));
+        when(statementRepository.findCreditAccountIdById(command.statementId())).thenReturn(Optional.of(ACCOUNT_ID));
+        Statement paid = statement("1500.00");
+        paid.applyRepayment(money("1500.00"), NOW);
+        when(statementRepository.findByIdForUpdate(command.statementId())).thenReturn(Optional.of(paid));
+        when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account("0.00")));
         when(repaymentRepository.claim(any())).thenReturn(false);
-        when(repaymentRepository.findByIdempotencyKeyForUpdate("rp-key-001"))
+        when(repaymentRepository.findByIdempotencyKeyForShare("rp-key-001"))
                 .thenReturn(Optional.of(existing));
 
         Repayment result = service.receive(command);
 
         assertThat(result).isSameAs(existing);
-        verify(statementRepository, never()).findByIdForUpdate(any());
-        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(statementRepository).findByIdForUpdate(command.statementId());
+        verify(creditAccountRepository).findByIdForUpdate(ACCOUNT_ID);
+        verify(statementRepository, never()).updatePayment(any());
+        verify(creditAccountRepository, never()).update(any());
         verify(repaymentRepository, never()).update(any());
         verify(statementReadService, never()).evictAfterCommit(any());
     }
@@ -130,7 +138,7 @@ class RepaymentServiceTest {
         Statement statement = statement("1500.00");
         CreditAccount account = account("3000.00");
         arrangeNewRepayment();
-        when(statementRepository.findById(command.statementId())).thenReturn(Optional.of(statement));
+        when(statementRepository.findCreditAccountIdById(command.statementId())).thenReturn(Optional.of(ACCOUNT_ID));
         when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
         when(statementRepository.findByIdForUpdate(command.statementId())).thenReturn(Optional.of(statement));
 
@@ -141,14 +149,52 @@ class RepaymentServiceTest {
         verify(statementRepository, never()).updatePayment(any());
     }
 
+    @Test
+    // 先锁再 claim 不代表先做业务拒绝；不同 fingerprint 仍必须是幂等冲突而非 PAID 拒绝。
+    void rejectsDifferentPayloadBeforeApplyingRepayment() {
+        ReceiveRepaymentCommand command = command("600.00");
+        arrangeLockedRows(command, statement("1500.00"), account("1500.00"));
+        when(repaymentRepository.claim(any())).thenReturn(false);
+        when(repaymentRepository.findByIdempotencyKeyForShare(command.idempotencyKey()))
+                .thenReturn(Optional.of(receivedRepayment(command("500.00"))));
+
+        assertThatThrownBy(() -> service.receive(command)).isInstanceOf(RepaymentConflictException.class);
+        verify(creditAccountRepository, never()).update(any());
+        verify(statementRepository, never()).updatePayment(any());
+        verify(statementReadService, never()).evictAfterCommit(any());
+    }
+
+    @Test
+    void rejectsCommittedPendingDuplicateWithoutApplyingAgain() {
+        ReceiveRepaymentCommand command = command("500.00");
+        arrangeLockedRows(command, statement("1500.00"), account("1500.00"));
+        when(repaymentRepository.claim(any())).thenReturn(false);
+        when(repaymentRepository.findByIdempotencyKeyForShare(command.idempotencyKey()))
+                .thenReturn(Optional.of(Repayment.pending(command.idempotencyKey(), command.requestFingerprint(),
+                        command.statementId(), command.money(), NOW)));
+        assertThatThrownBy(() -> service.receive(command)).isInstanceOf(RepaymentRejectedException.class)
+                .hasMessageContaining("already being processed");
+        verify(repaymentRepository, never()).update(any());
+        verify(creditAccountRepository, never()).update(any());
+    }
+
+    @Test
+    void missingStatementFailsBeforeLockOrClaim() {
+        ReceiveRepaymentCommand command = command("500.00");
+        when(statementRepository.findCreditAccountIdById(command.statementId())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.receive(command)).isInstanceOf(java.util.NoSuchElementException.class);
+        verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(repaymentRepository, never()).claim(any());
+    }
+
+    private void arrangeLockedRows(ReceiveRepaymentCommand command, Statement statement, CreditAccount account) {
+        when(statementRepository.findCreditAccountIdById(command.statementId())).thenReturn(Optional.of(ACCOUNT_ID));
+        when(creditAccountRepository.findByIdForUpdate(ACCOUNT_ID)).thenReturn(Optional.of(account));
+        when(statementRepository.findByIdForUpdate(command.statementId())).thenReturn(Optional.of(statement));
+    }
+
     private void arrangeNewRepayment() {
-        AtomicReference<Repayment> claimed = new AtomicReference<>();
-        when(repaymentRepository.claim(any())).thenAnswer(invocation -> {
-            claimed.set(invocation.getArgument(0));
-            return true;
-        });
-        when(repaymentRepository.findByIdempotencyKeyForUpdate("rp-key-001"))
-                .thenAnswer(invocation -> Optional.of(claimed.get()));
+        when(repaymentRepository.claim(any())).thenReturn(true);
     }
 
     private ReceiveRepaymentCommand command(String amount) {

@@ -5,6 +5,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
+import com.minicard.infrastructure.persistence.MySqlDuplicateKey;
 import com.minicard.repayment.domain.Repayment;
 import com.minicard.repayment.domain.RepaymentRepository;
 import com.minicard.repayment.domain.RepaymentStatus;
@@ -15,8 +16,11 @@ import org.springframework.stereotype.Repository;
 /**
  * RepaymentRepository 的 MyBatis adapter。
  *
- * <p>repayments.idempotency_key 唯一索引用于 INSERT-first claim；
- * SELECT ... FOR UPDATE 用于让 duplicate retry 等待 winner 完成。</p>
+ * <p>关键词：还款持久化, 幂等抢占, idempotency claim, shared locking read,
+ * 入金永続化(にゅうきんえいぞくか), 共有ロック(きょうゆうロック)。</p>
+ *
+ * <p>repayments.idempotency_key 唯一索引用于 INSERT-first claim；duplicate 只用 FOR SHARE 读结果。
+ * account/statement 必须先锁再 INSERT，以免 FK 检查的隐式 S 锁反转 application 的锁顺序。</p>
  */
 @Repository
 @RequiredArgsConstructor
@@ -35,17 +39,20 @@ public class MyBatisRepaymentRepository implements RepaymentRepository {
             mapper.insert(toRow(pendingRepayment));
             return true;
         } catch (DuplicateKeyException exception) {
-            // duplicate key 是幂等重复请求，不是系统错误；调用方会再 FOR UPDATE 读取 winner 结果。
+            // PRIMARY 冲突不能当成正常重放，否则会隐藏写库失败；只吞本还款幂等唯一约束。
+            if (!MySqlDuplicateKey.isConstraintConflict(exception, "uk_repayments_idempotency_key")) {
+                throw exception;
+            }
             return false;
         }
     }
 
     @Override
     /**
-     * 按 idempotency key 锁定 winner row，让 duplicate request 等待并读取最终结果。
+     * loser 共享锁读取最新结果，不修改 repayment，也不从已有 S 锁升级到 X。
      */
-    public Optional<Repayment> findByIdempotencyKeyForUpdate(String idempotencyKey) {
-        return Optional.ofNullable(mapper.findByIdempotencyKeyForUpdate(idempotencyKey))
+    public Optional<Repayment> findByIdempotencyKeyForShare(String idempotencyKey) {
+        return Optional.ofNullable(mapper.findByIdempotencyKeyForShare(idempotencyKey))
                 .map(this::toDomain);
     }
 

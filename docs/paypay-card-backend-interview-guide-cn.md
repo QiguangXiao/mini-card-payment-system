@@ -223,7 +223,7 @@ CreditAccount: postedBalance 减少
 
 30 秒回答：
 
-> 还款会同时改变 repayment row、statement paid amount/status 和 credit account posted balance，所以必须在同一个 transaction boundary 内提交。实现上先 claim repayment idempotency key，然后锁账户和账单，校验币种、金额、剩余应还金额，最后让 account 和 statement 各自执行 domain behavior。这样可以避免重复还款、超额还款和并发还款把账单状态改乱。
+> 还款会同时改变 repayment row、statement paid amount/status 和 credit account posted balance，所以必须在同一个 transaction boundary 内提交。实现上先只查账户归属，再按 account -> statement 取得排他锁，之后才 INSERT claim，避免外键隐式共享锁反转锁顺序。winner 直接使用 pending 并校验金额、币种和剩余应还；loser 用 FOR SHARE 校验 fingerprint 后返回已有结果。PAID 校验只在 winner 分支执行，保证全额还清后的合法 retry 仍成功。余额更新和提交后缓存失效仍属于同一次还款事务。
 
 ## 5. 高频专题一：`idempotency`
 

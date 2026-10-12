@@ -67,6 +67,12 @@ public class MyBatisStatementRepository implements StatementRepository {
     }
 
     @Override
+    public Optional<UUID> findCreditAccountIdById(UUID id) {
+        return Optional.ofNullable(mapper.findCreditAccountIdById(id.toString()))
+                .map(UUID::fromString);
+    }
+
+    @Override
     public Optional<Statement> findByIdForUpdate(UUID id) {
         return Optional.ofNullable(mapper.findByIdForUpdate(id.toString()))
                 .map(this::toDomainWithItems);

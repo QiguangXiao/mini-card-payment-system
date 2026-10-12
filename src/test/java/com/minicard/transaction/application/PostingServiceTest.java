@@ -7,7 +7,6 @@ import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.minicard.authorization.application.AuthorizationDomainEventAppender;
 import com.minicard.authorization.domain.Authorization;
@@ -108,6 +107,7 @@ class PostingServiceTest {
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(authorization);
         verify(transactionRepository).update(transaction);
+        verify(transactionRepository, never()).findByNetworkTransactionIdForShare(any());
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
         verify(authorizationEventAppender).append(event.capture());
@@ -130,13 +130,14 @@ class PostingServiceTest {
         when(cardRepository.findById("card-123"))
                 .thenReturn(Optional.of(new Card("card-123", accountId, CardStatus.ACTIVE)));
         when(transactionRepository.claim(any())).thenReturn(false);
-        when(transactionRepository.findByNetworkTransactionIdForUpdate("ntx-001"))
+        when(transactionRepository.findByNetworkTransactionId("ntx-001"))
                 .thenReturn(Optional.of(existing));
 
         CardTransaction result = service.post(command(authorization.id(), "100.00"));
 
         assertThat(result).isSameAs(existing);
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
+        verify(transactionRepository, never()).claim(any());
         verify(authorizationRepository, never()).update(any());
         verify(transactionRepository, never()).update(any());
         verify(authorizationEventAppender, never()).append(any());
@@ -172,16 +173,39 @@ class PostingServiceTest {
                 .hasMessageContaining("authorization must be APPROVED");
     }
 
+    @Test
+    // 首次普通查询可能未命中并发提交；claim 冲突后必须 current read，且不能改变任何余额。
+    void readsConcurrentWinnerWithSharedLockAfterClaimConflict() {
+        UUID accountId = UUID.randomUUID();
+        Authorization authorization = approvedAuthorization("card-123", "100.00");
+        CreditAccount account = account(accountId, "1000.00", "100.00", "0.00");
+        CardTransaction existing = postedTransaction(authorization.id(), accountId);
+        when(authorizationRepository.findByIdForUpdate(authorization.id())).thenReturn(Optional.of(authorization));
+        when(cardRepository.findById("card-123"))
+                .thenReturn(Optional.of(new Card("card-123", accountId, CardStatus.ACTIVE)));
+        when(creditAccountRepository.findByIdForUpdate(accountId)).thenReturn(Optional.of(account));
+        when(transactionRepository.findByNetworkTransactionId("ntx-001")).thenReturn(Optional.empty());
+        when(transactionRepository.claim(any())).thenReturn(false);
+        when(transactionRepository.findByNetworkTransactionIdForShare("ntx-001"))
+                .thenReturn(Optional.of(existing));
+
+        assertThat(service.post(command(authorization.id(), "100.00"))).isSameAs(existing);
+        InOrder order = inOrder(transactionRepository, creditAccountRepository);
+        order.verify(transactionRepository).findByNetworkTransactionId("ntx-001");
+        order.verify(creditAccountRepository).findByIdForUpdate(accountId);
+        order.verify(transactionRepository).claim(any());
+        order.verify(transactionRepository).findByNetworkTransactionIdForShare("ntx-001");
+        verify(creditAccountRepository, never()).update(any());
+        verify(authorizationRepository, never()).update(any());
+        verify(transactionRepository, never()).update(any());
+        verify(authorizationEventAppender, never()).append(any());
+        verify(transactionEventAppender, never()).append(any());
+    }
+
     private void arrangeNewPresentment() {
-        AtomicReference<CardTransaction> claimed = new AtomicReference<>();
-        when(transactionRepository.claim(any())).thenAnswer(invocation -> {
-            claimed.set(invocation.getArgument(0));
-            return true;
-        });
-        when(transactionRepository.findByNetworkTransactionIdForUpdate("ntx-001"))
-                .thenAnswer(invocation -> claimed.get() == null
-                        ? Optional.empty()
-                        : Optional.of(claimed.get()));
+        when(transactionRepository.claim(any())).thenReturn(true);
+        when(transactionRepository.findByNetworkTransactionId("ntx-001"))
+                .thenReturn(Optional.empty());
     }
 
     private PostPresentmentCommand command(UUID authorizationId, String amount) {

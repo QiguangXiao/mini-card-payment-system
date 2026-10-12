@@ -50,13 +50,17 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 | 授权（`AuthorizationService`） | authorization claim → card(无锁读) → **account FOR UPDATE** |
 | 入账（`PostingService`） | **authorization FOR UPDATE** → **account FOR UPDATE** → transaction claim |
 | 过期（`AuthorizationExpiryService`） | **authorization FOR UPDATE** → **account FOR UPDATE** |
-| 还款（`RepaymentService`） | repayment claim → **account FOR UPDATE** → **statement FOR UPDATE** |
+| 还款（`RepaymentService`） | 轻量查询账户归属 → **account FOR UPDATE** → **statement FOR UPDATE** → repayment claim |
 | 出账（`StatementGenerationService`） | **account FOR UPDATE** → **candidate transactions FOR UPDATE** |
 
 关键证据：`PostingService.post` 里注释明确写出"新 presentment 必须在 credit account row lock
 **之后**再 INSERT claim，否则 posting（先锁交易再锁账户）和 statement（先锁账户再锁交易）
 高并发时形成环路等待"。这说明锁顺序是设计约束，不是巧合——面试官用这个区分
 "背过死锁定义"和"推理过死锁"。
+
+必须把隐式锁也算进去：repayment INSERT 的 FK 检查会取 statement S，所以先锁父 account/statement
+再 INSERT；posting 首次查重用普通 SELECT，避免未命中时先持有 gap 再争 account。
+授权/还款的 loser 以及 posting INSERT 冲突回读使用 FOR SHARE，避免重复键 S -> X 升级。
 
 ### 1.3 可认领任务框架（DelayJob / Outbox 同构；StatementJob 曾是第三族，已移除）
 

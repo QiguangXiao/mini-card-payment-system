@@ -10,7 +10,7 @@ import org.apache.ibatis.annotations.Param;
  * idempotency lock, row lock, 入金SQL(にゅうきんSQL),
  * 冪等ロック(べきとうロック)。</p>
  *
- * <p>@Mapper 让 MyBatis 生成代理；真正的 SELECT ... FOR UPDATE 写在 XML 中。</p>
+ * <p>@Mapper 让 MyBatis 生成代理；duplicate 的共享 locking read 明确写在 XML 中。</p>
  */
 // @Mapper 让 Spring 注入 MyBatis proxy；接口没有手写实现类。
 @Mapper
@@ -22,12 +22,12 @@ public interface RepaymentMapper {
     int insert(RepaymentRow repayment);
 
     /**
-     * 根据 idempotency key 加 FOR UPDATE 查询。
+     * 根据 idempotency key 加 FOR SHARE 查询最新结果。
      *
-     * <p>重复请求会等待 winner transaction 完成，然后比较 fingerprint 并返回同一结果。</p>
+     * <p>原 winner 的等待通常在账户锁或 INSERT 阶段发生；这里只读取结果供 fingerprint 校验。</p>
      */
     // @Param 名称要和 XML 里的 #{idempotencyKey} 对齐；否则多参数扩展时会退化成 param1。
-    RepaymentRow findByIdempotencyKeyForUpdate(@Param("idempotencyKey") String idempotencyKey);
+    RepaymentRow findByIdempotencyKeyForShare(@Param("idempotencyKey") String idempotencyKey);
 
     /**
      * 按 repayment id 查询。

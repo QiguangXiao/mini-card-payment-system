@@ -61,16 +61,28 @@
 
     <!--
       network_transaction_id 是 presentment 的 idempotency key。
-      duplicate retry 会等待原 transaction 完成，然后读取最终 POSTED 结果。
+      同 authorization 的重试会先在 authorization row lock 等待原事务提交。
       查询样例：networkTransactionId='ntx-supermarket-20260615-0001'。
-      对应索引：uk_card_transactions_network_transaction_id(network_transaction_id)。
-      这里锁的是唯一交易 row，不是整张 card_transactions 表。
+      对应索引：uk_card_transactions_network_transaction(network_transaction_id)。
+      首次读取不加交易锁；INSERT 冲突后的回读才使用 FOR SHARE。
     -->
-    <select id="findByNetworkTransactionIdForUpdate" resultMap="cardTransactionRowMap">
+    <!--
+      首次查重只做非锁定快路径。若缺失时用 FOR UPDATE/FOR SHARE，RR 下可能锁住 gap；
+      之后等 account 或尝试 INSERT 时，可能与其他请求形成 gap/account 循环等待。
+      这里查不到不代表 ownership，后续必须由 INSERT 唯一键裁决，不能先移动余额。
+    -->
+    <select id="findByNetworkTransactionId" resultMap="cardTransactionRowMap">
         SELECT <include refid="cardTransactionColumns"/>
         FROM card_transactions
         WHERE network_transaction_id = #{networkTransactionId}
-        FOR UPDATE
+    </select>
+
+    <!-- claim 冲突后行已存在，用共享 current read 读最新结果，避免旧 RR 快照和 S -> X 升级。 -->
+    <select id="findByNetworkTransactionIdForShare" resultMap="cardTransactionRowMap">
+        SELECT <include refid="cardTransactionColumns"/>
+        FROM card_transactions
+        WHERE network_transaction_id = #{networkTransactionId}
+        FOR SHARE
     </select>
 
     <!--

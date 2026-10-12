@@ -2,6 +2,7 @@ package com.minicard.repayment.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
@@ -24,7 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>关键词：还款入账, 幂等键, 余额扣减, repayment service,
  * idempotency key, posted balance, 入金処理(にゅうきんしょり),
- * 入金処理(にゅうきんしょり)。</p>
+ * 参照整合性(さんしょうせいごうせい), 外键检查, foreign key lock。</p>
  *
  * <p>interview重点：Repayment 同时影响 repayment row、credit account postedBalance、
  * statement paidAmount/status/version。它们必须在同一个 transaction boundary 内提交。</p>
@@ -33,16 +34,12 @@ import org.springframework.transaction.annotation.Transactional;
  * 锁顺序固定：credit account 先于 statement）：</p>
  * <pre>
  * POST /api/repayments
- * 1. load statement snapshot（不锁，只为拿 creditAccountId + 提前挡 FK 异常）
- * 2. INSERT-first claim repayment by idempotency_key，
- *    再 SELECT FOR UPDATE + fingerprint 校验；loser: RECEIVED 返回幂等结果 / 处理中则拒绝
- * 3. winner 应用还款（对应 applyToStatementAndAccount 的"应用阶段 1-4"）：
- *    3.1 SELECT credit_account FOR UPDATE，再 SELECT statement FOR UPDATE（全项目统一锁顺序）
- *    3.2 锁内重新校验金额/币种/账单状态/账户归属（不信任步骤 1 的快照）
- *    3.3 account.applyRepayment 释放额度；statement.applyRepayment 推进 paidAmount/status/version
- *    3.4 注册 after-commit cache invalidation（不在事务内直接写缓存）
- * 4. update repayment RECEIVED
- * 5. COMMIT 后才触发 statement 读缓存失效
+ * 1. 只查询 statement 的 creditAccountId（不锁、不加载明细），计算一次 Money/fingerprint
+ * 2. SELECT credit_account FOR UPDATE，再 SELECT statement FOR UPDATE
+ * 3. INSERT-first claim repayment（本事务第一笔写入，但不是第一把锁）
+ *    winner 直接使用 pending；loser FOR SHARE + fingerprint 校验，RECEIVED 返回 / PENDING 拒绝
+ * 4. 只有 winner 校验剩余金额/状态并应用还款，注册 after-commit cache invalidation
+ * 5. update repayment RECEIVED，与 account/statement 一起 COMMIT，再失效读缓存
  * </pre>
  */
 @Service
@@ -60,32 +57,49 @@ public class RepaymentService {
      */
     @Transactional
     public Repayment receive(ReceiveRepaymentCommand command) {
-        Instant now = Instant.now(clock);
-        // 阶段 1：先确认 statement 存在，取得 creditAccountId 快照。
-        // 这里不是最终状态判断；真正的金额/状态校验会在后面 SELECT ... FOR UPDATE 后重新做。
-        // 先查这一步是为了避免 repayment claim 先撞 FK，变成晦涩的数据库异常。
-        Statement statementSnapshot = statementRepository.findById(command.statementId())
+        // TIMESTAMP(6) 只保存微秒；winner 直接使用 pending 时，首次响应与重放也必须精度一致。
+        Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
+        Money amount = command.money();
+        String requestFingerprint = command.requestFingerprint();
+        // 阶段 1：轻量读取账户归属。这里只做路由，后面会锁定完整账单并校验最新状态。
+        // 如果在这里加载整个 Statement，明细会在锁前/锁后各加载一次，增加查询和对象构造成本。
+        UUID accountId = statementRepository.findCreditAccountIdById(command.statementId())
                 .orElseThrow(() -> new NoSuchElementException(
                         "statement not found: " + command.statementId()
                 ));
+
+        // 阶段 2：先 account X，再 statement X，然后才 INSERT repayment，保留两个外键。
+        // 外键检查也会加锁：若先 INSERT，可能已隐式取得 statement S，再去等 account X。
+        // 两个还同一账单的请求就可能出现“A 持 account 等 B 的 statement S，B 持 statement S 等 A”。
+        // 提前按 account -> statement 锁定，让后续 FK 检查发生在本事务已经持有排他锁之后。
+        CreditAccount account = creditAccountRepository.findByIdForUpdate(accountId)
+                .orElseThrow(() -> new RepaymentRejectedException(
+                        "statement references missing credit account " + accountId));
+        Statement statement = statementRepository.findByIdForUpdate(command.statementId())
+                .orElseThrow(() -> new NoSuchElementException("statement not found: " + command.statementId()));
         Repayment pending = Repayment.pending(
                 command.idempotencyKey(),
-                command.requestFingerprint(),
+                requestFingerprint,
                 command.statementId(),
-                command.money(),
+                amount,
                 now
         );
 
-        // 阶段 2：INSERT-first idempotency claim，争夺本还款幂等键的处理权。
-        // INSERT-first idempotency claim：同一 Idempotency-Key 的并发请求只有一个 winner。
-        // loser 会在 findByIdempotencyKeyForUpdate 等待 winner commit 后读取最终 RECEIVED 结果。
+        // 阶段 3：INSERT-first claim 是第一笔写入，用幂等唯一键裁决 ownership。
+        // 同账户请求通常已在阶段 2 的 account 锁上排队；若相同 key 来自不同账户，
+        // 则还可能在 INSERT 唯一键检查处等待 winner commit/rollback，而不是等到回读才排队。
         // 如果没有这层 claim，客户端或银行回调重复提交会多次减少 postedBalance，造成 double repayment。
         boolean claimed = repaymentRepository.claim(pending);
-        Repayment repayment = repaymentRepository
-                .findByIdempotencyKeyForUpdate(command.idempotencyKey())
-                .orElseThrow(() -> new IllegalStateException("repayment claim was not visible"));
-        assertSameIdempotentRequest(command, repayment);
-        if (!claimed) {
+        Repayment repayment;
+        if (claimed) {
+            // INSERT 已持有 repayment 排他锁，直接用本次 pending，省掉回读和恒真的 fingerprint 校验。
+            repayment = pending;
+        } else {
+            // loser 只读结果；重复 INSERT 可能持有 S，FOR SHARE 避免不必要的 S -> X 升级循环。
+            // 这里必须 locking/current read：阶段 1 已建立 RR 快照，普通 SELECT 可能看不到刚提交的 winner。
+            repayment = repaymentRepository.findByIdempotencyKeyForShare(command.idempotencyKey())
+                    .orElseThrow(() -> new IllegalStateException("existing repayment was not visible"));
+            assertSameIdempotentRequest(requestFingerprint, repayment);
             if (repayment.status() == RepaymentStatus.RECEIVED) {
                 return repayment;
             }
@@ -94,12 +108,11 @@ public class RepaymentService {
             );
         }
 
-        // 阶段 3：winner 才能把还款应用到 statement 和 credit account。
-        // 这里会锁 account/statement，推进 paidAmount/status/postedBalance，并注册 cache after-commit 失效。
-        applyToStatementAndAccount(repayment, statementSnapshot, command.money(), now);
-        // 阶段 4：保存 repayment RECEIVED 状态。它与 account/statement 更新处于同一 transaction boundary。
+        // 阶段 4：只有 winner 才校验 PAID/remaining 并改变余额。若在 claim 前拒绝 PAID，
+        // 首次全额还清后的合法 retry 就无法返回原 RECEIVED 结果，破坏 idempotency。
+        applyToStatementAndAccount(repayment, statement, account, amount, now);
+        // 阶段 5：保存 RECEIVED，与 account/statement 同事务提交；commit 后才执行缓存失效。
         repaymentRepository.update(repayment);
-        // 阶段 5：方法返回后事务提交；只有 commit 成功，前面注册的 statement cache 失效才会执行。
         // 如果在 commit 前直接删除缓存，另一个请求可能把旧 DB 快照重新写回，造成脏缓存。
         return repayment;
     }
@@ -122,29 +135,15 @@ public class RepaymentService {
      */
     private void applyToStatementAndAccount(
             Repayment repayment,
-            Statement statementSnapshot,
+            Statement statement,
+            CreditAccount account,
             Money amount,
             Instant now
     ) {
-        // 应用阶段 1：按全项目锁顺序先锁 credit account，再锁 statement。
-        // 全项目保持同一锁顺序：credit account row lock 先于 statement row lock。
-        // 这样 repayment 不会和 StatementGenerationService.generate(account -> statement) 形成死锁。
-        // 如果 repayment 反过来先锁 statement，再等 account，就可能和 statement batch 互相等待。
-        CreditAccount account = creditAccountRepository
-                .findByIdForUpdate(statementSnapshot.creditAccountId())
-                .orElseThrow(() -> new RepaymentRejectedException(
-                        "statement references missing credit account "
-                                + statementSnapshot.creditAccountId()
-                ));
-        Statement statement = statementRepository.findByIdForUpdate(repayment.statementId())
-                .orElseThrow(() -> new NoSuchElementException(
-                        "statement not found: " + repayment.statementId()
-                ));
-
-        // 应用阶段 2：在锁内重新校验金额、币种、账单状态和账户归属。
-        // 不能只相信阶段 1 的 statementSnapshot，因为它不是锁定快照，期间可能已有其它还款推进状态。
+        // 应用阶段 1：使用 receive 已锁定的两个 aggregate，校验最新金额/状态及账户归属。
+        // 初始账户路由读取不是余额决策依据，不能用它代替这里的 locked state。
         validateCanApply(statement, account, amount);
-        // 应用阶段 3：推进两个 aggregate 和 repayment 自身的业务状态。
+        // 应用阶段 2：推进两个 aggregate 和 repayment 自身的业务状态。
         // 这两个 aggregate state changes 在同一个 transaction boundary 内提交：
         // account.postedBalance 释放额度，statement.paidAmount/status/version 推进账单生命周期。
         account.applyRepayment(amount);
@@ -153,7 +152,7 @@ public class RepaymentService {
 
         creditAccountRepository.update(account);
         statementRepository.updatePayment(statement);
-        // 应用阶段 4：只注册 after-commit cache invalidation，不在事务中直接写缓存。
+        // 应用阶段 3：只注册 after-commit cache invalidation，不在事务中直接写缓存。
         // 写路径不"顺手更新 cache"，而是更新 MySQL source of truth 后失效 cache。
         // 原因是 statement response 由多张表/字段组装而来，并发下手工更新 cache 容易漏字段或写旧值。
         // 传整个 statement（而不是只传 id）：Statement.applyRepayment 已经推进正式 version，
@@ -167,7 +166,7 @@ public class RepaymentService {
     /**
      * 校验还款金额、币种、账单状态和账户余额是否允许本次入账。
      *
-     * <p>事务归属：由 {@link #applyToStatementAndAccount(Repayment, Statement, Money, Instant)}
+     * <p>事务归属：由 {@link #applyToStatementAndAccount(Repayment, Statement, CreditAccount, Money, Instant)}
      * 在锁住 account 与 statement row 后调用；它本身不写库，但依赖同一事务内的最新锁定快照。</p>
      */
     private void validateCanApply(
@@ -202,14 +201,13 @@ public class RepaymentService {
     /**
      * 校验同一个 idempotency key 是否仍代表同一笔还款请求。
      *
-     * <p>事务归属：当前由 {@link #receive(ReceiveRepaymentCommand)} 在锁住 repayment winner row
-     * 后调用；它本身是纯校验，但校验对象来自同一事务内的 {@code SELECT ... FOR UPDATE}。</p>
+     * <p>只由 loser 分支调用；fingerprint 本次请求只计算一次，已有对象来自 FOR SHARE 最新读取。</p>
      */
     private void assertSameIdempotentRequest(
-            ReceiveRepaymentCommand command,
+            String requestFingerprint,
             Repayment repayment
     ) {
-        if (!command.matches(repayment)) {
+        if (!requestFingerprint.equals(repayment.requestFingerprint())) {
             throw new RepaymentConflictException();
         }
     }

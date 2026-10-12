@@ -30,7 +30,9 @@
         <!--
           插入样例：idempotency_key='repay-card-123-20260703-0001'，
           statement_id='77777777-7777-7777-7777-777777777701'，amount=500.00，status='PENDING'。
-          PENDING 先保存请求 claim，后续 service 再锁 statement/account 完成收款；
+          service 先 account FOR UPDATE、statement FOR UPDATE，再插 PENDING claim；
+          因为 FK 检查会隐式锁 statement，先插后锁 account 会形成隐藏的锁顺序反转。
+          同账户请求一般在 account 锁上排队；跨账户同 key 还可能在 INSERT 唯一键检查处排队。
           如果直接先改账单再写 repayment，duplicate retry 就缺少可查询的 idempotency anchor。
         -->
         INSERT INTO repayments (
@@ -51,16 +53,17 @@
         )
     </insert>
 
-    <select id="findByIdempotencyKeyForUpdate" resultMap="repaymentRowMap">
+    <select id="findByIdempotencyKeyForShare" resultMap="repaymentRowMap">
         <!--
           查询样例：idempotencyKey='repay-card-123-20260703-0001'。
           对应索引：uk_repayments_idempotency_key(idempotency_key)。
-          duplicate retry 会在这里等待 idempotency winner 完成，再读最终 RECEIVED 状态。
+          原 winner 的等待一般已在 account 锁或 INSERT 唯一键检查处完成；这里用 current read
+          避免阶段 1 的 RR 旧快照，并避免 duplicate 已持有 S 后再升级为 X。
         -->
         SELECT <include refid="repaymentColumns"/>
         FROM repayments
         WHERE idempotency_key = #{idempotencyKey}
-        FOR UPDATE
+        FOR SHARE
     </select>
 
     <select id="findById" resultMap="repaymentRowMap">

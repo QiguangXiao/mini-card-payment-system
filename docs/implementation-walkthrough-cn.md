@@ -631,11 +631,12 @@ curl -X POST http://localhost:8080/api/presentments \
    先锁住 authorization row。
    这样同一笔授权不会被两个不同 presentment 同时 posted。
 
-2. `transactionRepository.findByNetworkTransactionIdForUpdate(networkTransactionId)`
+2. `transactionRepository.findByNetworkTransactionId(networkTransactionId)`
 
-   先检查同一个外部 presentment 是否已经处理过。
+   用普通非锁定 SELECT 检查同一个外部 presentment 是否已经处理过。缺失时不锁 gap。
    如果已存在并且内容一致、状态是 `POSTED`，说明这是 duplicate retry，直接返回已有 `CardTransaction`。
-   这条路径不会重复释放 hold，也不会再次增加 `postedBalance`。
+   这条路径不会重复释放 hold，也不会再次增加 `postedBalance`。合法路径的 PENDING 和 POSTED
+   在同一事务完成，普通读取不会看到未提交的 PENDING；statement assignment 展示字段按事务快照返回。
 
 3. 校验 authorization
 
@@ -663,7 +664,9 @@ curl -X POST http://localhost:8080/api/presentments \
 6. `transactionRepository.claim(transaction)`
 
    插入 `card_transactions`，依赖 `network_transaction_id` 唯一索引抢占幂等所有权。
-   如果 duplicate retry 已经存在同一条 posted transaction，就直接返回已有结果，不重复改余额。
+   如果首次普通 SELECT 漏掉了并发提交，INSERT 唯一键仍会挡住重复；冲突后
+   `findByNetworkTransactionIdForShare` 用共享 current read 读取最新行、校验身份并返回，不重复改余额。
+   winner 直接使用 pending；只有 `uk_card_transactions_network_transaction` 冲突才是幂等 loser。
 
 7. `account.postAuthorized(amount)`
 
@@ -1127,89 +1130,63 @@ statementId | amount | currency
 
 ### 6.3 RepaymentService transaction boundary
 
-入口：
+入口：`RepaymentService.receive(command)`。例如 `Idempotency-Key: repay-500-001`，
+请求指定 statement、500 JPY。整个流程仍在一个 MySQL transaction 内完成，保留两个外键。
 
-- `RepaymentService.receive(command)`
+1. 计算一次 `Money` 和 request fingerprint，`now` 归一到微秒，匹配 `TIMESTAMP(6)`。
 
-关键顺序：
+2. `statementRepository.findCreditAccountIdById(statementId)` 只查询账户归属。
 
-1. 非锁定读取 statement
+   这是非锁定路由查询，不加载明细、不决定可还金额。最终仍会锁定完整账单，保留 domain invariant 校验。
+   相比原来先加载完整 statement，省掉一次明细查询和明细对象构造。
 
-   `statementRepository.findById(statementId)` 先确认 statement 存在，并拿到 `creditAccountId`。
-   这个读取不做余额决策。
+3. 先锁账户，再锁账单。
 
-   为什么可以这样做：
+   ```text
+   creditAccountRepository.findByIdForUpdate(accountId)
+   -> statementRepository.findByIdForUpdate(statementId)
+   -> INSERT repayment
+   ```
 
-   - `statement.creditAccountId` 是 statement 的归属字段，生成后不应该变化。
-   - 先查存在性可以避免 `repayments.statement_id` 外键错误变成晦涩的数据库异常。
-   - 真正的还款金额和状态判断，会在后面 `FOR UPDATE` 锁住 statement 后重新校验。
+   **为什么 INSERT 必须放在两把锁后？** `repayments.statement_id` 和 `credit_account_id` 都有外键。
+   外键检查会隐式加父记录共享锁；若先 INSERT，再锁 account，两个不同 key 还同一张账单时，
+   可能出现 A 持 account X 等 B 的 statement S，B 持 statement S 等 A 的 account X。
+   先按 account -> statement 取得 X，让外键检查发生在已持锁之后，避免这一隐藏锁反转。
+   这保留数据库对孤立记录的保护，不需要删除外键或改 schema。
 
-2. 创建 `Repayment.pending(...)`
+4. 创建 `Repayment.pending(...)`，执行 `repaymentRepository.claim(pending)`。
 
-   `repayment.id = UUID.randomUUID()` 在 domain factory 内生成。
-   新还款先进入 `PENDING`，表达幂等 ownership 已经准备被 claim。
+   INSERT-first 指第一笔写入由唯一键裁决 ownership，**不等于必须先于全部 SELECT/锁**。
+   `uk_repayments_idempotency_key` 决定 winner；PRIMARY/其他约束冲突继续抛出。
+   同账户 duplicate 通常先在 account 锁处排队；跨账户复用同 key 时，还可能在 INSERT 唯一键检查处等待。
 
-3. `repaymentRepository.claim(pending)`
+5. 显式 `if/else` 处理结果。
 
-   MyBatis 插入 `repayments/PENDING`。
-   `repayments.idempotency_key` 唯一索引决定并发 winner。
+   - winner：直接使用 pending，省掉一次 repayment 回读与恒真的 fingerprint 校验。
+   - loser：`findByIdempotencyKeyForShare` 用共享 current read 读取最新结果，再比较已经计算的 fingerprint。
+     初始路由查询已建立 RR 快照，不能用普通 SELECT 替代该回读。
+     相同请求且 `RECEIVED` 直接返回；不同请求抛 `REPAYMENT_CONFLICT`；遗留 `PENDING` 拒绝处理。
 
-   interview 重点：
+6. 只有 winner 才校验账单 `PAID`、remaining amount、账户归属和币种，并应用还款。
 
-   - 这是 INSERT-first idempotency。
-   - 不靠 read-then-insert，因为并发下两个线程可能同时读到不存在。
-   - loser 不会继续改 account 或 statement。
+   如果 claim 前就因为账单已 PAID 拒绝，首次全额还清后的合法 retry 将无法返回原 RECEIVED 结果。
+   金额必须不超过 statement remaining amount 和 account posted balance。
 
-4. `findByIdempotencyKeyForUpdate(...)`
+   ```text
+   account.applyRepayment(amount)     -> postedBalance 减少
+   statement.applyRepayment(amount)   -> paidAmount/status/version 推进
+   repayment.markReceived(accountId)  -> PENDING 变 RECEIVED
+   ```
 
-   用 `SELECT ... FOR UPDATE` 锁定同一个 repayment row。
-   duplicate retry 会等待 winner 提交，然后读取最终 `RECEIVED` 结果。
+7. 更新 account、statement、repayment，注册 `statementReadService.evictAfterCommit(statement)`。
 
-5. 锁定 credit account
+   三者一起 commit/rollback；缓存只在 commit 后失效。还款路径不发布 Kafka 事件。
+   原 winner 路径省两次查询（初始明细 + repayment 回读）；代价是 duplicate 也先经过账户/账单锁。
+   这是保留 FK 完整性并统一真实锁顺序的取舍，不能声称所有死锁都消失。
 
-   `creditAccountRepository.findByIdForUpdate(creditAccountId)`。
-
-   这里沿用全项目锁顺序：
-
-```text
-credit account row lock -> statement row lock
-```
-
-   这样 repayment 不会和 `StatementGenerationService.generate(...)` 的锁顺序相反，降低死锁风险。
-
-6. 锁定 statement
-
-   `statementRepository.findByIdForUpdate(statementId)`。
-   锁住后重新校验：
-
-   - statement 属于刚才锁住的 credit account。
-   - 币种和 statement/account 一致。
-   - statement 不是 `PAID`。
-   - 还款金额不超过 statement remaining amount。
-   - 还款金额不超过 account posted balance。
-
-7. 更新两个 aggregate
-
-   - `account.applyRepayment(amount)`：减少 `postedBalance`。
-   - `statement.applyRepayment(amount, now)`：增加 `paidAmount`，状态变为 `PARTIALLY_PAID` 或 `PAID`。
-
-   这两个变更在同一个 MySQL transaction boundary 内提交。
-   任一步失败都会 rollback，避免“账单显示已还但额度没恢复”或相反的不一致。
-
-8. `Repayment.markReceived(...)`
-
-   `Repayment` 从 `PENDING -> RECEIVED`。
-
-9. 保存并提交事务
-
-   - `creditAccountRepository.update(account)`
-   - `statementRepository.updatePayment(statement)`
-   - `repaymentRepository.update(repayment)`
-   - `statementReadService.evictAfterCommit(statement)` 注册提交后缓存失效
-
-   account/statement/repayment 状态在同一个 transaction boundary 内 commit；如果事务 rollback，
-   缓存失效回调也不会执行。还款路径不发布 Kafka 通知事件，Outbox/Inbox 的学习点由
-   authorization 与 card transaction 两条不同 topic 的路径完整展示。
+验证：`RepaymentServiceTest` 验证 account -> statement -> claim 顺序、PAID 后重放和副作用短路；
+`FinancialWriteConcurrencyIT` 用真实 MySQL 验证同账单不同 key、同 key 全额重放、超额并发、回滚重试、
+保留 FK 拒绝孤立记录、多个 posting 未命中同一 gap，以及出账持交易锁时 duplicate posting 能完成。
 
 ### 6.4 本次事务提交后的数据变化
 

@@ -345,7 +345,7 @@ POST /api/presentments
 -> PresentmentController
 -> PostingService.post(...)
    -> authorizationRepository.findByIdForUpdate(...)
-   -> transactionRepository.findByNetworkTransactionIdForUpdate(...)
+   -> transactionRepository.findByNetworkTransactionId(...)（非锁定快路径；INSERT 冲突后 FOR SHARE）
    -> creditAccountRepository.findByIdForUpdate(row lock)
    -> transactionRepository.claim(networkTransactionId)
    -> account.postAuthorized(...)

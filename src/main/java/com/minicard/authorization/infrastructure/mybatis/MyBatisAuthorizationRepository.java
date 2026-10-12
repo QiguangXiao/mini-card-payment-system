@@ -1,16 +1,15 @@
 package com.minicard.authorization.infrastructure.mybatis;
 
-import java.sql.SQLException;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
 import com.minicard.authorization.domain.AuthorizationRepository;
 import com.minicard.authorization.domain.AuthorizationStatus;
 import com.minicard.shared.domain.Money;
+import com.minicard.infrastructure.persistence.MySqlDuplicateKey;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
@@ -29,13 +28,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor
 public class MyBatisAuthorizationRepository implements AuthorizationRepository {
-
-    // MySQL 1062 不区分 PRIMARY/其他 UNIQUE；只识别本幂等约束，未知格式宁可失败也不误放行。
-    // Connector/J 通常返回 for key 'authorizations.uk_...'，也兼容不带表名前缀的格式。
-    private static final Pattern IDEMPOTENCY_CONSTRAINT = Pattern.compile(
-            "for key ['`](?:[^'`]+\\.)?uk_authorizations_idempotency_key['`]\\s*$",
-            Pattern.CASE_INSENSITIVE
-    );
 
     private final AuthorizationMapper authorizationMapper;
 
@@ -62,23 +54,11 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
         } catch (DuplicateKeyException exception) {
             // 若把所有 DuplicateKeyException 都当成 loser，主键碰撞也会被伪装成正常重放。
             // 只吞本幂等约束的 MySQL 1062；其他约束/无法识别的异常保留原异常向上抛出。
-            if (!isIdempotencyKeyConflict(exception)) {
+            if (!MySqlDuplicateKey.isConstraintConflict(exception, "uk_authorizations_idempotency_key")) {
                 throw exception;
             }
             return false;
         }
-    }
-
-    private boolean isIdempotencyKeyConflict(DuplicateKeyException exception) {
-        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
-            if (cause instanceof SQLException sqlException
-                    && sqlException.getErrorCode() == 1062
-                    && sqlException.getMessage() != null
-                    && IDEMPOTENCY_CONSTRAINT.matcher(sqlException.getMessage()).find()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

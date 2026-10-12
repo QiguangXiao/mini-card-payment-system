@@ -12,7 +12,11 @@ public interface CardTransactionRepository {
      */
     boolean claim(CardTransaction transaction);
 
-    Optional<CardTransaction> findByNetworkTransactionIdForUpdate(String networkTransactionId);
+    /** 普通查重不锁缺失记录的 gap；最终并发裁决仍由 claim 的唯一键完成。 */
+    Optional<CardTransaction> findByNetworkTransactionId(String networkTransactionId);
+
+    /** claim 失败后读取最新 winner，loser 不修改交易，用共享锁避免 S -> X 升级。 */
+    Optional<CardTransaction> findByNetworkTransactionIdForShare(String networkTransactionId);
 
     /**
      * 账单生成时锁定 posted 且尚未出账的交易。

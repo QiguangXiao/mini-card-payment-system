@@ -9,7 +9,6 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
-import com.minicard.repayment.domain.Repayment;
 
 /**
  * Controller 转入 application layer 的还款命令对象。
@@ -48,7 +47,4 @@ public record ReceiveRepaymentCommand(
         }
     }
 
-    public boolean matches(Repayment repayment) {
-        return requestFingerprint().equals(repayment.requestFingerprint());
-    }
 }

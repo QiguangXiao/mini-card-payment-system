@@ -66,7 +66,8 @@ public class StatementGenerationService {
         // 阶段 1：锁 credit account，作为账单生成和 posting 的共同并发门。
         // 账户 row lock 是账单生成的并发门(concurrency gate)。
         // PostingService 也会先锁同一个 credit account，再创建/更新 CardTransaction，
-        // 因此 statement 生成期间不会漏掉正在入账的交易，也不会和 posting 产生锁顺序死锁。
+        // 因此与 posting 的 INSERT/归账共享并发门，降低 account/transaction 锁反转风险。
+        // Posting 首次查重必须非锁定；若提前锁缺失记录的 gap，仍可能反转这里的锁顺序。
         // 如果不先锁 account，账单扫描和 posting 可能交错，导致一笔已入账交易漏进下一期或重复归账。
         CreditAccount account = creditAccountRepository
                 .findByIdForUpdate(command.creditAccountId())

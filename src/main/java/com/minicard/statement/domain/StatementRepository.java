@@ -23,6 +23,11 @@ public interface StatementRepository {
     Optional<Statement> findById(UUID id);
 
     /**
+     * 还款写路径只查询账户归属，不加载明细；余额/状态仍由后续锁定 aggregate 校验。
+     */
+    Optional<UUID> findCreditAccountIdById(UUID id);
+
+    /**
      * 还款、逾期标记等会改变账单状态的 use case 必须用 row lock 读取 statement。
      */
     Optional<Statement> findByIdForUpdate(UUID id);

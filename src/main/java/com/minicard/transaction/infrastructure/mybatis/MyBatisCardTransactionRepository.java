@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.minicard.shared.domain.Money;
+import com.minicard.infrastructure.persistence.MySqlDuplicateKey;
 import com.minicard.transaction.domain.CardTransaction;
 import com.minicard.transaction.domain.CardTransactionBillingStatus;
 import com.minicard.transaction.domain.CardTransactionRepository;
@@ -16,6 +17,9 @@ import org.springframework.stereotype.Repository;
 
 /**
  * CardTransactionRepository 的 MyBatis adapter。
+ *
+ * <p>关键词：入账流水, 非锁定查重, 幂等约束, nonlocking read, shared locking read,
+ * 取引永続化(とりひきえいぞくか), 共有ロック(きょうゆうロック)。</p>
  *
  * <p>它只负责 row/domain mapping 和 duplicate-key idempotency claim；
  * posting 的业务顺序仍放在 PostingService，避免 SQL 层偷偷承担业务规则。</p>
@@ -30,21 +34,31 @@ public class MyBatisCardTransactionRepository implements CardTransactionReposito
     public boolean claim(CardTransaction transaction) {
         try {
             // INSERT-first claim：network_transaction_id 唯一索引选择唯一 winner。
-            // 只把 DuplicateKeyException 当成幂等重复，其他 DB 错误继续抛出。
+            // 同 key 的并发 INSERT 可能在唯一键检查处等待提交；不要吞掉其他约束错误。
             mapper.insert(toRow(transaction));
             return true;
         } catch (DuplicateKeyException exception) {
+            // 主键碰撞不能冒充 networkTransactionId 的幂等重放。
+            if (!MySqlDuplicateKey.isConstraintConflict(exception, "uk_card_transactions_network_transaction")) {
+                throw exception;
+            }
             return false;
         }
     }
 
     @Override
-    public Optional<CardTransaction> findByNetworkTransactionIdForUpdate(
+    public Optional<CardTransaction> findByNetworkTransactionId(
             String networkTransactionId
     ) {
         return Optional.ofNullable(
-                mapper.findByNetworkTransactionIdForUpdate(networkTransactionId)
+                mapper.findByNetworkTransactionId(networkTransactionId)
         ).map(this::toDomain);
+    }
+
+    @Override
+    public Optional<CardTransaction> findByNetworkTransactionIdForShare(String networkTransactionId) {
+        return Optional.ofNullable(mapper.findByNetworkTransactionIdForShare(networkTransactionId))
+                .map(this::toDomain);
     }
 
     @Override

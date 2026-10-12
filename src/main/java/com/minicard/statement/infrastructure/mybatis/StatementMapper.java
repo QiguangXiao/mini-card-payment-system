@@ -46,6 +46,9 @@ public interface StatementMapper {
      */
     StatementRow findById(@Param("id") String id);
 
+    /** 只读取 statement 的账户归属，避免还款开始时加载一次无用的账单明细。 */
+    String findCreditAccountIdById(@Param("id") String id);
+
     /**
      * 按 statement id 加 FOR UPDATE row lock；还款入账时需要锁住账单余额。
      */

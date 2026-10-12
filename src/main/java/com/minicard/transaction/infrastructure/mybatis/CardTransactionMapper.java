@@ -23,9 +23,14 @@ public interface CardTransactionMapper {
     int insert(CardTransactionRow transaction);
 
     /**
-     * 按 networkTransactionId 加 FOR UPDATE，保证 presentment idempotency。
+     * 按 networkTransactionId 普通查重，不在记录缺失时取得 gap lock。
      */
-    CardTransactionRow findByNetworkTransactionIdForUpdate(
+    CardTransactionRow findByNetworkTransactionId(
+            @Param("networkTransactionId") String networkTransactionId
+    );
+
+    /** INSERT 冲突后用共享 locking read 读取最新结果。 */
+    CardTransactionRow findByNetworkTransactionIdForShare(
             @Param("networkTransactionId") String networkTransactionId
     );
 

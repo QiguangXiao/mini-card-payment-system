@@ -132,6 +132,13 @@
         WHERE id = #{id}
     </select>
 
+    <select id="findCreditAccountIdById" resultType="java.lang.String">
+        <!-- 只做账户路由，不读 paid_amount/status，也不加载明细；不能据此决定可还金额。 -->
+        SELECT credit_account_id
+        FROM statements
+        WHERE id = #{id}
+    </select>
+
     <select id="findByIdForUpdate" resultMap="statementRowMap">
         <!--
           查询样例：id='77777777-7777-7777-7777-777777777701'。

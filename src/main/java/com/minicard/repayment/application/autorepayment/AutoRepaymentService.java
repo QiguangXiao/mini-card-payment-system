@@ -34,7 +34,7 @@ import org.springframework.stereotype.Service;
  * 2. bank debit gateway 扣款（DB 事务外；deterministic key "auto-debit:{statementId}"）；
  *    扣款失败: 抛异常让 DelayJob retry/DEAD，绝不入账
  * 3. 扣款成功后 RepaymentService.receive(同一个 idempotency key)：
- *    复用还款写事务（claim / account+statement 锁 / 余额推进 / Outbox）
+ *    复用还款写事务（account+statement 锁 / claim / 余额推进 / 提交后缓存失效）
  * </pre>
  */
 @Service
@@ -103,7 +103,7 @@ public class AutoRepaymentService {
                 debitAmount.currency()
         );
         // 从这里进入已有 repayment transaction boundary：锁 statement/account 后再扣减余额。
-        // 如果 handler 自己直接改余额，会绕过 RepaymentService 的 idempotency、row lock 和 Outbox event。
+        // 如果 handler 自己直接改余额，会绕过 RepaymentService 的 idempotency、row lock 和提交后缓存失效。
         Repayment repayment = repaymentService.receive(command);
         log.info(
                 "auto_repayment_posted statementId={} repaymentId={} amount={}",

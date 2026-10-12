@@ -2,6 +2,7 @@ package com.minicard.transaction.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -39,12 +40,12 @@ import org.springframework.transaction.annotation.Transactional;
  * POST /api/presentments
  * 1. SELECT authorization FOR UPDATE（挡住过期释放/重复请款并发改状态）
  * 2. load card（不锁，只为拿 creditAccountId）
- * 3. SELECT card_transaction by network_transaction_id FOR UPDATE；
- *    已存在: POSTED 返回幂等结果 / 处理中则拒绝
+ * 3. 普通 SELECT card_transaction by network_transaction_id（不锁缺失记录的 gap）；
+ *    已存在: 校验请求身份，POSTED 返回幂等结果 / 遗留 PENDING 则拒绝
  * 4. 校验 authorization APPROVED、未过期、金额全等（当前只支持 full presentment），
  *    然后 SELECT credit_account FOR UPDATE（与 statement batch 同锁顺序，防死锁）
  * 5. INSERT-first claim PENDING card_transaction；
- *    claim 失败: 重新 FOR UPDATE 读并发 winner，按已存在路径处理
+ *    claim 失败: FOR SHARE 读取并发 winner 最新结果，按已存在路径处理
  * 6. 同事务推进三个状态：reservedAmount 转入 postedBalance、
  *    authorization APPROVED 变 POSTED、transaction PENDING 变 POSTED
  * 7. append Outbox events（authorization.posted + card_transaction.posted），随后 COMMIT
@@ -67,7 +68,9 @@ public class PostingService {
      */
     @Transactional
     public CardTransaction post(PostPresentmentCommand command) {
-        Instant now = Instant.now(clock);
+        // 与 TIMESTAMP(6) 对齐，直接返回 pending 时首次响应与数据库重放保持相同时间精度。
+        Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
+        Money amount = command.money();
         // 阶段 1：先锁 authorization row。presentment 必须基于一笔仍可入账的 APPROVED authorization。
         // FOR UPDATE 让过期释放、重复 presentment、人工修正等路径不会同时改同一笔授权状态。
         Authorization authorization = authorizationRepository
@@ -83,18 +86,20 @@ public class PostingService {
                 ));
 
         // 阶段 3：用 networkTransactionId 查重。它是 presentment 的幂等键。
-        // 如果已存在，后续不再锁 account，也不再移动余额，避免同一请款重复入账。
+        // 普通 SELECT 只作无副作用快路径，不锁缺失记录的 gap；若不存在，仍须 INSERT 唯一键裁决。
+        // 否则多个新请款可能先持有同一 gap，再等 account/INSERT，形成隐藏的锁顺序反转。
+        // 已存在且请求身份一致时不再锁 account、不移动余额；展示字段按本事务读快照返回。
         Optional<CardTransaction> existing = transactionRepository
-                .findByNetworkTransactionIdForUpdate(command.networkTransactionId());
+                .findByNetworkTransactionId(command.networkTransactionId());
         if (existing.isPresent()) {
-            // 快路径：presentment 已存在。FOR UPDATE 会阻塞到 in-flight 入账事务提交，
-            // 让这次重试直接读到最终 POSTED 结果，而不是误报 in-progress。
+            // 合法写路径在一个事务内从 PENDING 推进为 POSTED，普通 SELECT 不会看见未提交 PENDING。
+            // POSTED 和请求身份不会再被 billing 修改；statement assignment 展示字段允许快照读取。
             return resolveExistingPresentment(command, existing.get());
         }
 
         // 阶段 4：校验 authorization 状态/金额/过期时间，然后锁 credit account。
         // 锁顺序固定为 authorization -> account -> transaction claim，和 statement batch 保持一致，降低死锁风险。
-        validateAuthorizationCanBePosted(authorization, command.money(), now);
+        validateAuthorizationCanBePosted(authorization, amount, now);
         CreditAccount account = creditAccountRepository.findByIdForUpdate(card.creditAccountId())
                 .orElseThrow(() -> new PresentmentRejectedException(
                         "approved authorization references missing credit account "
@@ -108,7 +113,7 @@ public class PostingService {
                 authorization.id(),
                 authorization.cardId(),
                 card.creditAccountId(),
-                command.money(),
+                amount,
                 now
         );
 
@@ -119,9 +124,10 @@ public class PostingService {
         // 如果 posting 先锁/插交易再锁 account，而 statement 先锁 account 再锁交易，高并发时会形成环路等待。
         if (!transactionRepository.claim(pending)) {
             // claim 失败说明在 [首次读, INSERT] 窗口内有并发请求抢先插入了同一 networkTransactionId。
-            // 重新 FOR UPDATE 读赢家行：阻塞到对方事务提交，再判定 POSTED / in-progress。
+            // INSERT 的唯一键检查通常已等对方提交；FOR SHARE 再读最新值，避免阶段 2 的旧 RR 快照。
+            // loser 只返回/拒绝，不更新交易；若改为 FOR UPDATE，可能从重复键 S 锁升级 X 而死锁。
             CardTransaction winner = transactionRepository
-                    .findByNetworkTransactionIdForUpdate(command.networkTransactionId())
+                    .findByNetworkTransactionIdForShare(command.networkTransactionId())
                     .orElseThrow(() -> new IllegalStateException(
                             "presentment claim lost but row not visible"
                     ));
@@ -135,7 +141,7 @@ public class PostingService {
         // 1. reservedAmount -> postedBalance，2. Authorization APPROVED -> POSTED，
         // 3. CardTransaction PENDING -> POSTED。任一步失败都会 rollback。
         // 如果拆成多个事务，中途失败会留下“授权已 posted 但账户余额没变”或“余额已变但没有交易流水”的断裂状态。
-        account.postAuthorized(command.money());
+        account.postAuthorized(amount);
         authorization.post(now);
         pending.markPosted(now);
 
@@ -156,7 +162,8 @@ public class PostingService {
      * 要么说明它仍在并发入账中（或遗留 orphan pending）而拒绝本次重复处理。
      *
      * <p>事务归属：由 {@link #post(PostPresentmentCommand)} 在同一个 {@code @Transactional}
-     * 边界内调用；existing row 已经通过 {@code FOR UPDATE} 锁住，所以这里可以安全判断最终状态。</p>
+     * 边界内调用；首次查重是普通快照读取，INSERT 冲突回读是 FOR SHARE。
+     * 本方法只校验不可变请求身份与 POSTED 状态，不修改交易或使用它决定余额。</p>
      */
     private CardTransaction resolveExistingPresentment(
             PostPresentmentCommand command,
