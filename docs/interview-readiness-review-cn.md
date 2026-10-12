@@ -33,8 +33,10 @@
 1. **先 INSERT 抢占**：以幂等键（`Idempotency-Key` header / `networkTransactionId` / `auto-debit:{statementId}`）
    为唯一索引做 INSERT-first claim，并发重试只有一个 winner
    （`AuthorizationService.authorize` → `authorizationRepository.claim(...)`）。
-2. **loser 阻塞读 winner**：`findByIdempotencyKeyForUpdate` 上的 `FOR UPDATE`
-   会等 winner 事务提交后读到**最终状态**，而不是误报处理中。
+2. **loser 读取 winner**：authorization 的 duplicate 通常在 INSERT 唯一键检查处等待 winner 提交，
+   再用 `findByIdempotencyKeyForShare` / `FOR SHARE` 读最新结果。
+   loser 不修改 authorization，共享锁避免多个 loser 已持有 S 后升级 X 的循环；
+   winner 直接使用 pending，INSERT 的排他锁保持到提交。repayment/presentment 的具体锁方式另看各自 mapper。
 3. **fingerprint 冲突检测**：同一个幂等键携带不同请求体（不同金额/卡号）时抛
    `IdempotencyConflictException` → 409，防止"新交易被错误当成旧交易结果返回"。
 

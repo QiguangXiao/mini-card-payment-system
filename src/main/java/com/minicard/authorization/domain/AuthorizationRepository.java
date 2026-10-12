@@ -21,9 +21,9 @@ public interface AuthorizationRepository {
     boolean claim(String idempotencyKey, Authorization pendingAuthorization);
 
     /**
-     * 锁定同一个幂等键对应的 authorization row，等待 winner 完成最终状态。
+     * 共享锁读取 duplicate 的已有结果；locking read 避免旧快照，loser 不再修改该行。
      */
-    Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey);
+    Optional<Authorization> findByIdempotencyKeyForShare(String idempotencyKey);
 
     Optional<Authorization> findByIdForUpdate(UUID id);
 

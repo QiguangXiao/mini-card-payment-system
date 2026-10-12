@@ -144,7 +144,7 @@ mini-card JVM
 
 ### 4.4 Tomcat request 线程
 
-`application.yml` 现在按单实例小项目显式配置 Tomcat `max=80/min-spare=10/max-connections=2048/accept-count=50/connection-timeout=3s/keep-alive-timeout=30s` 和 Hikari `maximum=10/minimum-idle=5/connection-timeout=1s/validation-timeout=500ms`，避免沿用 Tomcat 200 workers 同时争用 10 个 DB connections，也避免 Hikari 默认等待 30s。注意 `accept-count` 不是 worker 满后的业务队列：Tomcat 先接受并持有最多 2048 个连接，达到上限后 50 才是 OS listen backlog；只有拿到 80 个 worker 之一的请求才会进入业务代码并开始等待 Hikari。生产大流量（例如 4 vCPU/8 GiB、8+ API Pods）可从 Tomcat `200~300` threads、Hikari `20~30/Pod` 起步，但必须按 RDS 总连接预算和压测校准；LB idle timeout=60s 时后端 keep-alive 可从 65s 起步，避免连接复用边界产生间歇 502。详见 `traffic-rate-limiting-and-capacity-cn.md`。一次授权的执行链全部在**同一个** request thread 内：`http-nio-8080-exec-N → HttpRequestLoggingFilter → AuthorizationController → AuthorizationService(@Transactional) → MyBatis claim / findByIdempotencyKeyForUpdate → RiskAssessmentService → Feign ExternalRiskClient → CreditAccountMapper.findByIdForUpdate → update account/auth/outbox/delay_jobs → response`。`@Transactional` 把事务资源绑到当前线程，MyBatis 用该线程借的连接；该线程等 DB/row lock/外部 HTTP 时仍占用 Tomcat worker。
+`application.yml` 现在按单实例小项目显式配置 Tomcat `max=80/min-spare=10/max-connections=2048/accept-count=50/connection-timeout=3s/keep-alive-timeout=30s` 和 Hikari `maximum=10/minimum-idle=5/connection-timeout=1s/validation-timeout=500ms`，避免沿用 Tomcat 200 workers 同时争用 10 个 DB connections，也避免 Hikari 默认等待 30s。注意 `accept-count` 不是 worker 满后的业务队列：Tomcat 先接受并持有最多 2048 个连接，达到上限后 50 才是 OS listen backlog；只有拿到 80 个 worker 之一的请求才会进入业务代码并开始等待 Hikari。生产大流量（例如 4 vCPU/8 GiB、8+ API Pods）可从 Tomcat `200~300` threads、Hikari `20~30/Pod` 起步，但必须按 RDS 总连接预算和压测校准；LB idle timeout=60s 时后端 keep-alive 可从 65s 起步，避免连接复用边界产生间歇 502。详见 `traffic-rate-limiting-and-capacity-cn.md`。一次授权的执行链全部在**同一个** request thread 内：`http-nio-8080-exec-N → HttpRequestLoggingFilter → AuthorizationController → AuthorizationService(@Transactional) → MyBatis claim（winner 直接使用 pending；loser FOR SHARE 读取后返回） → RiskAssessmentService → Feign ExternalRiskClient → CreditAccountMapper.findByIdForUpdate → update account/auth/outbox/delay_jobs → response`。`@Transactional` 把事务资源绑到当前线程，MyBatis 用该线程借的连接；该线程等 DB/row lock/外部 HTTP 时仍占用 Tomcat worker。
 
 一个本地学习点：`risk.external.base-url` 默认 `http://localhost:8080`，授权请求经 Feign 调**同一应用**的 `SimulatedExternalRiskController`，所以本地一次授权可能同时占用两个 `http-nio-8080-exec-*`：一个处理 `/api/authorizations` 等 Feign 响应，另一个处理 `/external-risk/assess` 并在 `Thread.sleep(100ms)` 里 `TIMED_WAITING`。生产里外部风控是独立服务，要关注 timeout/bulkhead/circuit breaker/request thread 占用。
 
@@ -202,7 +202,7 @@ Statement 没有这个 worker/lease 语义：进程中途宕机后，已提交�
 
 ```text
 授权：http-nio-8080-exec-N → AuthorizationService.authorize @Transactional
-  → claim by idempotency key → SELECT auth FOR UPDATE → policy/card/risk(含 Feign 外部风控)
+  → claim by idempotency key → winner 直接使用 pending → policy/card/risk(含 Feign 外部风控)
   → SELECT credit_account FOR UPDATE → update account/auth → insert delay_jobs(若 approved) → append Outbox → response
   关注：Tomcat busy / hikari pending / request duration / MySQL lock wait / external risk timeout。外部风控在 account lock 之前，避免拿着 account lock 等慢调用。
 

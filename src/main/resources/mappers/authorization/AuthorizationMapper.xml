@@ -49,8 +49,11 @@
     <!--
       INSERT-first idempotency：先写入 claim，避免 read-then-insert race。
       unique idempotency_key constraint 会在并发请求中选出唯一 winner。
+      排队位置：并发 duplicate 的 INSERT 唯一键检查会等待未提交 winner 释放锁。
+      winner COMMIT 后返回 duplicate；winner ROLLBACK 后等待者有机会成功插入（也可能遇到插入竞争死锁）。
+      winner 成功 INSERT 后直接使用 pending，排他锁保持到事务结束，不需要额外 SELECT。
       防重复样例：两次 INSERT 都带 idempotency_key='auth-seed-approved-hold'，
-      只有第一条能成功，第二条由 repository 捕获 DuplicateKeyException 后转为“读取原结果”。
+      只有第一条能成功，第二条由 repository 确认幂等唯一约束冲突后转为“共享锁读取原结果”。
     -->
     <insert id="insert">
         INSERT INTO authorizations (
@@ -74,17 +77,16 @@
     </insert>
 
     <!--
-      concurrent duplicate 会等待 winner transaction，然后读取最终状态。
-      这样 duplicate 不会再次执行 credit reservation。
-      查询样例：idempotency_key='auth-seed-approved-hold'。
-      对应索引：uk_authorizations_idempotency_key(idempotency_key)。
-      锁语义：FOR UPDATE 锁住 winner row，让并发 duplicate 等到 APPROVED/DECLINED 最终状态后再返回。
+      loser 的重复 INSERT 通常已在唯一键检查处等待 winner 提交，并持有重复索引记录共享锁。
+      FOR SHARE 是 locking/current read：即使事务已有 REPEATABLE READ 快照，也读取最新结果。
+      loser 只校验 fingerprint 后返回；若用 FOR UPDATE，多个共享锁持有者可能因升级 X 而死锁。
+      共享锁仍保留到事务结束，短暂阻挡 posting/expiry 更新；这里不能继续修改 authorization。
     -->
-    <select id="findByIdempotencyKeyForUpdate" resultMap="authorizationRowMap">
+    <select id="findByIdempotencyKeyForShare" resultMap="authorizationRowMap">
         SELECT <include refid="authorizationColumns"/>
         FROM authorizations
         WHERE idempotency_key = #{idempotencyKey}
-        FOR UPDATE
+        FOR SHARE
     </select>
 
     <!--

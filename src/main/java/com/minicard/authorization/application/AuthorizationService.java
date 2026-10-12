@@ -2,6 +2,7 @@ package com.minicard.authorization.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Currency;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -42,7 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
  * POST /api/authorizations
  * 1. 计算 request fingerprint，构造 PENDING Authorization
  * 2. INSERT-first claim by idempotency_key（唯一索引决出 winner/loser），
- *    再 SELECT FOR UPDATE + fingerprint 校验；loser 直接返回 winner 的结果（幂等重放）
+ *    winner 直接使用 pending；loser 用 SELECT FOR SHARE + fingerprint 校验后返回已有结果
  * 3. winner 进入决策链（对应 decideAndReserve 的"决策阶段 1-5"）：
  *    3.1 cheap policy check（单笔限额，本地内存）
  *    3.2 card status check（普通 SELECT，不锁）
@@ -104,38 +105,45 @@ public class AuthorizationService {
     // 如果把核心写路径拆成同类 private/self-invocation 方法再加注解，事务不会按预期打开。
     @Transactional
     public Authorization authorize(AuthorizationCommand command) {
-        Instant now = Instant.now(clock);
+        // authorizations 使用 TIMESTAMP(6)。先统一为微秒，直接使用 pending 时首次响应和 DB 重放
+        // 才不会因 Java 纳秒被数据库截断/舍入而出现时间字段差异。
+        Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
         // 阶段 1：在事务内准备幂等 fingerprint 和 PENDING authorization。
         // fingerprint 描述"这次请求的业务内容"，idempotencyKey 描述"客户端声称这是同一次请求"。
         // 两者分开：同 key 同 fingerprint 可安全重放；同 key 不同 fingerprint 必须拒绝为冲突。
         // fingerprint 只计算一次，并作为稳定业务输入传递，避免幂等校验看起来像多个独立判断。
         String requestFingerprint = command.requestFingerprint();
-        // 先创建 PENDING aggregate：每次请求都先落一条可审计(auditable)记录，
-        // 再进入风控、卡状态和额度检查，符合真实发卡行 issuer flow。
+        // 先创建 PENDING aggregate；只有 claim 成功的 winner 会新增审计(auditable)记录。
+        // duplicate 不会新增第二条 authorization，也不能进入风控和额度预占。
         Authorization pending = Authorization.request(
                 requestFingerprint,
                 command.cardId(),
                 command.requestedAmount(),
                 now
         );
-
-
         // 阶段 2：INSERT-first idempotency claim，争夺本幂等键的处理权。
         // claim() 是本事务第一笔写入：利用 idempotency_key 唯一索引让并发 retry 只有一个 winner。
         // loser 不会继续做额度预占(reserve credit)，而是在下面读取 winner 的结果。
+        // 并发 loser 通常在这个 INSERT 的唯一键检查处排队，等待 winner commit/rollback；
+        // winner commit 后才报 duplicate，winner rollback 后等待者有机会成功 INSERT、成为新 winner。
         // 如果没有这个 INSERT-first claim，同一个支付请求重试可能各自 reserve credit，造成 double hold。
         boolean claimed = authorizationRepository.claim(command.idempotencyKey(), pending);
-        Authorization persisted = authorizationRepository
-                .findByIdempotencyKeyForUpdate(command.idempotencyKey())
-                .orElseThrow(() -> new IllegalStateException(
-                        "authorization claim was not visible"
-                ));
-        // FOR UPDATE 会锁住已 claim 的 authorization row，确保并发 duplicate 等到最终状态后再返回。
-        // assertSameIdempotentRequest() 校验 fingerprint，防止同一个幂等键隐藏了不同交易。
-        assertSameIdempotentRequest(persisted, requestFingerprint);
-
-        if (!claimed) {
-            // claimed=false 表示这是 retry 或并发 duplicate；直接返回能避免 double reservation。
+        Authorization persisted;
+        if (claimed) {
+            // winner 已由 INSERT 持有排他 row lock，直到事务结束；无需 SELECT 再锁自己的记录。
+            // ID、金额、fingerprint 和时间都已在应用侧确定，直接使用 pending 可省一次 SQL 往返。
+            persisted = pending;
+        } else {
+            // loser 的重复 INSERT 可能已经持有唯一索引共享锁 S；它只读结果，不修改 authorization。
+            // 如果继续 FOR UPDATE，多个 loser 同时从 S 升级到 X 可能互相等待并死锁。
+            // FOR SHARE 保留 locking read 的最新值语义，共享锁彼此兼容，避免这条路径主动升级。
+            // 此处不是通常等待原 winner 的起点；但若 posting/expiry 正在更新该行，仍可能等它释放 X。
+            persisted = authorizationRepository
+                    .findByIdempotencyKeyForShare(command.idempotencyKey())
+                    .orElseThrow(() -> new IllegalStateException("existing authorization was not visible"));
+            // 同 key 不同 fingerprint 必须拒绝；否则会把另一笔交易的结果冒充本请求的结果。
+            assertSameIdempotentRequest(persisted, requestFingerprint);
+            // 立即返回，防止重复风控、double reservation、重复 DelayJob / Outbox。
             return persisted;
         }
 

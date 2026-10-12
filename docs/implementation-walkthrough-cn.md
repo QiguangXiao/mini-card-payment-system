@@ -348,20 +348,40 @@ curl -X POST http://localhost:8080/api/authorizations \
    第一笔数据库写入。
    它依赖 `authorizations.idempotency_key` 唯一索引，抢到唯一的 idempotency winner。
 
-3. `findByIdempotencyKeyForUpdate(idempotencyKey)`
+3. 根据 `claim` 结果显式 `if/else` 分支。
 
-   用 `SELECT ... FOR UPDATE` 读取该幂等键对应的 authorization。
-   如果两个 pod 同时收到相同重试，loser 会等待 winner 完成事务，然后读取 winner 的最终状态。
+   - winner：直接使用成功 INSERT 的 `pending`，不再回读。ID、金额、fingerprint 均由应用侧确定，
+     `now` 在构造前归一到微秒，与 `TIMESTAMP(6)` 对齐。INSERT 的排他锁保留到事务结束。
+   - loser：`findByIdempotencyKeyForShare(idempotencyKey)` 用 `SELECT ... FOR SHARE` 读取已有结果。
+     并发 duplicate 通常在 INSERT 唯一键检查处等待 winner 提交；FOR SHARE 是 locking/current read，
+     即使同一事务已有旧的 `REPEATABLE READ` 快照，也能读到最新提交的结果。
 
-4. `assertSameIdempotentRequest(persisted, command)`
+4. loser 执行 `assertSameIdempotentRequest(persisted, requestFingerprint)`。
 
-   比较 fingerprint。
+   比较 fingerprint；winner 的 fingerprint 就是本请求刚写入的值，无需重复校验。
    同一个 key + 相同请求：允许返回已有结果。
    同一个 key + 不同请求：抛幂等冲突。
 
 5. `decideAndReserve(persisted, command, now)`
 
    只有 idempotency winner 会进入真实决策。
+
+**interview：为什么 loser 使用共享锁？**
+
+以 `Idempotency-Key: checkout-777` 的三个并发请求为例：只有一个 INSERT 成功，其余请求只读已有结果。
+普通 INSERT 的重复键检查可能留下唯一索引记录共享锁 S；多个 loser 已持有 S 后若再执行
+`FOR UPDATE` 申请 X，会有锁升级循环风险。FOR SHARE 让 loser 的共享锁彼此兼容，随后立即返回，
+不进入风控、额度预占、DelayJob 或 Outbox。共享锁仍会短暂阻挡 posting/expiry 更新，直到本次事务结束。
+这只避免该读取分支主动进行 S -> X 升级，不保证所有死锁都消失；winner 回滚后的插入竞争仍可能死锁。
+
+`claim` 仅把 MySQL 1062 且约束名为 `uk_authorizations_idempotency_key` 的错误视为 loser；
+PRIMARY 或其他唯一键冲突继续抛出。识别依赖 Connector/J 错误中的约束名，未知格式保守失败。
+winner 省掉一次查询往返；loser 保留一次共享锁查询及 fingerprint 校验。
+数据库结构、索引和事务边界不变，无需迁移或重置本地 DB。
+
+验证位置：`AuthorizationServiceTest` 验证 winner/loser 分支和副作用短路；
+`MyBatisAuthorizationRepositoryTest` 验证异常分类；`AuthorizationIdempotencyIT` 用真实 MySQL
+验证同 key 并发只预占/发布/调度一次、旧快照下的共享锁读取、请求冲突和 rollback 后 retry。
 
 ### 3.4 决策和额度预占阶段
 
@@ -411,7 +431,7 @@ curl -X POST http://localhost:8080/api/authorizations \
    同时用 metric/告警让“正在失效放行”可见。
 
    当前实现仍在 `AuthorizationService.authorize(...)` 的同一个 transaction boundary 内调用外部风控。
-   这样保留了 idempotency loser 通过 authorization row lock 等 winner 终态的同步语义，
+   这样保留了 idempotency loser 在 INSERT 唯一键检查的锁等待处等 winner 提交决策的同步语义，
    也保证 fail-closed 的拒绝结果会落到 `authorizations` audit row。
    代价是 external risk brownout 时，winner request 仍会短时间占用 Hikari connection。
    所以当前采用 Path B 防护：OpenFeign connect/read timeout 给等待时间封顶，Resilience4j
@@ -1766,7 +1786,7 @@ job 可以失败、重试、被人工修复，但业务表必须始终是 source
 
 ### 14.2 Idempotency、并发与持久化防御
 
-- **Idempotency key 是 request-processing metadata**，存在行上提供原子的数据库唯一边界；行还存 SHA-256 request fingerprint，用来拒绝同一个 key 复用于不同 card/amount/currency/merchant/geolocation。MySQL 经唯一约束选出一个 winner（拥有 pending Authorization、可 reserve credit）；duplicate 阻塞在 winner 之后，再用 `SELECT ... FOR UPDATE` 读已完成结果（在 MySQL 默认 `REPEATABLE READ` 下避免重复 reserve 和 stale 快照）。
+- **Idempotency key 是 request-processing metadata**，存在行上提供原子的数据库唯一边界；行还存 SHA-256 request fingerprint，用来拒绝同一个 key 复用于不同 card/amount/currency/merchant/geolocation。MySQL 经唯一约束选出一个 winner（拥有 pending Authorization、可 reserve credit）；winner 直接使用 pending，duplicate 通常在 INSERT 唯一键检查处等待后，用 `SELECT ... FOR SHARE` 读取已有结果并校验 fingerprint（在 `REPEATABLE READ` 下避免 stale 快照，并避免 loser 主动从 S 升级到 X）。
 - **统一锁顺序**：`Authorization idempotency row -> Card read -> CreditAccount row`，随着流程增多降低死锁风险。同 key 同请求返回原结果；同 key 不同请求返回 `409 Conflict`。approved/declined 都返回 HTTP `200`（decline 是有效业务决策，不是技术失败）。
 - **Persistence defense**：domain 是业务规则的主要场所，但 MySQL 表也加约束（正数金额、有效 status/decision 列组合、账户 `reserved+posted ≤ limit`）保护非正常路径写入。主持久化用 MyBatis XML mapper，domain repository 接口独立于 MyBatis（`domain Repository interface ← MyBatis adapter ← Mapper + XML + Row`）；`JdbcRiskVelocityCounter` 保留为 `RiskVelocityCounter` port 背后的 JdbcTemplate 对照示例。
 

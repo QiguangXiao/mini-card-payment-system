@@ -104,7 +104,9 @@ OutboxEvent: 写 authorization.approved / authorization.declined
 - `Idempotency-Key` 是 API 级幂等键。
 - `AuthorizationCommand.requestFingerprint()` 防止同一个 key 对应不同请求 body。
 - `authorizationRepository.claim(...)` 先插入 `PENDING` row，用唯一索引抢占幂等所有权。
-- `findByIdempotencyKeyForUpdate(...)` 锁住同一个幂等键对应的 authorization row。
+- winner 直接使用 INSERT 成功的 pending；INSERT 排他锁保持到事务结束。
+- loser 通常在 INSERT 唯一键检查处等待 winner，再用 `findByIdempotencyKeyForShare(...)`
+  共享锁读取最新结果并校验 fingerprint，避免主动从 S 升级到 X。
 - 风控检查放在 account row lock 之前，减少锁等待时间。
 - `creditAccountRepository.findByIdForUpdate(...)` 锁住账户行，再执行额度预占。
 - `CreditAccount.reserve(...)` 负责业务不变量，不在 service 里直接做普通加减法。

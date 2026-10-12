@@ -1113,7 +1113,7 @@ MyBatis 支持一些关联映射能力，但在interview项目里不建议依赖
 
 可以按这个顺序练：
 
-1. 读 `AuthorizationMapper.xml`，解释 constructor `resultMap`、`<sql>`、`#{}`、INSERT-first claim 和 duplicate 的 `FOR UPDATE`。
+1. 读 `AuthorizationMapper.xml`，解释 constructor `resultMap`、`<sql>`、`#{}`、INSERT-first claim 和 duplicate 的 `FOR SHARE`。
 2. 读 `CreditAccountMapper.xml`，解释为什么额度更新前要锁 account row。
 3. 对比 `OutboxEventMapper.xml`、`DelayJobMapper.xml`、`NotificationDeliveryMapper.xml` 和
    `StatementJobMapper.xml`，解释 `SKIP LOCKED`、deadline、owner token 与 recovery/finalize。

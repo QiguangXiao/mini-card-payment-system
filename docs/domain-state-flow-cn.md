@@ -286,7 +286,8 @@ AuthorizationController.authorize(...)
    - `uk_authorizations_idempotency_key` 让同一个 key 只有一个 winner。
    - 并发 duplicate loser 不会继续 reserve credit。
 
-4. `findByIdempotencyKeyForUpdate(...)` 锁 authorization row。
+4. 按 claim 结果分支：winner 直接使用成功 INSERT 的 pending，
+   loser 用 `findByIdempotencyKeyForShare(...)` 读取已有结果。
 
    SQL：
 
@@ -294,7 +295,7 @@ AuthorizationController.authorize(...)
    SELECT ...
    FROM authorizations
    WHERE idempotency_key = 'demo-auth-1500-001'
-   FOR UPDATE;
+   FOR SHARE;
    ```
 
    锁大小：
@@ -303,12 +304,17 @@ AuthorizationController.authorize(...)
 
    锁时间：
 
-   - 从这条 SQL 执行后，到 `AuthorizationService.authorize(...)` 事务 commit/rollback。
+   - winner：INSERT 持有排他锁，直到 `AuthorizationService.authorize(...)` 事务 commit/rollback。
+   - loser：重复 INSERT 的唯一键检查通常先等待 winner；成功取得共享锁后，锁保留到本次事务结束。
 
    防什么冲突：
 
    - 同一个 idempotency key 的并发 retry 必须等 winner 完成。
    - retry 读到的是最终 `APPROVED` / `DECLINED`，不会读到半成品 `PENDING` 后自己再执行一次额度预占。
+
+   上面的 `FOR SHARE` SQL 用于 loser；winner 不需要再次查询或加锁。
+   loser 只校验 fingerprint 后返回，不修改该行；共享锁彼此兼容，避免重复 INSERT 已持有 S 后再升级 X。
+   共享锁读取也使用最新值，不依赖旧的 RR 快照；锁保留到本次事务 commit/rollback。
 
 5. 做本地 policy、card 状态和 risk check。
 
@@ -1402,7 +1408,8 @@ Client A 和 Client B 同时用 Idempotency-Key demo-auth-1500-001 请求授权�
 保护：
 
 - `authorizations.idempotency_key` unique constraint 选出唯一 winner。
-- `findByIdempotencyKeyForUpdate` 让 loser 等 winner 完成。
+- duplicate INSERT 的唯一键检查等待 winner；loser 再用 `findByIdempotencyKeyForShare`
+  读取最新结果并校验 fingerprint，不再申请排他锁。
 
 结果：
 

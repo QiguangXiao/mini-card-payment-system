@@ -134,8 +134,9 @@ avoiding unnecessary risk calls for missing, blocked, or expired cards.
 `AuthorizationService` is responsible for the use case and transaction boundary:
 
 1. Build a request fingerprint and a new `PENDING` Authorization.
-2. Atomically INSERT-first claim the idempotency key, then read the claimed row
-   with `SELECT ... FOR UPDATE` and compare the fingerprint.
+2. Atomically INSERT-first claim the idempotency key. The winner uses its pending
+   object directly; a duplicate reads the existing row with `SELECT ... FOR SHARE`
+   and compares the fingerprint.
 3. Return the winner's completed result for an identical duplicate; reject the
    same key with different request data as `409 Conflict`.
 4. Check the configured single-transaction limit before any account lock.
@@ -166,15 +167,15 @@ geolocation data.
 
 MySQL chooses one winner through the unique idempotency-key constraint. The
 winner owns the pending Authorization and may reserve credit. A duplicate
-request blocks behind the winner and then reads the completed result with
-`SELECT ... FOR UPDATE`, avoiding duplicate reservations and stale snapshot
+request normally waits during INSERT's unique-key check and then reads the result with
+`SELECT ... FOR SHARE`, avoiding unnecessary S-to-X upgrades and stale snapshot
 behavior under MySQL's default `REPEATABLE READ` isolation.
 
 The create-authorization path acquires or reads data in this order:
 
 ```text
 Authorization INSERT-first claim
--> Authorization row FOR UPDATE
+-> winner uses pending directly (INSERT holds the exclusive lock until transaction end)
 -> Card read
 -> risk checks (Redis + external HTTP, no account lock held)
 -> CreditAccount row FOR UPDATE

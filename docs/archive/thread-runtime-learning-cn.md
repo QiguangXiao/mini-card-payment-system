@@ -291,7 +291,7 @@ http-nio-8080-exec-N
 -> AuthorizationController.authorize
 -> AuthorizationService.authorize
 -> MyBatis AuthorizationRepository.claim
--> MyBatis findByIdempotencyKeyForUpdate
+-> MyBatis claim（winner 直接使用 pending；loser FOR SHARE 读取后返回）
 -> RiskAssessmentService.assess
 -> ExternalRiskClient.assess
 -> CreditAccountMapper.findByIdForUpdate
@@ -717,7 +717,7 @@ SELECT ... FOR UPDATE SKIP LOCKED
 
 例如：
 
-- authorization idempotency loser 会 `findByIdempotencyKeyForUpdate` 等 winner 完成。
+- authorization idempotency loser 通常在 INSERT 唯一键检查处等 winner 完成，再用 `findByIdempotencyKeyForShare` 读取最新结果。
 - 同一 credit account 的授权会在 `CreditAccountMapper.findByIdForUpdate` 串行额度检查。
 - Outbox/DelayJob poller 用 `FOR UPDATE SKIP LOCKED` claim 不同 rows。
 - worker finalize 前重新 `findByIdForUpdate` 校验 lease。
@@ -746,7 +746,7 @@ http-nio-8080-exec-N
 -> AuthorizationController.authorize
 -> AuthorizationService.authorize @Transactional
    -> insert/claim authorization by idempotency key
-   -> SELECT authorization FOR UPDATE
+   -> winner 直接使用 pending（INSERT 已持有排他锁）
    -> local policy check
    -> card lookup
    -> risk assessment

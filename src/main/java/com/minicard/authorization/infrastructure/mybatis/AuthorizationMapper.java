@@ -26,9 +26,9 @@ public interface AuthorizationMapper {
     int insert(@Param("authorization") AuthorizationRow authorization);
 
     /**
-     * 按 idempotency key 加 FOR UPDATE，等待首个请求完成后返回同一结果。
+     * duplicate 用 FOR SHARE 读取最新结果，避免重复 INSERT 后共享锁升级为排他锁。
      */
-    AuthorizationRow findByIdempotencyKeyForUpdate(
+    AuthorizationRow findByIdempotencyKeyForShare(
             @Param("idempotencyKey") String idempotencyKey
     );
 

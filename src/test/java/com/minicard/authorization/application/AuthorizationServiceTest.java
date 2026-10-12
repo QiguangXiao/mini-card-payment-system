@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
@@ -99,6 +98,7 @@ class AuthorizationServiceTest {
         assertThat(account.reservedAmount().amount()).isEqualByComparingTo("100.00");
         verify(creditAccountRepository).update(account);
         verify(authorizationRepository).update(result);
+        verify(authorizationRepository, never()).findByIdempotencyKeyForShare(any());
         verify(expiryJobScheduler).schedule(result);
         ArgumentCaptor<AuthorizationDomainEvent> event =
                 ArgumentCaptor.forClass(AuthorizationDomainEvent.class);
@@ -216,12 +216,13 @@ class AuthorizationServiceTest {
     void returnsExistingIdempotentResultWithoutReservingAgain() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
         when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
-        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
+        when(authorizationRepository.findByIdempotencyKeyForShare("key-1"))
                 .thenReturn(Optional.of(existing));
 
         Authorization result = service.authorize(command("key-1", "card-123", "100.0"));
 
         assertThat(result).isSameAs(existing);
+        verify(riskAssessmentService, never()).assess(any());
         verify(cardRepository, never()).findById(any());
         verify(creditAccountRepository, never()).findByIdForUpdate(any());
         verify(authorizationRepository, never()).update(any());
@@ -235,11 +236,47 @@ class AuthorizationServiceTest {
     void rejectsDifferentRequestUsingSameIdempotencyKey() {
         Authorization existing = approvedAuthorization("card-123", "100.00");
         when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
-        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
+        when(authorizationRepository.findByIdempotencyKeyForShare("key-1"))
                 .thenReturn(Optional.of(existing));
 
         assertThatThrownBy(() -> service.authorize(command("key-1", "card-123", "200.00")))
                 .isInstanceOf(IdempotencyConflictException.class);
+        verify(authorizationRepository, never()).update(any());
+        verify(riskAssessmentService, never()).assess(any());
+    }
+
+    @Test
+    // 缺失已有结果不能返回本次 pending，否则会伪造一次未执行的授权，掩盖数据库/claim 异常。
+    void failsWhenDuplicateResultIsNotVisible() {
+        when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(false);
+        when(authorizationRepository.findByIdempotencyKeyForShare("key-1"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.authorize(command("key-1", "card-123", "100.00")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("existing authorization was not visible");
+        verify(authorizationRepository, never()).update(any());
+        verify(riskAssessmentService, never()).assess(any());
+    }
+
+    @Test
+    // winner 直接使用 INSERT 的对象；时间先归一到 TIMESTAMP(6)，避免首次响应含 DB 无法保存的纳秒。
+    void winnerUsesInsertedObjectWithMicrosecondPrecision() {
+        Instant nanosecondNow = Instant.parse("2026-10-12T00:00:00.123456789Z");
+        service = new AuthorizationService(authorizationRepository,
+                new AuthorizationPolicyProperties(Map.of("JPY", new BigDecimal("100000.00"))),
+                cardRepository, creditAccountRepository, riskAssessmentService, eventAppender,
+                expiryJobScheduler, Clock.fixed(nanosecondNow, ZoneOffset.UTC));
+        arrangeNewClaim();
+        when(cardRepository.findById("card-123")).thenReturn(Optional.empty());
+
+        Authorization result = service.authorize(command("key-1", "card-123", "100.00"));
+        ArgumentCaptor<Authorization> inserted = ArgumentCaptor.forClass(Authorization.class);
+        verify(authorizationRepository).claim(eq("key-1"), inserted.capture());
+        assertThat(result).isSameAs(inserted.getValue());
+        assertThat(result.createdAt()).isEqualTo(Instant.parse("2026-10-12T00:00:00.123456Z"));
+        assertThat(result.decidedAt()).contains(result.createdAt());
+        verify(authorizationRepository, never()).findByIdempotencyKeyForShare(any());
     }
 
     @Test
@@ -265,13 +302,7 @@ class AuthorizationServiceTest {
     }
 
     private void arrangeNewClaim() {
-        AtomicReference<Authorization> claimed = new AtomicReference<>();
-        when(authorizationRepository.claim(eq("key-1"), any())).thenAnswer(invocation -> {
-            claimed.set(invocation.getArgument(1));
-            return true;
-        });
-        when(authorizationRepository.findByIdempotencyKeyForUpdate("key-1"))
-                .thenAnswer(invocation -> Optional.of(claimed.get()));
+        when(authorizationRepository.claim(eq("key-1"), any())).thenReturn(true);
     }
 
     private AuthorizationCommand command(String key, String cardId, String amount) {

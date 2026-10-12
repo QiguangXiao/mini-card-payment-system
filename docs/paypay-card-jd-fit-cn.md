@@ -196,7 +196,7 @@ POST /api/authorizations
 -> AuthorizationCommand
 -> AuthorizationService.authorize(...)
 -> authorizationRepository.claim(idempotencyKey, pending)
--> findByIdempotencyKeyForUpdate(idempotencyKey)
+-> winner 直接使用 pending（INSERT 已持有排他锁）
 -> cardRepository.findById(cardId)
 -> riskAssessmentService.assess(...)
 -> creditAccountRepository.findByIdForUpdate(accountId)
@@ -204,6 +204,9 @@ POST /api/authorizations
 -> authorization.approve(...)
 -> DelayJob + Outbox event 同事务提交
 ```
+
+上面是 winner 路径；loser 用 `findByIdempotencyKeyForShare` 读取已有结果，
+校验 fingerprint 后直接返回，不执行后续风控、额度预占或事件写入。
 
 这里覆盖了 JD 里的多个关键词：
 
@@ -247,7 +250,7 @@ Experience designing high traffic systems.
 | 层次 | 机制 | 项目证据 | 解决什么 |
 | --- | --- | --- | --- |
 | API retry | `Idempotency-Key` + unique constraint | `AuthorizationService`, `RepaymentService` | 客户端重试不重复写 |
-| 同 key 并发 | `findByIdempotencyKeyForUpdate` | authorization mapper/repository | duplicate 等 winner 完成 |
+| 同 key 并发 | unique claim + loser `findByIdempotencyKeyForShare` | authorization mapper/repository | duplicate 等 winner 完成，共享锁读取避免 S -> X 升级 |
 | 同账户并发 | `SELECT ... FOR UPDATE` | `CreditAccountRepository.findByIdForUpdate` | 额度检查和更新串行 |
 | Worker 并发 | `FOR UPDATE SKIP LOCKED` + PROCESSING lease | Outbox/DelayJob mapper | 多 worker 不重复 claim |
 | Worker 宕机 | recoverer 回收 stuck lease | `OutboxRecoverer`, `DelayJobRecoverer` | PROCESSING 不永久卡住 |

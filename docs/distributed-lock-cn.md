@@ -339,7 +339,7 @@ A resumes and writes stale result
 
 | 场景 | 当前保护机制 | 为什么不需要 distributed lock |
 | --- | --- | --- |
-| Authorization 幂等 winner | `authorizations.idempotency_key` unique + `findByIdempotencyKeyForUpdate` | winner 选择和业务记录在同一个 DB |
+| Authorization 幂等 winner | `authorizations.idempotency_key` unique；winner 直接使用 pending，loser `FOR SHARE` 读取 | winner 选择和业务记录在同一个 DB |
 | Credit account 额度 | `credit_accounts` row 的 `SELECT ... FOR UPDATE` | 余额 source of truth 就是这行 DB row |
 | Presentment 幂等 | `card_transactions.network_transaction_id` unique | 外部交易身份由 DB 唯一约束保护 |
 | Repayment 幂等 | `repayments.idempotency_key` unique + row lock | 防重复还款必须和 statement/account 更新同事务 |

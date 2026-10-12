@@ -33,7 +33,7 @@
 
 > 用 `Idempotency-Key` 加数据库唯一约束。第一次请求 insert-first claim 成功后继续决策；重复请求拿不到 claim，会锁住并读取已有 authorization。如果 fingerprint 相同返回原结果，如果不同返回 conflict。这样并发 retry 不会重复 reserve credit。
 
-深挖版：Q16、Q17（duplicate 为什么要 FOR UPDATE 读 winner）、Q18（为什么不用 Redis SETNX）。
+深挖版：Q16、Q17（duplicate 为什么用 FOR SHARE 读已有结果）、Q18（为什么不用 Redis SETNX）。
 
 ### 速Q3：如果两个不同授权同时刷同一个账户，会不会超额度？
 
@@ -482,13 +482,14 @@
 > 应用层 check-then-insert 在多实例下会 race。
 > 所以要 insert-first claim，把 winner 选择交给数据库。
 
-### Q17：为什么 duplicate request 要 `FOR UPDATE` 读取 winner？
+### Q17：为什么 duplicate request 用 `FOR SHARE` 读取已有结果？
 
 强回答：
 
-> 因为 duplicate 可能在 winner 还没完成决策时到达。
-> `findByIdempotencyKeyForUpdate(...)` 锁住 authorization row，可以让 duplicate 等到 winner transaction 完成，
-> 然后读取最终状态，避免返回半成品 PENDING。
+> duplicate 可能在 winner 还没完成决策时到达，但通常先在 INSERT 唯一键检查处等待它提交或回滚。
+> winner 提交后，loser 再用 `findByIdempotencyKeyForShare(...)` 读取最新结果并校验 fingerprint。
+> loser 不修改该行；FOR SHARE 保留 current read 语义，又避免多个重复 INSERT 的 S 锁持有者主动升级 X。
+> winner 直接使用 pending，INSERT 的排他锁保持到事务结束，无需回读自己的记录。
 
 追问方向：
 
@@ -498,8 +499,8 @@
 
 强补充：
 
-> 它只串行化同一个 idempotency key，不会串行化所有授权。
-> 这是精确锁定业务冲突范围，而不是全局锁。
+> 同 key 的 loser 先等 winner；winner 完成后，多个 loser 的共享锁读取彼此兼容。
+> 锁等待局限在冲突记录，不是所有授权的全局锁；同账户额度更新仍由 account FOR UPDATE 串行化。
 
 ### Q18：为什么不用 Redis `SETNX` 做 authorization 幂等？
 
@@ -2093,7 +2094,8 @@ Kafka 不可用时还能授权吗？
 
 ```text
 Redis 可以做限流或 cache，但额度 source of truth 仍在 MySQL。
-Authorization 要和 authorization row、Outbox、DelayJob 同事务，所以核心并发靠 `FOR UPDATE`。
+Authorization 的幂等 ownership 靠 unique INSERT；额度并发靠 account `FOR UPDATE`，
+authorization、额度、Outbox、DelayJob 在同一个事务提交。duplicate 只用 `FOR SHARE` 读取已有结果。
 ```
 
 ### Warning 2：Kafka 保证消息 exactly-once
@@ -2422,8 +2424,8 @@ Redis hit ratio、GC pause 和业务 decline reason 分布。
 
 答：
 
-> loser 应通过 `FOR UPDATE` 等待同 key row 的 winner 完成。
-> winner commit 后，loser 读取最终状态并返回一致结果。
+> loser 的 INSERT 唯一键检查会等待尚未提交的 winner。
+> winner commit 后，INSERT 报幂等重复键；loser 用 FOR SHARE 读取最新状态并校验 fingerprint。
 > 如果直接读到 PENDING 半成品，会造成客户端误判。
 
 #### Q17 追问：这会不会降低并发？

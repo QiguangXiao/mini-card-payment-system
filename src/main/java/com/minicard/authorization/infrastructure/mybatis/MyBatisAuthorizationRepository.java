@@ -1,8 +1,10 @@
 package com.minicard.authorization.infrastructure.mybatis;
 
+import java.sql.SQLException;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import com.minicard.authorization.domain.Authorization;
 import com.minicard.authorization.domain.AuthorizationDeclineReason;
@@ -16,7 +18,10 @@ import org.springframework.stereotype.Repository;
 /**
  * AuthorizationRepository 的 MyBatis adapter，负责 domain object 与数据库 row 的转换。
  *
- * <p>interview重点：idempotency claim 和 SELECT ... FOR UPDATE 由数据库保证，
+ * <p>关键词：幂等抢占, 共享锁读取, idempotency claim, locking read,
+ * 共有ロック(きょうゆうロック), 排他ロック(はいたロック)。</p>
+ *
+ * <p>interview重点：INSERT claim 的排他锁和 loser 共享锁读取由数据库保证，
  * application service 只依赖 repository port，不依赖 MyBatis/JDBC 细节。</p>
  */
 // @Repository 语义上标识 persistence adapter，并让 Spring 做数据访问异常转换。
@@ -24,6 +29,13 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor
 public class MyBatisAuthorizationRepository implements AuthorizationRepository {
+
+    // MySQL 1062 不区分 PRIMARY/其他 UNIQUE；只识别本幂等约束，未知格式宁可失败也不误放行。
+    // Connector/J 通常返回 for key 'authorizations.uk_...'，也兼容不带表名前缀的格式。
+    private static final Pattern IDEMPOTENCY_CONSTRAINT = Pattern.compile(
+            "for key ['`](?:[^'`]+\\.)?uk_authorizations_idempotency_key['`]\\s*$",
+            Pattern.CASE_INSENSITIVE
+    );
 
     private final AuthorizationMapper authorizationMapper;
 
@@ -44,24 +56,38 @@ public class MyBatisAuthorizationRepository implements AuthorizationRepository {
         try {
             // INSERT-first idempotency claim：由 DB unique constraint 选择 winner，
             // 而不是靠内存 check，因此多线程/多实例下也成立。
+            // 若同 key 的 winner 尚未提交，这个 INSERT 会先等待；并非捕获异常后才开始等 winner。
             authorizationMapper.insert(toRow(idempotencyKey, authorization));
             return true;
         } catch (DuplicateKeyException exception) {
-            // DuplicateKeyException 在这里是幂等键已被占用的正常分支。
-            // 其他数据库异常不能吞，否则真正的写库失败会被误判为 duplicate retry。
+            // 若把所有 DuplicateKeyException 都当成 loser，主键碰撞也会被伪装成正常重放。
+            // 只吞本幂等约束的 MySQL 1062；其他约束/无法识别的异常保留原异常向上抛出。
+            if (!isIdempotencyKeyConflict(exception)) {
+                throw exception;
+            }
             return false;
         }
     }
 
-    @Override
+    private boolean isIdempotencyKeyConflict(DuplicateKeyException exception) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sqlException
+                    && sqlException.getErrorCode() == 1062
+                    && sqlException.getMessage() != null
+                    && IDEMPOTENCY_CONSTRAINT.matcher(sqlException.getMessage()).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * 按 idempotency key 锁定 winner row，让 duplicate request 等待并读取最终结果。
+     * loser 只读已有结果；共享 locking read 避免旧快照和不必要的 S -> X 锁升级。
      */
-    public Optional<Authorization> findByIdempotencyKeyForUpdate(String idempotencyKey) {
-        // locking read 会让 duplicate request 等待 winner 完成，
-        // 然后在同一个 transaction 里读取最终结果。
+    @Override
+    public Optional<Authorization> findByIdempotencyKeyForShare(String idempotencyKey) {
         return Optional.ofNullable(
-                authorizationMapper.findByIdempotencyKeyForUpdate(idempotencyKey)
+                authorizationMapper.findByIdempotencyKeyForShare(idempotencyKey)
         ).map(this::toDomain);
     }
 

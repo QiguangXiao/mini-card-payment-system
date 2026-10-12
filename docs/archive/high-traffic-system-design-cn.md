@@ -100,7 +100,7 @@ POST /api/authorizations
 -> AuthorizationCommand
 -> AuthorizationService.authorize(...)
 -> claim idempotency row
--> find authorization by idempotency key FOR UPDATE
+-> winner 直接使用 pending；loser 按 idempotency key FOR SHARE 读取后返回
 -> cheap local checks
 -> cardRepository.findById(cardId)
 -> riskAssessmentService.assess(...)
@@ -131,7 +131,7 @@ POST /api/authorizations
 
 > account `row lock` 是同账户授权请求的串行点。锁前多做便宜检查，可以让明显拒绝的请求不进入锁；把慢外部调用放锁前，可以避免一个慢 risk call 拖住同账户所有请求。
 
-边界要说完整：`authorize` 是单个 `@Transactional` 方法，external risk 发生在 idempotency winner 的 authorization row 已 `FOR UPDATE` 之后。因此它虽然不占 account lock，仍占 Tomcat thread、Hikari connection、事务和 authorization row lock；同一 idempotency key 的 loser 会继续等待 winner。当前 semaphore bulkhead 4 控制的正是这段 brownout 爆炸半径。
+边界要说完整：`authorize` 是单个 `@Transactional` 方法，external risk 发生在 idempotency winner 已 INSERT 并持有 authorization 排他锁之后。因此它虽然不占 account lock，仍占 Tomcat thread、Hikari connection、事务和 authorization row lock；同一 idempotency key 的 loser 会继续等待 winner。当前 semaphore bulkhead 4 控制的正是这段 brownout 爆炸半径。
 
 ### 4.2 锁内做什么
 
@@ -308,17 +308,17 @@ Thread A -> authorizationRepository.claim("checkout-777", pending)
   -> A is idempotency winner
 
 Thread B -> authorizationRepository.claim("checkout-777", pending)
-  -> duplicate key
-  -> claimed = false
+  -> 在 INSERT 唯一键检查处等待 A commit/rollback
+  -> A commit 后得到 duplicate key，claimed = false
 
-A -> findByIdempotencyKeyForUpdate("checkout-777")
-  -> locks authorization row
+A -> 直接使用 pending
+  -> INSERT 的 authorization 排他锁保留到事务结束
   -> does card/risk/account reserve
   -> updates authorization APPROVED
   -> commits
 
-B -> findByIdempotencyKeyForUpdate("checkout-777")
-  -> waits until A commits
+B -> findByIdempotencyKeyForShare("checkout-777")
+  -> 原 winner 的等待通常已在 INSERT 阶段完成；共享锁读取最新结果
   -> reads final APPROVED row
   -> assertSameIdempotentRequest passes
   -> returns A's result
@@ -343,7 +343,7 @@ B reserves credit
 - `authorizationRepository.claim(...)`
 - `AuthorizationMapper.insertClaim`
 - `uk_authorizations_idempotency_key`
-- `findByIdempotencyKeyForUpdate(...)`
+- `findByIdempotencyKeyForShare(...)`（loser；winner 直接使用 pending）
 - `assertSameIdempotentRequest(...)`
 
 高分复述：
@@ -373,7 +373,7 @@ merchantId = merchant-999
 ```text
 A claim succeeds and commits APPROVED
 B claim fails because idempotency_key already exists
-B reads existing authorization FOR UPDATE
+B reads existing authorization FOR SHARE
 B calls assertSameIdempotentRequest(...)
 B requestFingerprint != existing.requestFingerprint
 B throws IdempotencyConflictException
@@ -1379,7 +1379,7 @@ phase 3: 第二事务锁 authorization row -> 校验 owner token(CAS) -> 锁 acc
 
 它的好处是 external risk 完全不占 DB connection。它的代价也很真实：
 
-- 单事务版本里，duplicate loser 可以阻塞在 `findByIdempotencyKeyForUpdate` 的 row lock 上，winner commit 后直接拿终态。
+- 单事务版本里，duplicate loser 通常在 INSERT 唯一键检查处阻塞；winner commit 后，用 `findByIdempotencyKeyForShare` 读最新结果。
 - 两阶段里 winner 跑 risk 时不持有锁，loser 没有免费的同步等待点，必须改成有界轮询、返回 `PROCESSING`/202，或拒绝“正在处理”的 duplicate。
 - 还要维护 owner token、lease 超时、迟到 winner CAS abort、recoverer 等状态机。
 
