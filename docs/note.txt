@@ -1692,3 +1692,37 @@ WINDOW w AS (PARTITION BY user_id ORDER BY created_at);
 ---
 
 建议现在就在 minicard 上跑一遍:**同一条 SQL 写两列,一列 `SUM(amount) OVER (PARTITION BY user_id)`,一列加上 `ORDER BY created_at`**,亲眼看一次两列数字的差别。这个对比一旦看过,那个"默认窗口范围"的规则你就再也不会忘了。
+
+标准写法，两个 数据库通用
+UPDATE Requests
+SET status = 'closed'
+WHERE AptID IN (SELECT AptID FROM Apartments WHERE BuildingID = '11')
+AND status <> 'closed';
+
+如果 status 是 NULL，也想更新
+AND COALESCE(status, '') <> 'closed';  --这个COALESCE函数是通用的，表示找到第一个不是NULL的参数，所以如果status为NULL，则会跳过，得到下一个''
+<> 'closed' 返回true，会执行，即null的也会执行，如果直接用status，那么null <> 'closed'返回不是true，null行不会执行
+
+
+JOIN 通常比 IN 更容易优化：
+
+T-SQL(SQL Server) 写法：
+UPDATE r   --or UPDATE Requests
+SET r.status = 'closed'
+FROM Requests r
+JOIN Apartments a ON r.AptID = a.AptID
+WHERE a.BuildingID = '11'
+AND r.status <> 'closed';
+
+MySQL写法：
+UPDATE Requests r
+Join Apartments a ON r.AptID = a.AptID
+SET r.status = 'closed' 
+WHERE a.BuildingID = '11'
+AND r.status <> 'closed';
+
+
+所以严格来说，这两种语法互不通用，不存在一种写法两边都能跑——这是 T-SQL(SQL Server) 和 MySQL 在 multi-table UPDATE 上少数几个真正"方言不兼容"的地方之一
+（相比之下 SELECT 层面的 JOIN 语法两者基本通用）。如果你的项目将来要做数据库迁移或者要写跨数据库兼容的 ORM/脚本，这是个需要单独适配的点。
+
+
