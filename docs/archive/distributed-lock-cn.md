@@ -6,7 +6,7 @@
 本文原为 JD 对照手册的第 33 章，独立成篇：它是与具体项目代码解耦的通用生产知识，
 同时解释了为什么本项目的 money path 坚持 DB row lock / DB lease，
 以及项目里唯一一把真正的 Redis 锁——statement cache 重建 single-flight——
-为什么可以是 best-effort（见第 7 节）。面试问答里所有 distributed lock
+为什么可以是 best-effort（见第 7 节）。interview问答里所有 distributed lock
 相关追问的底层弹药都在这里。
 
 它专门回答一个容易被追问的问题：

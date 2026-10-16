@@ -24,7 +24,7 @@
 
 ## 第一部分：缓存的本质判断（最重要，先想清楚再写代码）
 
-面试里"什么时候**不**该缓存"比"怎么加缓存"更能体现成熟度。一条判断线：
+interview里"什么时候**不**该缓存"比"怎么加缓存"更能体现成熟度。一条判断线：
 
 > 不要因为"数据读得多"就缓存，要因为"同一份数据被很多请求复用、且能卸掉真实成本"才缓存。
 
@@ -135,7 +135,7 @@ Redis value 是 JSON contract。字段语义不兼容时，**改 cache name（�
 
 ## 第三部分：并发与竞态深挖（counterfactual 重点）
 
-这一节是整套缓存的精华，也是面试最能抗压的部分。statement 缓存按"由近及远"叠了四层防护：同 JVM 单飞 → 跨 pod 重建锁 → 迟到写 CAS+墓碑 → 跨 pod L1 广播。
+这一节是整套缓存的精华，也是interview最能抗压的部分。statement 缓存按"由近及远"叠了四层防护：同 JVM 单飞 → 跨 pod 重建锁 → 迟到写 CAS+墓碑 → 跨 pod L1 广播。
 
 ### 3.1 三大经典问题在本项目的落点
 
@@ -414,7 +414,7 @@ Redis-backed 限流库通常也需要 Lua 或等价的服务端原子机制，�
 
 ---
 
-## 第九部分：硬核面试 Q&A
+## 第九部分：硬核interview Q&A
 
 **Q1. 你给 velocity 用 Redis，却把 card 缓存删了，为什么？**
 读缓存只有"TTL 内重复读同一 key"才有收益；card 单卡请求率低、status 是授权 gate 必须短 TTL，命中率被压死，且它不是瓶颈、幂等重试还不读它。velocity 不同：把每笔授权对主库的 COUNT 往返整体搬到 Redis，**不依赖命中率、对每个请求都减负**，而主库正是被 `FOR UPDATE` 占着的瓶颈。
@@ -457,4 +457,4 @@ Redisson/Bucket4j 底层也是 Lua；我的需求（滑动窗口计数、缓存�
 - **限流**：Redis ZSET 滑动窗口 + Lua 原子 + fail-open。
 - **唯一还值得补的（另一个维度，不是再加功能）**：给 L2 的 Lua CAS / 墓碑加 **Redis Testcontainers 真环境并发测试**（当前单测 mock `StringRedisTemplate`，验证不了脚本在真 Redis 上的 CAS/并发）。这既补正确性验证缺口，又是"我用 Testcontainers 验证并发脚本"的加分谈资。
 
-> **别再往缓存里加功能了**（outbox-driven 失效 / negative cache / 更多锁都是镀金，面试 ROI 低）。"知道何时停"本身就是高级信号。
+> **别再往缓存里加功能了**（outbox-driven 失效 / negative cache / 更多锁都是镀金，interview ROI 低）。"知道何时停"本身就是高级信号。

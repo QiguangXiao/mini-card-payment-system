@@ -1,6 +1,6 @@
-你给我再生成一个新的doc，硬核面试的QA，你知道我的目标公司，要求有问有答，重要的问题还要有追问和追答，要保证问答质量和回答长度，
-问题要高质量而且可能实际面试会涉及，可以是domain知识，也可以是系统设计，行为面试，心理/团队/人际/国际化，你能想到的可能出现的各种主题，
-也就是所有种类面试都可能出现的问题，不需要数量太多，但是要优质，保证doc的长度。之后我会根据各种范围，各自拓展。
+你给我再生成一个新的doc，硬核interview的QA，你知道我的目标公司，要求有问有答，重要的问题还要有追问和追答，要保证问答质量和回答长度，
+问题要高质量而且可能实际interview会涉及，可以是domain知识，也可以是系统设计，行为interview，心理/团队/人际/国际化，你能想到的可能出现的各种主题，
+也就是所有种类interview都可能出现的问题，不需要数量太多，但是要优质，保证doc的长度。之后我会根据各种范围，各自拓展。
 
 I need to create a comprehensive interview Q&A document for PayPay Card Java backend positions in Japan,
 focusing on realistic questions with detailed follow-ups and answers that cover technical domain knowledge,
@@ -30,9 +30,9 @@ with domain knowledge questions about credit card issuer fundamentals like the f
 revenue structure. 还要考虑积分发放系统的设计——需要处理营销活动驱动的高并发场景、事件驱动架构、幂等性保证和预算上限控制。对账系统也很关键，要对标清算网络的文件和内部记录。
 另外可以考虑大规模营销活动（比如超还元祭）的瞬时流量尖峰设计，或者遗留系统迁移的问题——PayPay Card 从之前的系统演进过来。
 
-对于遗留系统迁移到微服务的设计，这涉及双写、绞杀者模式和数据迁移策略，在实际面试中很可能出现。
+对于遗留系统迁移到微服务的设计，这涉及双写、绞杀者模式和数据迁移策略，在实际interview中很可能出现。
 
-行为面试会有 4-5 个问题，通常围绕生产事故处理、与团队意见分歧、紧急交付下的权衡、失败经历和快速学习能力展开，需要根据实际工作经历准备具体案例。
+行为interview会有 4-5 个问题，通常围绕生产事故处理、与团队意见分歧、紧急交付下的权衡、失败经历和快速学习能力展开，需要根据实际工作经历准备具体案例。
 
 我应该提供一个框架和完整的示例答案，用准备项目或真实的后端场景来演示，同时标注用户应该替换为自己真实经历的地方。
 
@@ -103,16 +103,16 @@ Now I'm looking at chargeback lifecycles and how they differ from refunds, plus 
 
 For the systems design section, I'm tackling three major problems: first, a points redemption system that fires on every transaction during peak promotions with budget caps and idempotency guarantees; second, a clearing and reconciliation system that matches network settlement files against internal records to identify discrepancies and determine when money actually moves; and third, a legacy card system migration using strangler patterns, dual-run validation, and careful cutover planning with rollback safeguards.
 
-Now moving into behavioral interviews with a 40-minute timeline and STAR framework. I'm preparing a story matrix covering five key experiences that address common questions: a major production incident with root cause analysis and personal accountability, a technical disagreement with a colleague or manager, scope cuts under deadline pressure, a failed project or significant mistake, and rapid learning of new technologies. Then I'm covering team dynamics and interpersonal skills, starting with how to handle harsh code review feedback and how to give constructive criticism to others. 现在我需要补充文化适应部分，涵盖日本职场的根回し决策流程、会议文化以及如何在保持自己风格的同时融入。然后是五年规划和转职理由的准备，这在日本面试中很关键。我还要整理逆质问的好问题清单，以及考前的检查清单。最后补充一些具体数据——PayPay 的用户规模约 6900 万，PayPay Card 会员超过 1300 万，年交易笔数约 80 亿次。
+Now moving into behavioral interviews with a 40-minute timeline and STAR framework. I'm preparing a story matrix covering five key experiences that address common questions: a major production incident with root cause analysis and personal accountability, a technical disagreement with a colleague or manager, scope cuts under deadline pressure, a failed project or significant mistake, and rapid learning of new technologies. Then I'm covering team dynamics and interpersonal skills, starting with how to handle harsh code review feedback and how to give constructive criticism to others. 现在我需要补充文化适应部分，涵盖日本职场的根回し决策流程、会议文化以及如何在保持自己风格的同时融入。然后是五年规划和转职理由的准备，这在日本interview中很关键。我还要整理逆质问的好问题清单，以及考前的检查清单。最后补充一些具体数据——PayPay 的用户规模约 6900 万，PayPay Card 会员超过 1300 万，年交易笔数约 80 亿次。
 
-我需要在面试前查证最新的 IR 数据，并在答案中标注这些是准备时的公开资料。关于 PayPay Card 的分期付款手续费率，我要确认是否为 18.0%，因为日本大多数信用卡的分期费率通常在 15.0% 左右。
+我需要在interview前查证最新的 IR 数据，并在答案中标注这些是准备时的公开资料。关于 PayPay Card 的分期付款手续费率，我要确认是否为 18.0%，因为日本大多数信用卡的分期费率通常在 15.0% 左右。
 
 利息制限法对现金借款有明确的分级（10万以下 20%、10-100万 18%、100万以上 15%），但购物分期属于割販法范畴，实际费率通常在 15%-18% 之间，所以我会解释这个机制而不是声称 PayPay 的具体费率。关于收单手续费，我会说明商户手续费如何分解为发卡行的收益、品牌费和收单机构的利润，并提到日本 Visa/Mastercard 的公开标准。
 
 对于 3DS 义务化，经产省和信用卡交易安全对策协议会的指南要求所有电商商户在 2025 年 3 月底前引入 EMV 3-D Secure 认证。现在我要开始用现实的后端工程师案例来演示这些概念。
 
 我会用明确标记的骨架示例来替换，根据用户的代码库和职位描述文档，他们的背景可能包括 Java 后端工作经验，所以我会保留「◯◯系统」这样的占位符。我需要确保每个问题都有完整的答案，重要问题还要有 2-3 个追问和追答，并在设计讨论中加入分阶段的追踪、具体的模拟追踪和反事实分析。
-现有 QA bank 专注项目技术深挖，新文档将覆盖其他所有面试维度。现在开始写。
+现有 QA bank 专注项目技术深挖，新文档将覆盖其他所有interview维度。现在开始写。
 Created
 hardcore-interview-qa-cn.md
 +1030
@@ -123,23 +123,23 @@ I need to fix the numbering in D5 where "架构含义" has entries 1, 3, 4 but s
 Edited 2 files
 I'll wrap up with a summary and commit message, then check the line count to report back.
 Counted lines of new doc
-新文档已建好：hardcore-interview-qa-cn.md（1030 行），并已登记进 README.md 第 8 节索引。定位是全类型问答种子库，专门覆盖 qa bank（Q1–Q80，纯项目技术）之外的所有面试维度，编号按类预留，方便你之后按范围各自拓展。
+新文档已建好：hardcore-interview-qa-cn.md（1030 行），并已登记进 README.md 第 8 节索引。定位是全类型问答种子库，专门覆盖 qa bank（Q1–Q80，纯项目技术）之外的所有interview维度，编号按类预留，方便你之后按范围各自拓展。
 
 结构一览：
 
 编号	类别	内容
 D1–D6	Domain 深水区	四方模型钱流与 issuer 收入结构、授权/清分/结算三阶段与 STIP、リボ利息算法与割販法/貸金業法分界、3DS2 与 liability shift、chargeback 生命周期、PayPay 生态里卡的位置（あと払い的架构含义）、合规（支払可能見込額調査 / PCI DSS / tokenization）
 S1–S3	独立系统设计题	大促积分发放（预算热点分片 + 幂等 + 对账）、清分对账系统（三方匹配 + 差异池工作流）、遗留发卡系统不停服迁移（strangler + shadow 双跑 + 回切）——刻意避开 qa bank 第 11 节已有的授权系统设计题
-B1–B5	行为面试	先给「5 个故事覆盖 20 种问法」的素材矩阵，再逐题给 STAR 骨架 + 完整示例（生产事故、技术分歧、deadline 取舍、真失败、快速学习——最后一题直接用本 repo 作素材）
+B1–B5	行为interview	先给「5 个故事覆盖 20 种问法」的素材矩阵，再逐题给 STAR 骨架 + 完整示例（生产事故、技术分歧、deadline 取舍、真失败、快速学习——最后一题直接用本 repo 作素材）
 T1–T5	团队/心理/人际	review 被严厉批评、接手无文档烂代码、队友 struggle、on-call 压力、需求模糊
 G1–G5	国际化/动机	Why PayPay Card（含 30 秒英文短版）、为什么在日本、英语环境沟通、根回し文化、转职理由与 5 年规划的三点一线自查
-R1–R8	逆质问	按面试官角色（工程师/EM/HR）分组，每问附「为什么这是好问题」，外加不要问清单
+R1–R8	逆质问	按interview官角色（工程师/EM/HR）分组，每问附「为什么这是好问题」，外加不要问清单
 几个设计决策：
 
 重要题都有追问+追答：如 D1 追问 STIP、S1 追问预算烧完瞬间/个人上限/对账证明、S3 追问「为什么不停机割接」和「shadow diff 怎么定位」、B1 追问「你个人的错误是什么」。
 处处挂回本项目：D 节和 S 节的答案主动把行业机制连回你项目里的 outbox/inbox、claimable job、statement 快照等，形成「行业知识 → 项目证据」的闭环，文末清单也提醒交叉验证 qa bank 对应深挖题。
 行为题示例标注了【替换】：骨架和方法可直接用，但事实必须换成你的真实经历，我在 B0 里说明了原因（追问三层后借来的故事会露馅）。
-外部数字全部标注「锚点数字」：用户数、interchange 料率、cashless 比率等注明面试前一周用最新 IR 刷新，机制性内容则不会过时。
+外部数字全部标注「锚点数字」：用户数、interchange 料率、cashless 比率等注明interview前一周用最新 IR 刷新，机制性内容则不会过时。
 需要注意：G2（为什么在日本）和 G5（转职理由）是骨架模板，因为涉及你的真实履历，占位处（在日时长、日语水平、现职情况）需要你填充后我再帮你打磨。
 
 commit message：
@@ -194,10 +194,10 @@ Now I need to expand the S3 migration section substantially as requested, turnin
  40 分钟主答案，然后加入深度专题挖掘（数据管道、对比引擎、切流与回切、双写失败场景、长尾问题、组织协调）和更多追问追答。这是一个大规模编辑，用完整的旧 S3 文本做替换会很长，
  但为了保证逻辑连贯性，直接重写整个部分比较好。
 
-我有当前的文件状态，可以精确复现内容，所以用定位插入会更安全——在追问 2 的答案后面、"## 4. 行为面试"之前插入新的"S3 深挖"小节，这样既保留了现有的 1-4 阶段和追问作为主答，
+我有当前的文件状态，可以精确复现内容，所以用定位插入会更安全——在追问 2 的答案后面、"## 4. 行为interview"之前插入新的"S3 深挖"小节，这样既保留了现有的 1-4 阶段和追问作为主答，
 又能无缝添加深度内容。
 
-不过这样做的话，后续的行为面试、技术广度等章节都要往下顺延编号，从 3 改成 4、4 改成 5，以此类推，总共需要六处编号调整。我先更新编号约定表格加入 E 行，
+不过这样做的话，后续的行为interview、技术广度等章节都要往下顺延编号，从 3 改成 4、4 改成 5，以此类推，总共需要六处编号调整。我先更新编号约定表格加入 E 行，
 再在第 1 节的说明文字里补充提及 E 节的使用场景，最后在 Domain 部分后面插入新的"## 3. 通用后端技术深水区"完整章节。
 
 现在开始写 E 部分的内容。先从 E1 开始，讲 MySQL 的 B+ 树索引设计原理和失效场景，分三个层面展开：为什么选择 B+ 树而不是哈希表、二叉树或 LSM 树，然后说明怎样充分利用它，
@@ -237,7 +237,7 @@ Saga 把长事务拆成本地事务序列加补偿，是最普及的方案，关
 
 关于 Saga 补偿失败的问题，补偿动作必须设计成幂等且可重试直到成功，也就是说最终一定能成功的操作比如记账冲正，不能是那种可能被拒绝的业务动作。如果真的失败了就进人工干预队列并报警。所以在选择补偿动作的时候就要考虑这一点。
 
-选补偿方向时要挑"不会失败"的操作——加钱方向可以重试，但扣钱方向可能因为余额不足而失败。面试官可能会追问"那跨资源强一致做不到了？"，答案是单个资源内可以用数据库事务做强一致，但跨资源之间只能做最终一致，然后用对账来兜底。真的需要跨资源强一致时，优先考虑把资源合并到同一个库而不是引入 XA。
+选补偿方向时要挑"不会失败"的操作——加钱方向可以重试，但扣钱方向可能因为余额不足而失败。interview官可能会追问"那跨资源强一致做不到了？"，答案是单个资源内可以用数据库事务做强一致，但跨资源之间只能做最终一致，然后用对账来兜底。真的需要跨资源强一致时，优先考虑把资源合并到同一个库而不是引入 XA。
 
 现在进入分库分表的话题——什么时候真的需要分库分表，以及 shard key 怎么选。首先要排除伪需求，单表几千万行在有好索引的情况下其实没问题，应该先做读写分离、数据归档或者加缓存。
 真正的信号是写入吞吐超过了单机的能力。
@@ -336,13 +336,13 @@ diff 引擎先归一化掩掉时间戳随机 id 和顺序无关字段，然后�
 
 为了避免重复，我从下往上重新编号会更安全——先改"## 8"到"## 9"，再改"## 7"到"## 8"，以此类推。由于每个标题都是唯一的字符串，无论从哪个方向改都不会产生冲突。
 
-S3 深度挖掘部分要插在"## 5. 行为面试"之前，而且 S3 下的子章节应该用四级标题（####）来组织。最后还要在考前清单里加上 E 行，更新 README，并在 S3 主答案后面加个指针标注 40 分钟版本的结束位置。
+S3 深度挖掘部分要插在"## 5. 行为interview"之前，而且 S3 下的子章节应该用四级标题（####）来组织。最后还要在考前清单里加上 E 行，更新 README，并在 S3 主答案后面加个指针标注 40 分钟版本的结束位置。
 
 现在要完整写出 E 部分的内容，保持结论先行、机制分析、反事实思考、项目挂钩、追问追答的风格。关键是要确保技术细节准确——B+ 树的扇出度、页面大小、行数估算这些都要算对。 Binlog ROW format is required for safety with distributed transactions. TCC has edge cases like rollbacks arriving out of order and duplicate attempts that need idempotent handling. Clock rollbacks in Snowflake IDs are problematic. Virtual threads had pinning issues with synchronized blocks in JDK 21, though later versions improved this. ConcurrentHashMap uses CAS operations with synchronized locking on individual bin heads.
 
 Password hashing with bcrypt or argon2 plus a pepper adds security. Refresh token rotation with reuse detection prevents token replay attacks. Keyset pagination avoids offset issues at scale. gRPC proto evolution requires never reusing field numbers to maintain compatibility.
 
-I'm planning the E section now—it'll be substantial. For code examples I'll use numbered stage comments, and for documentation I'll include concrete examples and counterfactuals with tables where they help clarify. I'll insert the E section before the systems design section and renumber accordingly. I'm continuing with the table edits, adding a new row for general backend technology topics and updating the systems design row to clarify that S3 includes deep-dive specializations. Then I'll move on to revising the second item about the coding interview section. 现在我在为通用技术题制定备考策略——每道题都要先在 60 秒内给出结论，然后再展开细节，这样面试官如果想深入就会自然追问。同时更新 README 中的核心库描述，加入 E1–E8 的通用后端知识模块和 S3 的系统设计深挖内容。 Now I'm drafting the E section on general backend technical deep-dives, starting with an intro paragraph that positions these as universal concepts independent of specific projects, complementing the project-focused versions in the QA bank. Each question will run about 45-65 lines with solid depth. I'll also prepare the S3 deep-dive subsections with follow-up questions, inserting them after the specified marker.
+I'm planning the E section now—it'll be substantial. For code examples I'll use numbered stage comments, and for documentation I'll include concrete examples and counterfactuals with tables where they help clarify. I'll insert the E section before the systems design section and renumber accordingly. I'm continuing with the table edits, adding a new row for general backend technology topics and updating the systems design row to clarify that S3 includes deep-dive specializations. Then I'll move on to revising the second item about the coding interview section. 现在我在为通用技术题制定备考策略——每道题都要先在 60 秒内给出结论，然后再展开细节，这样interview官如果想深入就会自然追问。同时更新 README 中的核心库描述，加入 E1–E8 的通用后端知识模块和 S3 的系统设计深挖内容。 Now I'm drafting the E section on general backend technical deep-dives, starting with an intro paragraph that positions these as universal concepts independent of specific projects, complementing the project-focused versions in the QA bank. Each question will run about 45-65 lines with solid depth. I'll also prepare the S3 deep-dive subsections with follow-up questions, inserting them after the specified marker.
 两个任务：① 在 Domain 节后新增「通用后端技术深水区」E 节（不限信用卡的 general 后端硬核题）；② 把 S3 迁移题拓展成带深挖专题的完整弹药库。先做小的结构性编辑（编号约定、章节引用）。
 
 Edited
@@ -396,7 +396,7 @@ commit message：
 docs: add general backend deep-dive (E1-E8) and expand S3 migration playbook
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
-第一部分Domain问题，我觉得不是要这种完全局限于信用卡的domain，应该是java/spring/分布式系统/http tcp/linux 等等专业domain知识，这些更可能在面试中被问到吧？你同意的话，就重新考虑然后替换一下
+第一部分Domain问题，我觉得不是要这种完全局限于信用卡的domain，应该是java/spring/分布式系统/http tcp/linux 等等专业domain知识，这些更可能在interview中被问到吧？你同意的话，就重新考虑然后替换一下
 信用卡domain知识我觉得能保留一个四方模型以及authorization，posting，statement，repayment这几个核心过程就够了
 
 The user is pushing back on the credit card domain section, arguing it's too specialized and that interview prep should focus on core CS fundamentals like Java, Spring, distributed systems, HTTP, TCP, and Linux instead. They're asking me to reconsider and replace most of it, keeping just one credit card question covering the four-party model and core processes like authorization, posting, statement, and repayment. I'm partially agreeing with this feedback, though I'm still thinking through the tradeoffs for a PayPal-specific context.
@@ -419,11 +419,11 @@ I'm also scanning for other D2–D6 references across the document—the intro m
 
 Actually, a better approach is to do smaller, targeted edits—replacing each question block individually. So I'd swap out the old D2 about revolving credit with the new one on HTTPS requests, replace D3 about 3DS with Linux troubleshooting, and swap D4 about chargebacks with the IO models and Redis content.
 
-Then I need to handle the cross-references scattered throughout: removing the "see D3" pointer in D1, rewriting E8 to drop the D6 and D3 citations while keeping the substance about PCI and risk operations, and condensing that G1 follow-up to stand on its own without leaning on the old D5 structure. 现在我需要更新文档的几个关键部分：调整 D 节的描述，更新考前清单和 README 中对 D 的定义，重写第 2 节的标题和介绍，以及修改文档开头的段落，使其更准确地反映这份面试题库涵盖的全类型内容。
+Then I need to handle the cross-references scattered throughout: removing the "see D3" pointer in D1, rewriting E8 to drop the D6 and D3 citations while keeping the substance about PCI and risk operations, and condensing that G1 follow-up to stand on its own without leaning on the old D5 structure. 现在我需要更新文档的几个关键部分：调整 D 节的描述，更新考前清单和 README 中对 D 的定义，重写第 2 节的标题和介绍，以及修改文档开头的段落，使其更准确地反映这份interview题库涵盖的全类型内容。
 
 我保留关于锚点数字的说明，因为 G1、D1 等编号仍然需要保持。现在开始起草新内容，第 2 节将介绍专业基础深水区（D1–D6），其中 D1 是唯一保留的信用卡领域题，涵盖四方模型和 issuer 的四个核心过程——这是理解项目的最低领域背景。
 
-D2–D6 则涵盖网络、Linux、IO 模型、Spring 和分布式理论五个 CS 基础方向，这些比行业知识更高频，因为面试官日常工作中就在使用这些技术。第 E 节侧重工程决策（数据库、事务、JVM 调优、API、安全），而第 D 节侧重机制原理。现在我在思考 D 和 E 的分工划分是否恰当。
+D2–D6 则涵盖网络、Linux、IO 模型、Spring 和分布式理论五个 CS 基础方向，这些比行业知识更高频，因为interview官日常工作中就在使用这些技术。第 E 节侧重工程决策（数据库、事务、JVM 调优、API、安全），而第 D 节侧重机制原理。现在我在思考 D 和 E 的分工划分是否恰当。
 
 对 D1 重新组织：用一笔交易讲清四方模型和 issuer 内部的四个核心过程。答案分两层——第一层是四方模型的资金流向，第二层深入 issuer 内部的生命周期，包括授权（冻结额度、幂等性）、清分（hold 转 posted、异步处理）、出账（周期快照、可审计）和还款（核销、更新额度）。每个过程都要说明设计原因和反面影响，然后通过两个追问来深化理解。
 
@@ -566,7 +566,7 @@ hardcore-interview-qa-cn.md
 -3
 D 节替换完成，文档现为 1725 行。改动总结：
 
-D 节重构为「专业基础深水区」——你的判断我完全同意：这些 CS 基础比行业深水知识在实际面试中高频得多。
+D 节重构为「专业基础深水区」——你的判断我完全同意：这些 CS 基础比行业深水知识在实际interview中高频得多。
 
 D1（唯一保留的领域题）：四方模型钱流 + issuer 收入结构，新增了 authorization / posting / statement / repayment 四个核心过程的走读——每个过程一句「关键设计 + 不这样会怎样」，并指向 qa bank 的逐题深挖。原有的两个追问保留（授权/清分为什么分两步、issuer 宕机时的 STIP），因为它们正好是四过程的自然延伸。
 D2 HTTP/TCP：一次 HTTPS 调用的完整链路（DNS → 三次握手为什么是三次 → TLS 1.3 → HTTP/1.1 队头阻塞 vs HTTP/2），落点在「冷连接 = 2–3 个 RTT，所以必须连接池」和三种超时的预算法。追问：几万个 TIME_WAIT 要不要紧（机制 + 真正风险在客户端端口耗尽）、客户端超时但服务端执行成功了怎么办（引出幂等是被网络物理事实逼出来的）。
@@ -663,14 +663,14 @@ I've wrapped up the document at 2045 lines across 10 sections, adding the C sect
 
 本轮新增（按优先级）：
 
-新 C 节：实务编码题（C1–C5）——这是整个准备体系里最大的缺口：coding 轮不总是 LeetCext，实务派面试官偏爱「30 分钟手写一个能用的组件」，而 jvm-threads-runtime-cn.md 里明确标注这些并发主题"本文不展开"。五道题都是骨架代码 + 必踩的坑 + 追问：
+新 C 节：实务编码题（C1–C5）——这是整个准备体系里最大的缺口：coding 轮不总是 LeetCext，实务派interview官偏爱「30 分钟手写一个能用的组件」，而 jvm-threads-runtime-cn.md 里明确标注这些并发主题"本文不展开"。五道题都是骨架代码 + 必踩的坑 + 追问：
 C1 LRU（哨兵节点、两结构同步改；追问线程安全分层答法、生产为什么用 W-TinyLFU 不用裸 LRU）
 C2 令牌桶（懒补充、nanoTime 防时钟回拨；追问 Redis Lua 分布式版——直接挂回项目的 RedisTokenBucketRateLimiter）
 C3 有界阻塞队列（while 不是 if 这个第一淘汰点、双 Condition、finally unlock；追问 JDK 两种 BlockingQueue 的锁差异）
 C4 CompletableFuture 并行聚合（先发射再 join、不用 commonPool 跑阻塞 IO、额度不能降级的业务判断；追问结构化并发）
 C5 SQL 窗口函数现场题（每组取最新 + Top-N、窗口别名不能进 WHERE；追问引到读模型根治）
 E9：大表在线 DDL——MDL 连环堵事故、INSTANT/INPLACE/COPY 分档、gh-ost 影子表（点明是 S3 迁移的单表缩影）、expand-contract 与 B1 事故示例呼应；追问讲清 Liquibase 管版本化、不管执行安全的两层分工。mybatis-sql-and-migration-cn.md 只有一句带过，这里补成完整弹药。
-T6：AI 协作——2026 年面试几乎必问的新题：用法边界、责任模型（提交者负全责）、数据红线、「AI 会写跑得过但什么都没验证的测试」这类具体观察；追问处理队友过度依赖 AI 的场景。答案里顺便把这个准备项目本身当作工作流证据。
+T6：AI 协作——2026 年interview几乎必问的新题：用法边界、责任模型（提交者负全责）、数据红线、「AI 会写跑得过但什么都没验证的测试」这类具体观察；追问处理队友过度依赖 AI 的场景。答案里顺便把这个准备项目本身当作工作流证据。
 核实后主动不加的：Kafka 可靠性内幕（acks/ISR/rebalance storm/static membership）——events-outbox-inbox-kafka-cn.md 已经覆盖得相当好，包括 rebalance storm 时序推演，重写只会制造两份不同步的版本。
 
 剩余的低优先级拓展方向（供你之后按需做，暂未动手）：
@@ -706,11 +706,11 @@ For P1, the methodology is about making the "sporadic" observable through correl
 
 现在要决定 P 节的位置——可以放在 C 节之后作为第 5 节（两个都是实战技能），这样 S 节变成第 6 节；或者放在 S 节之后作为第 6 节，这样 B 节往后都要重新编号。
 
-我倾向于把 P 放在 C 之后，因为 P 的问题在同样的面试轮次中被问到，顺序应该是 D → E → C → P → S。这样的话需要重新编号所有后续章节：S 变成第 6 节，行为面试变成第 7 节，团队变成第 8 节，国际化变成第 9 节，逆质问变成第 10 节，考前清单变成第 11 节。还要检查跨文件引用，比如 R2 提到 S3 的地方，虽然用字母标记应该没问题。
+我倾向于把 P 放在 C 之后，因为 P 的问题在同样的interview轮次中被问到，顺序应该是 D → E → C → P → S。这样的话需要重新编号所有后续章节：S 变成第 6 节，行为interview变成第 7 节，团队变成第 8 节，国际化变成第 9 节，逆质问变成第 10 节，考前清单变成第 11 节。还要检查跨文件引用，比如 R2 提到 S3 的地方，虽然用字母标记应该没问题。
 
-另外需要在第 1 节第 2 轮补充 P 的提及，说明编码轮会涉及生产经验题。第 4 轮招聘经理面试的部分要从"B 节 + T 节"改成"B 节 + T 节 + P 节的经验题"。还要在几个地方加上交叉引用：B1 后面加一句说这题的流程版本见 P3，T4 关于 runbook 的地方指向 P3 的完整事故响应流程，E5 可能需要提及 async-profiler 的工具。
+另外需要在第 1 节第 2 轮补充 P 的提及，说明编码轮会涉及生产经验题。第 4 轮招聘经理interview的部分要从"B 节 + T 节"改成"B 节 + T 节 + P 节的经验题"。还要在几个地方加上交叉引用：B1 后面加一句说这题的流程版本见 P3，T4 关于 runbook 的地方指向 P3 的完整事故响应流程，E5 可能需要提及 async-profiler 的工具。
 
-现在开始起草第 5 节生产实战部分，这一节的目的是回答"你真的上过生产吗"这类问题，面试官想听的不是背诵流程，而是看你有没有实际操作过的肌肉记忆——具体用过哪些工具、怎么排查问题。
+现在开始起草第 5 节生产实战部分，这一节的目的是回答"你真的上过生产吗"这类问题，interview官想听的不是背诵流程，而是看你有没有实际操作过的肌肉记忆——具体用过哪些工具、怎么排查问题。
 
 我注意到项目版的五个排障场景已经在 QA bank 第 12 节里了（授权 p99、Outbox backlog、账单缓存、consumer lag、Redis timeout），这一节要讲的是通用的方法论框架，两层配合使用：先用这里的框架开场建立思路，再用项目具体场景当例子来落地。
 
@@ -741,7 +741,7 @@ For P1, the methodology is about making the "sporadic" observable through correl
 但诊断工具本身有观察者效应——字节码增强和高频 watch 都有开销，生产使用必须走审批留痕，watch 的入参可能含敏感数据（卡号、金额）需要脱敏，一切以「不放大事故」为上限。对于怀疑某个方法在特定参数下走错分支但日志没打的情况，可以用 Arthas 的 watch 条件表达式直接在生产环境观察该方法的入参和返回值。
 
 没有 Arthas 的环境就动态调整日志级别到 DEBUG（前提是代码里本来有 debug 日志——这就是为什么写代码时要在关键分支留 debug 级日志，给未来的自己留后门），再
-这类「你真的上过生产吗」的经验题确实是当前最值得加强的——面试官用它区分「学过」和「干过」。计划：新增 P 节：生产实战（P1–P6）（偶发尖刺系统化排查、线上 debug 工具箱、事故响应前 15 分钟、数据订正、真实测试策略、发布纪律），并给 B1/T4 加流程版交叉引用。项目版的 5 个排障场景在 qa bank 第 12 节已有，P 节做通用方法论层，两层互相配合。
+这类「你真的上过生产吗」的经验题确实是当前最值得加强的——interview官用它区分「学过」和「干过」。计划：新增 P 节：生产实战（P1–P6）（偶发尖刺系统化排查、线上 debug 工具箱、事故响应前 15 分钟、数据订正、真实测试策略、发布纪律），并给 B1/T4 加流程版交叉引用。项目版的 5 个排障场景在 qa bank 第 12 节已有，P 节做通用方法论层，两层互相配合。
 
 Edited
 hardcore-interview-qa-cn.md
@@ -764,7 +764,7 @@ P5 真实测试策略：按「出错概率 × 出错代价」投资、Testcontai
 P6 发布纪律：变更单三件事、金丝雀阈值事先写好、feature flag 解耦部署与放量、发布记录是 P3「3 分钟找变更」的数据源。追问讲 flag 债治理（发布型限期删除 vs 运营型有台账、默认值要经得起配置中心宕机拷问）。
 对已有内容的增强：B1（事故 STAR 故事）和 P3（事故流程版）互相标注为同一题的两种问法、素材互通；T4 的 runbook 段落指向 P3；第 1 节的轮次指引和编号约定表加入 P 节；考前清单新增一条——给 qa bank 第 12 节的每个项目排障场景配一个 P 节框架的开场白，形成「方法论 + 实例」组合拳；README 同步。
 
-整节和 qa bank 第 12 节（项目版五场景）是刻意的两层结构：面试时先用 P 节框架开场证明有体系，再用项目场景落地证明动过手。
+整节和 qa bank 第 12 节（项目版五场景）是刻意的两层结构：interview时先用 P 节框架开场证明有体系，再用项目场景落地证明动过手。
 
 commit message：
 
@@ -803,7 +803,7 @@ W8 可以问技术债管理，区分有意和无意、战术和战略的债务�
 
 现在开始写 W 部分的内容，每个问题保持实质性的深度，用结论先行的风格配合具体实践和反事实论证，自然地挂回项目背景。
 
-这一节的核心是向面试官展示我是否是一个能持续交付的工程师——有自己的工作系统而不是凭惯性做事。每个回答都要包含具体做法、背后的原因，以及一个真实的反面教训。
+这一节的核心是向interview官展示我是否是一个能持续交付的工程师——有自己的工作系统而不是凭惯性做事。每个回答都要包含具体做法、背后的原因，以及一个真实的反面教训。
 
 对于需求从接收到上线的完整流程，我会强调几个关键环节：首先在澄清阶段用具体案例逼出精确需求，产出一页行为描述让需求方确认，因为写下来的分歧成本最低；其次根据影响面决定设计深度，小改动直接开发，但涉及数据模型或跨模块的必须先写设计文档，重点关注失败场景；然后拆解任务到两天以内的粒度，识别有回滚依赖的步骤；最后开发阶段用短分支小 PR 的方式推进。
 

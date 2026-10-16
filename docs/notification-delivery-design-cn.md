@@ -313,7 +313,7 @@ Feign 真正发 HTTP。谁先拒绝，更内层就一步都不执行。一次 `h
 
 也就是说：worker 处理一条投递时，Resilience4j 先在内部快速重试 3 次（≈ 几百 ms）；若仍失败，异常冒泡到 worker，
 `markFailed` 让这条投递**退避后回到 PENDING**，等下一轮 poller 再来（这才是 durable 的那层）。两层叠加既能
-快速抹平抖动，又能用便宜的内存重试**减少**打到 DB 的 durable 重试次数。这一点在面试里是很好的“纵深”话术。
+快速抹平抖动，又能用便宜的内存重试**减少**打到 DB 的 durable 重试次数。这一点在interview里是很好的“纵深”话术。
 
 > 取舍：Resilience4j 的 3 次 × 投递的 8 次，最坏情况下对 provider 的总尝试是相乘的。我把 Resilience4j 次数
 > 压得很小（3），就是因为它只该抹瞬时抖动；扛长时间故障是 durable 那层的事。

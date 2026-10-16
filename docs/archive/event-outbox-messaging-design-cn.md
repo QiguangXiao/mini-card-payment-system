@@ -13,7 +13,7 @@
 本文聚焦工程里**完成度最高的一块**：从“业务事务产生领域事实”到“可靠投递进 Kafka”再到
 “消费者幂等落地”的整条链路。它是 `kafka-outbox-design.md` 和
 `async-workflows-comparison-cn.md` 的姊妹篇——前两篇偏“为什么这样设计 / 横向对比”，
-本篇偏“**实际实现长什么样 + 真实 gap + 硬核面试问答**”。
+本篇偏“**实际实现长什么样 + 真实 gap + 硬核interview问答**”。
 
 ---
 
@@ -185,7 +185,7 @@ consumer_inbox(
    `outbox_events` 的 PUBLISHED 行、`consumer_inbox` 的所有行**永不删除**。
    索引保证热路径快，但**存储无界增长**，且 inbox 会成为长期只增不减的大表。
    生产需要按 `published_at` / `processed_at` 滚动归档或分区裁剪 job。
-   *面试几乎必问“outbox 表会不会爆”。*
+   *interview几乎必问“outbox 表会不会爆”。*
 
 2. **producer 侧 DEAD 是死胡同，缺可观测/重放**。
    消费侧有 DLT，但 outbox 事件转 `DEAD` 后只是躺在表里，**没有告警、指标或人工重放入口**。
@@ -242,7 +242,7 @@ consumer_inbox(
 
 ---
 
-## 第四部分：面试问答（含硬核追问 + 强补充）
+## 第四部分：interview问答（含硬核追问 + 强补充）
 
 ### Q1. 为什么不在业务事务里直接 `kafkaTemplate.send()`？
 **答**：dual-write。`MySQL commit 成功 / Kafka 失败 → 业务发生但事件丢`；
@@ -350,7 +350,7 @@ source-specific listener 翻译各自 payload，但共享 notification group/DLT
 ## 第五部分：一句话总结
 
 这套 messaging 把 **Transactional Outbox + claim-lease-recover 投递 + at-least-once 与双层幂等 +
-envelope 版本化 + per-context DLT 与可重试分类** 全部做对且自洽，是项目里最“可面试”的部分。
+envelope 版本化 + per-context DLT 与可重试分类** 全部做对且自洽，是项目里最“可interview”的部分。
 当前最明显的工程化缺口包括：**(1) outbox/inbox 数据保留清理、(2) producer 侧 DEAD 与 Kafka DLT
 的可观测/受控重放、(3) eventVersion 的消费侧强制协商**。补齐这三项仍不等于自动“生产级”；
 还需要安全认证、容量/lag SLO、审计、灾备、schema rollout 和真实运维演练。

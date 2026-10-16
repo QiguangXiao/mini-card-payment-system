@@ -1,6 +1,6 @@
-# 面试问答总库（Interview Q&A Bank）
+# 问答总库（Interview Q&A Bank）
 
-本文档收拢全部面试问答，来源为原 `paypay-card-jd-fit-cn.md` 的回答模板、
+本文档收拢全部interview问答，来源为原 `paypay-card-jd-fit-cn.md` 的回答模板、
 深挖题库、系统设计题、排障题、red flag 回答、追问速查，以及原
 `paypay-card-backend-interview-guide-cn.md` 的 20 题速记问答。
 
@@ -4060,7 +4060,7 @@ Redis hit ratio、GC pause 和业务 decline reason 分布。
 
 追补：
 
-> 这题的加分点是"知道为什么不做"：留一个不可达状态会被读代码的面试官当缺陷；
+> 这题的加分点是"知道为什么不做"：留一个不可达状态会被读代码的interview官当缺陷；
 > 删掉并能讲出完整的实现方案，把同一个问题从扣分项变成判断力证明。
 
 #### 新追问 13：你有几套 poll-claim-work 循环，为什么不统一成一个框架？

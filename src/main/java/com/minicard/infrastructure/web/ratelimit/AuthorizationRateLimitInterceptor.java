@@ -34,7 +34,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * 提前读 body 会破坏"拒绝要发生在最便宜的时刻"。Idempotency-Key 每个新请求都不同，
  * 不能当维度。所以取客户端 IP：它在 header/连接层就有，能压住单一来源的洪峰。
  * 生产系统的真实答案是<strong>认证后的调用方身份</strong>（client id / user id，从 token 来，
- * 不碰 body）；本项目没有认证层，IP 是诚实的替代并保留这条注释作为面试论述。
+ * 不碰 body）；本项目没有认证层，IP 是诚实的替代并保留这条注释作为interview论述。
  * 逐卡的速率控制已由 risk 模块的 velocity 滑动窗口在业务层承担。</p>
  *
  * <p>客户端 key 统一使用 {@code request.getRemoteAddr()}。反向代理部署下应由网关或

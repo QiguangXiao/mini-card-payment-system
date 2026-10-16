@@ -66,7 +66,7 @@
 
 ## 1. 总体对齐度：B+ / A-
 
-按"面试官真正会验证什么"来打分，而不是按 JD 关键词覆盖率。
+按"interview官真正会验证什么"来打分，而不是按 JD 关键词覆盖率。
 
 | JD 能力 | 我的打分 | 一句话理由 |
 | --- | --- | --- |
@@ -84,14 +84,14 @@
 | gRPC | **C** | 无实现（preferred，非必须） |
 | 测试 / 协作 / 文档 | **A**（质量）/ **C**（克制度） | 内容质量高，但**体量失控**，反而成了减分项，见 §3 |
 
-**对齐度结论**：作为一个"自学准备的后端面试项目"，它已经处在同类项目的 **top 5%**。
+**对齐度结论**：作为一个"自学准备的后端interview项目"，它已经处在同类项目的 **top 5%**。
 继续往上走的瓶颈不在项目正确性，而在**真实工程化落地**和**项目之外的能力面**。
 
 ---
 
 ## 2. 已经很强、很 valid —— 不要再动它
 
-这些部分**已经到位，继续投入是浪费**。面试里直接当王牌打。
+这些部分**已经到位，继续投入是浪费**。interview里直接当王牌打。
 
 1. **money-changing path 的正确性叙事。** 授权占额 → 入账 → 出账 → 还款，
    每一步的 transaction boundary、`SELECT ... FOR UPDATE`、状态机都站得住。
@@ -116,11 +116,11 @@
 
 6. **测试占比与分层 + 真实集成测试。** controller / domain / service / listener / worker 全覆盖，
    ~44% 测试占比；更关键的是新增了 Testcontainers 集成测试（并发授权、`SKIP LOCKED` claim、
-   Outbox→Kafka→Inbox roundtrip）——这种"用真实中间件验证 failure mode"的证据，面试官最买账。
+   Outbox→Kafka→Inbox roundtrip）——这种"用真实中间件验证 failure mode"的证据，interview官最买账。
 
 > [!TIP]
 > 这 6 点请整理成 6 张"卡片"，每张能在 2 分钟内讲完 + 对应一个 failure 场景。
-> 这才是面试的真实弹药；再写代码不会让这 6 张卡片更强。
+> 这才是interview的真实弹药；再写代码不会让这 6 张卡片更强。
 
 ---
 
@@ -132,7 +132,7 @@
 
 > [!IMPORTANT]
 > **二次复盘更新：** 第一版 review 把这一节列为"最严重的过度"，并明确写了"从今天起新增文档前先问这行字
-> 是让面试更好还是只让我感觉良好"。结果这一个月做了一次诚意十足的 step 1–11 docs 重组——
+> 是让interview更好还是只让我感觉良好"。结果这一个月做了一次诚意十足的 step 1–11 docs 重组——
 > 建了 `docs/archive/`、把 `jvm-monitoring` / `thread-runtime` / `mybatis-sql-learning` / `kafka-learning`
 > 等学习笔记沉到 archive（**这正是上次让你做的"分层"，值得肯定**），还合并了 caching / messaging / data-layer 几组重复文档。
 > **但净结果仍是 +2,393 行 / +8 文件，总量从 1.7 倍涨到 1.86 倍。** 分层动作是对的，方向却仍是"在文档上花时间"：
@@ -148,7 +148,7 @@
   不是项目读者需要的东西。
 
 **为什么这是减分项而不只是中性**：
-- 没有面试官会读 27k 行文档。仓库第一印象会变成"文档比代码多"，反而像在凑工作量。
+- 没有interview官会读 27k 行文档。仓库第一印象会变成"文档比代码多"，反而像在凑工作量。
 - 你自己复习时也会被淹没——真正要背的 6 张卡片散落在 2.7 万行里。
 - 它泄露了一个信号：**把"写文档"当成了"取得进展"的代餐。**
 
@@ -157,7 +157,7 @@
   kafka-outbox-design、distributed-cache、这份 review）；**②个人复习笔记**（其余）。
 - 个人笔记可以挪到 `docs/notes/` 子目录或单独分支，别放在仓库门面上。
 - `paypay-card-jd-fit-cn.md` 砍到 800 行以内：保留映射表 + Q&A 模板，删掉重复铺陈。
-- **从今天起，新增文档前先问：这行字会让面试表现更好，还是只让我感觉良好？**
+- **从今天起，新增文档前先问：这行字会让interview表现更好，还是只让我感觉良好？**
 
 ### 3.2 三套作业引擎（历史过度，已收敛）
 
@@ -166,8 +166,8 @@
 
 - 这不致命，甚至能正面讲："我抽象出了 claim→process→recover 的通用模式，复用在三个场景。"
   PR #1 还专门写了 `claimable-job-families-comparison` 文档对比三者的共享模型与刻意差异——
-  这等于已经把下面这道追问的答案准备好了，**面试时直接用即可**。
-- 面试官读代码常问"为什么不抽一个公共骨架？"——答案是 trade-off：三者的幂等键、可见性条件、
+  这等于已经把下面这道追问的答案准备好了，**interview时直接用即可**。
+- interview官读代码常问"为什么不抽一个公共骨架？"——答案是 trade-off：三者的幂等键、可见性条件、
   backoff 与失败语义不同，过早抽象会增加耦合。（注意别让"我写了三套"显得像炫技。）
 - **不建议现在去重构**——重构的收益远低于把时间花在 §4/§5。把它当成一道"已知会被问到"的题即可。
 
@@ -183,14 +183,14 @@
 >
 > **二次复盘更新：** 这一个月仅有的 2 个代码 commit（`6db9ea2` / `c18843d`）恰恰就是给这三套 job
 > 统一加 explicit lease/claim token。这是一次干净的、正确的工程改进——**但它落在了本节明确写着"不建议现在投入"的方向上。**
-> token 模型更严谨了，对面试说服力的边际提升却接近零（面试官不会因为你的 lease 列从隐式变 explicit 而高看一眼）。
+> token 模型更严谨了，对interview说服力的边际提升却接近零（interview官不会因为你的 lease 列从隐式变 explicit 而高看一眼）。
 > 同样的两天，如果花在 §4 的 Dockerfile + CI 上，能把一个**真实缺口**从"口头"变成"artifact"。这就是机会成本。
 
 ### 3.3 Bounded context 的广度 > 深度（轻度过度）
 
 Notification consumer group + DLT 已经足够学习 consumer idempotency 与 dead-letter routing。
 继续按 `remaining-domain-roadmap-cn.md` 的 P3/P4/P5（refund / dispute / settlement）加领域，
-**只会增加广度，不增加面试说服力**——该路线图自己也是这么判断的，这点你已经做对了。
+**只会增加广度，不增加interview说服力**——该路线图自己也是这么判断的，这点你已经做对了。
 
 > [!WARNING]
 > "过度"的共同根源是同一个：**用"增加产出"代替"提高单位产出的说服力"。**
@@ -223,13 +223,13 @@ JD 里公司栈几乎全是 AWS（ECS 部署、CloudFormation 管基建、CodePi
    RDS/ElastiCache/MSK 用参数占位即可。**不需要真部署，能 `aws cloudformation validate-template` 通过即可。** 1–2 天。
 4. （可选）`buildspec.yml` 雏形，对应 CodePipeline 叙事。
 
-> 面试话术升级：从"如果上 AWS 我会……"变成"我把它容器化并写了 ECS 的 CFN 骨架，
+> interview话术升级：从"如果上 AWS 我会……"变成"我把它容器化并写了 ECS 的 CFN 骨架，
 > 健康检查接的是 Actuator readiness，CI 在 GitHub Actions 上跑 build+test"。后者可信度高一个数量级。
 
 ### P1：给 high-traffic 文档配**一组真实压测数字**
 
 JD 明确写 "Experience designing high traffic systems"。你有 2,149 行设计文档，但**零数据**。
-面试官一句"你压过吗、瓶颈在哪、p99 多少"就会让纯文档显得空。
+interview官一句"你压过吗、瓶颈在哪、p99 多少"就会让纯文档显得空。
 
 - 用 **k6 或 Gatling** 写一个授权接口压测脚本（本地 docker-compose 起全套即可）。
 - 跑出一组数字：TPS、p95/p99、在多少并发下 HikariCP 开始排队、热点账户行锁等待如何体现。
@@ -261,22 +261,22 @@ application 层只依赖 port 不变。这正好呼应 JD 的 "gRPC ... developm
 
 ## 6. 项目之外要做的事 —— 这才是当前的主战场
 
-项目已经饱和。**面试通过与否，接下来更多取决于下面这些项目证明不了的能力。**
+项目已经饱和。**interview通过与否，接下来更多取决于下面这些项目证明不了的能力。**
 每项给：为什么 + 具体怎么做 + 大致投入。
 
 ### 6.1 算法 / 数据结构（JD 明确要求，项目无法体现）
 
 JD 白纸黑字："Strong fundamentals in data structures, algorithms"。
-个人项目**几乎无法证明**这一点——金融后端面试常有一轮独立的 coding。
+个人项目**几乎无法证明**这一点——金融后端interview常有一轮独立的 coding。
 
 - **怎么做**：LeetCode 按主题刷，不要盲刷。优先 array/hashmap、two pointers、binary search、
   BFS/DFS、heap、interval、基础 DP。目标**中等题能 25–35 分钟内讲思路 + 写干净代码 + 说复杂度**。
 - **量**：~120–150 题（精刷 + 复盘 > 盲刷 300）。每天 2 题，6–8 周。
 - **关键**：练**边写边讲**（出声讲思路），因为金融大厂 coding 轮看沟通不只看 AC。
 
-### 6.2 系统设计面试（把项目变成可迁移的设计能力）
+### 6.2 系统设计interview（把项目变成可迁移的设计能力）
 
-你的项目本身就是最好的系统设计素材，但**面试的系统设计是白板抽象题**，要单独练表达。
+你的项目本身就是最好的系统设计素材，但**interview的系统设计是白板抽象题**，要单独练表达。
 
 - **怎么做**：练 3–4 道经典题，且**每道都能引回你的项目**：
   - "设计一个支付/授权系统"（直接复用你的主链路，王牌）。
@@ -290,7 +290,7 @@ JD 白纸黑字："Strong fundamentals in data structures, algorithms"。
 ### 6.3 并发 / 分布式**理论深度**（撑起 JD 的 "in-depth understanding"）
 
 JD 用了 "in-depth understanding of concurrency and distributed computing"。
-项目展示了**实践**，但面试会追**原理**。
+项目展示了**实践**，但interview会追**原理**。
 
 - **并发**：Java Memory Model（happens-before、volatile）、`synchronized` vs `ReentrantLock`、
   CAS/AQS、线程池饱和策略、死锁四条件。能解释"为什么我用 DB 锁不用 JVM 锁"的底层原因。
@@ -323,7 +323,7 @@ JD 是中日双语、公司在日本。**先确认这个岗位的语言要求**�
 - **卡组织清结算**：issuer / acquirer / scheme（Visa/Mastercard/**JCB**）/ authorization vs clearing vs settlement 的真实流程。
 - **日本支付生态**：PayPay 钱包与 PayPay Card 的关系、`PayPay あと払い`、日本信用卡/QR 支付习惯、收单与发卡格局。
 - **怎么做**：读 PayPay 官方与**PayPay 技术博客 / 登壇资料**，了解他们的技术挑战与文化。
-  面试时能提到"我看过你们关于 X 的分享"是强信号。
+  interview时能提到"我看过你们关于 X 的分享"是强信号。
 - **投入**：2–3 个晚上的阅读。
 
 ### 6.7 简历 / LinkedIn 与 JD 对齐
@@ -333,7 +333,7 @@ JD 是中日双语、公司在日本。**先确认这个岗位的语言要求**�
 - 用这个项目写 1–2 条 bullet：**动词 + 做了什么 + 量化/技术结果**，别堆名词。
 - **投入**：半天。
 
-### 6.8 模拟面试
+### 6.8 模拟interview
 
 - 找人做 1–2 次 mock（coding + 系统设计 + 行为各一次），或至少对镜头自录回放。
 - **投入**：每次 1–1.5 小时，强烈推荐，性价比极高。
@@ -373,8 +373,8 @@ JD 是中日双语、公司在日本。**先确认这个岗位的语言要求**�
 | 过度点 | 现状 | 收在哪里 |
 | --- | --- | --- |
 | Statement 读缓存栈 | L1 + L2 + jitter + single-flight + loser wait + tombstone，共五层 | **收在 single-flight**。L1/L2 + jitter + single-flight 主动讲；tombstone 降级为被追问"缓存与写路径竞态"时的一句话（"还款后删缓存，慢的旧读可能迟到回填，tombstone 挡 10 秒"）。不再投入任何打磨 |
-| 生产参考数字体系 | yml 注释和 traffic 文档里的"8 Pods × 25 连接、quota 1000/s ÷ 10 Pods"等 | **嘴上只留公式**（"每 Pod 连接 = RDS 总预算 ÷ Pod 数留余量"），具体数字一律说"起点要压测校准"。背诵 Pod 数在面试里是减分项——听起来像没压测过却在报数。文档里的数字保留，那是校准自己直觉用的 |
-| Tomcat connector 四层语义 | 这轮修对了（threads / max-connections / accept-count / 业务背压） | 理解一次、留在文档里，**不进复习清单**。面试一般只考 threads vs connections 一层 |
+| 生产参考数字体系 | yml 注释和 traffic 文档里的"8 Pods × 25 连接、quota 1000/s ÷ 10 Pods"等 | **嘴上只留公式**（"每 Pod 连接 = RDS 总预算 ÷ Pod 数留余量"），具体数字一律说"起点要压测校准"。背诵 Pod 数在interview里是减分项——听起来像没压测过却在报数。文档里的数字保留，那是校准自己直觉用的 |
+| Tomcat connector 四层语义 | 这轮修对了（threads / max-connections / accept-count / 业务背压） | 理解一次、留在文档里，**不进复习清单**。interview一般只考 threads vs connections 一层 |
 | 文档总量 | 见 §3.1；本轮首次净减 | **冻结**。`traffic-rate-limiting-and-capacity-cn.md` 是最后一份大部头；复习入口收敛到本文 + `interview-readiness-review-cn.md`，其余文档只在被追问具体模块前翻对应章节 |
 
 ### 8.2 删除 / 合并候选（只动文档，代码零删除）
@@ -399,7 +399,7 @@ JD 是中日双语、公司在日本。**先确认这个岗位的语言要求**�
 
 ### 8.4 重点学透的五个主战场（被追问 3 层也不虚）
 
-按 JD 权重排序，面试时主动往这五处引：
+按 JD 权重排序，interview时主动往这五处引：
 
 1. **Authorization 主链路的并发正确性**：idempotency key 语义（含 503 后复用同 key 重试）、
    `FOR UPDATE` 热点账户串行化、事务内外部调用为什么 bulkhead + fail-closed、over-approve 为什么不可能。必考。
@@ -447,11 +447,11 @@ JD 是中日双语、公司在日本。**先确认这个岗位的语言要求**�
 
 > 项目层面：你已经**赢了"我能不能写正确的金融后端"这场仗**，现在要做的是**克制**——
 > 停止扩产，补一块真实可运行的云/CI artifact 和一组压测数字，把核心叙事打磨成 6 张能抗压的卡片。
-> 面试层面：胜负手已经转移到**项目之外**——算法、系统设计表达、并发/分布式原理、行为故事、日语和领域知识。
+> interview层面：胜负手已经转移到**项目之外**——算法、系统设计表达、并发/分布式原理、行为故事、日语和领域知识。
 > 把原本要写第 27,000 行文档的时间，挪到这些维度上。
 
 > [!CAUTION]
 > **二次复盘的一句话（2026-06-30）：**
 > 这一个月，文档从 27k 涨到 29k、三套 job 引擎又精修了一遍，而 Dockerfile / CI / 压测数字 / IaC **一个没动**。
 > **第一版 review 的判断不需要修改，只需要被执行。** 现在最该删的不是某段文字，是"再开一份文档/再重构一处已饱和代码"这个动作本身。
-> 下一个能改变面试结果的 commit，文件名应该叫 `Dockerfile` 或 `.github/workflows/ci.yml`，而不是又一个 `*-cn.md`。
+> 下一个能改变interview结果的 commit，文件名应该叫 `Dockerfile` 或 `.github/workflows/ci.yml`，而不是又一个 `*-cn.md`。

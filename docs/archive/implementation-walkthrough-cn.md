@@ -827,7 +827,7 @@ Batch path：
 - 每账户独立 transaction boundary。
 - 行锁持有时间短，不会让出账循环长时间挡住在线还款。
 
-**生产落差（面试要能主动说）**：真实発卡行不会用应用内 `@Scheduled` 跑締め処理，而是用
+**生产落差（interview要能主动说）**：真实発卡行不会用应用内 `@Scheduled` 跑締め処理，而是用
 job scheduler（JP1/AJS、A-AUTO、Control-M）编排 ジョブネット，或 Spring Batch / AWS Step Functions，
 跑在与在线 API 隔离的批处理系统上，有 リラン/リスタート 入口和与勘定系的突合。
 应用内 cron 的硬伤：与在线请求抢同一 JVM 和连接池、发版即重启批处理、没有 job 级可观测性和重跑入口。

@@ -13,7 +13,7 @@
 > （见 §4.0）。留着一套既不真实、又读不完的代码，学习价值是负的。
 >
 > **§2.3 和 §4 保留为设计记录**：分片策略、多列 lease、账户级隔离的完整推理都还在，
-> 面试被问到"千万账户怎么出账"时按这里讲即可；代码本身在 git 历史里（`git log -- '*StatementJob*'`）。
+> interview被问到"千万账户怎么出账"时按这里讲即可；代码本身在 git 历史里（`git log -- '*StatementJob*'`）。
 
 > 本文合并自三份旧文档：`claimable-job-families-comparison-cn.md`（三家族对比）、
 > `statement-job-design-cn.md`（StatementJob 单家族深入）、`async-workflows-comparison-cn.md`
@@ -316,7 +316,7 @@ finalize 新短事务：findByIdForUpdate 重锁 job + 校验 claim_token 仍是
 
 ---
 
-## 9. 硬核面试 Q&A
+## 9. 硬核interview Q&A
 
 **Q1. 为什么用数据库表当队列，而不是直接上 Kafka/RabbitMQ？什么时候必须换？**
 "任务计划"要和业务状态**同事务**落地避免 dual-write（账单生成与"到期扣款计划"、授权批准与"7 天过期计划"必须同生共死，写 MQ 是另一个系统无法和 MySQL 原子提交）；DB 表 + `SKIP LOCKED` 直接得到竞争消费/重试/恢复，运维简单。缺点：轮询秒级延迟、表增长（要归档）、DB 单点；**每秒数万任务的极高吞吐/低延迟**场景会压垮 DB，那时上专用 MQ。本项目万级/十万级 jobs/day、秒级延迟可接受，DB 队列是最优性价比。

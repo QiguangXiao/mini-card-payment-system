@@ -204,7 +204,7 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 ### 4.4 优缺点
 
 **flatten 的优点**
-- 更少表、更少类、更少概念；claim 机制成为唯一主角，面试更好讲。
+- 更少表、更少类、更少概念；claim 机制成为唯一主角，interview更好讲。
 - `statement_jobs` 与 `delay_jobs` 结构同形，便于“其他 domain 对齐成这个样子”。
 - 去掉了 batch 完成度的 re-lock + summary 这类“看起来企业级但价值有限”的机制。
 
@@ -212,7 +212,7 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
 - 失去一行就能看到的“整批状态”视图；要看进度得 `GROUP BY status` 查询。
 - 失去 `PARTIALLY_FAILED` 这种批级语义（现在是“按 cycle 数 DEAD 分片”）。
 
-> 取舍结论：对“学习 + 面试 + 不过度包装”的目标，单层更合适；
+> 取舍结论：对“学习 + interview + 不过度包装”的目标，单层更合适；
 > 真正需要批级 SLA / 看板时，再加一个**读模型查询**或轻量 batch 视图即可，
 > 不必为此长期维护一张父表和它的生命周期。
 
@@ -326,12 +326,12 @@ statement_batches（父）  1 ──< statement_jobs（子分片）
    statement 的 sharding、单项隔离。**不要**为了“统一”强行抽象成一个泛型框架——
    它们用例不同（单聚合动作 vs 批量 fan-out），共享的是模式，不是同一段代码。
 
-> 面试一句话：「三套队列共享 claim-lease-recover 模式，但生命周期和失败语义不同，
+> interview一句话：「三套队列共享 claim-lease-recover 模式，但生命周期和失败语义不同，
 > 我保持它们各自独立、形状对齐，而不是过早抽象成一个通用 job 框架。」
 
 ---
 
-## 8. 面试讲解要点
+## 8. interview讲解要点
 
 - **claim/lease/recover**：为什么 `FOR UPDATE SKIP LOCKED` + 短事务 claim 能让多实例
   安全并行；为什么 PROCESSING 必须是 lease；lease token 校验防的是哪种 race。

@@ -1,8 +1,8 @@
-# 面试就绪评审与英文背诵材料（Interview Readiness Review & English Recitation Pack）
+# interview就绪评审与英文背诵材料（Interview Readiness Review & English Recitation Pack）
 
-> 评审视角：PayPay Card 类发卡行后端团队的 Staff Backend Engineer / 面试官。
+> 评审视角：PayPay Card 类发卡行后端团队的 Staff Backend Engineer / interview官。
 > 评审基准：**不按生产支付系统评判**，按"5 年 Java 后端经验、缺大规模支付生产经验的候选人，
-> 用来证明 issuer 侧设计能力的严肃学习/面试项目"评判。
+> 用来证明 issuer 侧设计能力的严肃学习/interview项目"评判。
 > JD 依据：PayPay Card Backend Engineer（Greenhouse 4003023008）。
 > 评审日期：2026-07-02（代码基线：`e7b5e73`）。
 
@@ -13,18 +13,18 @@
 - [§1 值得主动展示的优秀设计（带代码证据）](#1-值得主动展示的优秀设计带代码证据)
 - [§2 与 JD 要求的逐条对齐](#2-与-jd-要求的逐条对齐)
 - [§3 对齐评分：78 / 100 及推理](#3-对齐评分78--100-及推理)
-- [§4 面试展示价值排序与展示策略](#4-面试展示价值排序与展示策略)
-- [§5 最可能触发的面试问题与答题要点](#5-最可能触发的面试问题与答题要点)
+- [§4 interview展示价值排序与展示策略](#4-interview展示价值排序与展示策略)
+- [§5 最可能触发的interview问题与答题要点](#5-最可能触发的interview问题与答题要点)
 - [§6 最大技术风险 / 弱点（含缺陷时序推演）](#6-最大技术风险--弱点含缺陷时序推演)
 - [§7 过度工程与可解释性风险](#7-过度工程与可解释性风险)
-- [§8 面试前最高 ROI 改进计划](#8-面试前最高-roi-改进计划)
+- [§8 interview前最高 ROI 改进计划](#8-interview前最高-roi-改进计划)
 - [§9 英文背诵材料（English Recitation Pack）](#9-英文背诵材料english-recitation-pack)
 
 ---
 
 ## 1. 值得主动展示的优秀设计（带代码证据）
 
-以下每一条都经过通读验证，经得起面试官顺着代码追问。
+以下每一条都经过通读验证，经得起interview官顺着代码追问。
 
 ### 1.1 Claim-first 幂等（全项目最硬的资产）
 
@@ -55,7 +55,7 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 
 关键证据：`PostingService.post` 里注释明确写出"新 presentment 必须在 credit account row lock
 **之后**再 INSERT claim，否则 posting（先锁交易再锁账户）和 statement（先锁账户再锁交易）
-高并发时形成环路等待"。这说明锁顺序是设计约束，不是巧合——面试官用这个区分
+高并发时形成环路等待"。这说明锁顺序是设计约束，不是巧合——interview官用这个区分
 "背过死锁定义"和"推理过死锁"。
 
 必须把隐式锁也算进去：repayment INSERT 的 FK 检查会取 statement S，所以先锁父 account/statement
@@ -90,7 +90,7 @@ claim-first 把竞态裁决完全交给数据库唯一索引，没有窗口。
 `0001-initial-schema.sql` 把状态机的合法字段组合写进 CHECK 约束（例如 authorizations 五状态各自的
 decline_reason/decided_at/expires_at/posted_at/expired_at 组合、`reserved + posted <= credit_limit`、
 statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一套 validation。
-面试里"脏数据怎么防"有两层答案：应用层不变量 + 数据库最后防线。
+interview里"脏数据怎么防"有两层答案：应用层不变量 + 数据库最后防线。
 
 ### 1.6 Money 值对象与日本本地化细节
 
@@ -121,7 +121,7 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 
 | JD 要求 | 项目覆盖 | 评价 |
 | --- | --- | --- |
-| Concurrency & distributed computing（required） | 幂等、行锁、锁顺序、lease、竞态分析 | **最强项**，深度足够硬核面试 |
+| Concurrency & distributed computing（required） | 幂等、行锁、锁顺序、lease、竞态分析 | **最强项**，深度足够硬核interview |
 | RDBMS + NoSQL + distributed cache（required） | MySQL 深；Redis 用于 velocity 滑窗 + L2 缓存 + 重建锁；Caffeine L1 | 强；"NoSQL"实际只有 Redis，不要自称有 document/KV store 经验 |
 | APIs / Pub/Sub / database clients（required） | REST + Kafka + MyBatis（含一处 JdbcTemplate 对照） | 覆盖良好 |
 | Microservices & event-driven（required） | 事件驱动很实；但**这是模块化单体** | 事件驱动强；微服务只有"可拆分的边界"，需口头补拆分与跨服务一致性 |
@@ -144,21 +144,21 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
   是这份 JD required 的主体，项目在这些点上的深度**超过 5 年经验候选人的常见水平**。
 - **高流量设计（~15% 权重）约 50%**：有正确的结构（缓存、隔舱、SKIP LOCKED、按账户分片的扩展路径），
   但没有负载数字、没有瓶颈定位、没有"单账户热点行"的落地方案。JD 写的是
-  *experience designing high-traffic systems*，面试官会追流量数字，项目本身给不了。
+  *experience designing high-traffic systems*，interview官会追流量数字，项目本身给不了。
 - **微服务（~10% 权重）约 60%**：bounded context 划分真实，但进程内跨聚合事务
   （`PostingService` 同事务改 authorization + account + transaction）与跨服务的差距，
   必须靠口头把"如何拆、拆完一致性怎么办（saga/补偿）"讲圆。
 - **Preferred 项（~15% 权重）**：DDD/Kafka/Spring 拿满；gRPC 与 AWS 实操为零。
 - **扣分项**：仓库卫生（`bin/`、`build/`、`.idea/` 入库）；真实缺陷（自动扣款竞态，见 §6）
-  如果被读代码的面试官先发现，会反噬"严谨"人设。（原第二缺陷 OVERDUE 不可达已通过删除该状态解决，见 §6.1。）
+  如果被读代码的interview官先发现，会反噬"严谨"人设。（原第二缺陷 OVERDUE 不可达已通过删除该状态解决，见 §6.1。）
 
-**78% 的含义**：项目足以支撑面试，但支撑不了"我做过大规模系统"的暗示。
+**78% 的含义**：项目足以支撑interview，但支撑不了"我做过大规模系统"的暗示。
 最佳用法是证明"我对 issuer 域的正确性问题想得很深"，而不是伪装生产经验。
 按 §8 完成前四项可提升到 ~85%，剩余缺口全部是可口头覆盖的类型。
 
 ---
 
-## 4. 面试展示价值排序与展示策略
+## 4. interview展示价值排序与展示策略
 
 | 排名 | 模块 | 展示策略 |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ statement 的 paid/status 一致性）。同时 domain `restore()` 也跑同一�
 
 ---
 
-## 5. 最可能触发的面试问题与答题要点
+## 5. 最可能触发的interview问题与答题要点
 
 按出现概率排序，前 6 个建议逐条彩排到能脱稿。
 
@@ -204,7 +204,7 @@ outbox 把问题收敛为"单库事务 + 可重放"。
 要点：**会**——claim 按 created_at 排序，但 4 线程 worker 池并发 publish，同 partition key
 只保证分区内按发送序。当前 Notification consumer 必须以幂等和显式状态处理重复或乱序，不能依赖跨 topic 顺序。
 若需要严格 per-key 有序：按 partition_key 哈希到单线程 worker，或单 publisher 串行发送，
-代价是吞吐。**主动说出这一点**，别等面试官发现。
+代价是吞吐。**主动说出这一点**，别等interview官发现。
 
 ### Q5. "外部风控 HTTP 调用在 DB 事务里，供应商慢了会怎样？"
 
@@ -252,7 +252,7 @@ DB 用 `DECIMAL(19,2)` 存，JPY 读出时尾零安全降级；最低还款用 C
 与 DEAD 计数；delay job 同项；MySQL 锁等待/慢查询；Hikari 池使用率；
 Kafka consumer lag per group；断路器状态变化。项目里只有 actuator 基础项，承认并给清单。
 
-### Q12.（若面试官读代码）"用户到期没还清会怎样？"
+### Q12.（若interview官读代码）"用户到期没还清会怎样？"
 
 现在的诚实答案：当前模型刻意不建 OVERDUE——逾期状态需要 due-date 扫描 job 作为写入方才有意义，
 没有写入方的状态只是死分支，所以删除了（见 §6.1）。如果要实现，方案是 `Statement.markOverdue`
@@ -276,14 +276,14 @@ Kafka consumer lag per group；断路器状态变化。项目里只有 actuator 
 
 **解决方式**：删除而非实现。`StatementStatus.OVERDUE`、`Statement` 状态机的 OVERDUE 分支、
 schema CHECK 中的 'OVERDUE'（changeset 0007）全部移除。理由：没有写入方的状态是状态机死分支，
-与其留着被读代码的面试官发现"不可达"，不如删掉并把"为什么不做 + 要做怎么做"作为口头答案（见 Q12）。
+与其留着被读代码的interview官发现"不可达"，不如删掉并把"为什么不做 + 要做怎么做"作为口头答案（见 Q12）。
 
 **原始现状（存档）**：`StatementStatus.OVERDUE` 只被两处引用——`Statement.applyRepayment` 的
 "OVERDUE 部分还款保持 OVERDUE"分支，以及 schema CHECK 约束。全代码库**没有任何路径**
 把账单从 CLOSED/PARTIALLY_PAID 转为 OVERDUE：没有 `markOverdue()` 方法、没有到期检查 job、
 自动扣款失败进 DEAD 后账单永远停在原状态。
 
-**为什么致命**：这是信用卡域最核心的生命周期环节之一。面试官问"用户到期没还清会怎样"，
+**为什么致命**：这是信用卡域最核心的生命周期环节之一。interview官问"用户到期没还清会怎样"，
 当前诚实答案是"什么都不发生"。状态机存在死状态还写进了 CHECK 约束，反而放大暴露面。
 
 **最小修复**：`Statement.markOverdue(Instant)`（校验 dueDate 已过 + 状态合法）；
@@ -319,7 +319,7 @@ T4  DelayJob 按 retry policy 重试：
 3. 事务 B：扣款成功 → finalize RECEIVED（复用现有锁顺序）；失败 → PENDING 标失败可重试。
    重试路径先查 PENDING 记录拿**已固化的金额**，杜绝漂移。
 
-**修复后的面试价值**：这是"我在自查中发现了资金级竞态并修复"的最佳故事，
+**修复后的interview价值**：这是"我在自查中发现了资金级竞态并修复"的最佳故事，
 能部分对冲缺支付生产经验的背景短板。
 
 ### 6.3 账单批处理失败缺少运维闭环 — 严重度 Medium（**已随分片实现移除而消解，但换了一种形态**）
@@ -350,9 +350,9 @@ IT 只有 3 个。还款同 key 并发、posting-vs-expiry 竞态、presentment 
 ### 6.7 语言可达性 — 严重度 Medium（被低估）
 
 全部注释和 docs 是中文（夹日文关键词）。PayPay Card 是英语/日语工作环境——
-把仓库链接给面试官时，**他们读不了你最想展示的推理注释**。
+把仓库链接给interview官时，**他们读不了你最想展示的推理注释**。
 修复：一份英文 `ARCHITECTURE.md` 一页纸（系统图 + 聚合清单 + 锁顺序表 + 三条写路径时序），
-这是日方面试官唯一一定会读的东西。
+这是日方interview官唯一一定会读的东西。
 
 ### 6.8 仓库卫生 — 严重度 Low（但第一印象）
 
@@ -389,24 +389,24 @@ Spring `@Scheduled` 又没有 misfire 补偿，所以错过唯一 tick 会让整
 
 ## 7. 过度工程与可解释性风险
 
-原则：以下**功能上没错**，问题在于扩大被追问面、稀释核心叙事。45-60 分钟的面试里，
+原则：以下**功能上没错**，问题在于扩大被追问面、稀释核心叙事。45-60 分钟的interview里，
 每分钟花在通知栈上就少一分钟讲授权。
 
 | 部分 | 问题 | 建议 |
 | --- | --- | --- |
-| 通知投递栈（每渠道断路器 + slow-call 阈值 + lease 状态机 + 故障注入；硬超时交给 HTTP client） | 全项目最大子系统之一，但与 issuer 核心域无关 | 保留代码；面试降为一句话："通知走同一套可认领框架，附带渠道级熔断" |
+| 通知投递栈（每渠道断路器 + slow-call 阈值 + lease 状态机 + 故障注入；硬超时交给 HTTP client） | 全项目最大子系统之一，但与 issuer 核心域无关 | 保留代码；interview降为一句话："通知走同一套可认领框架，附带渠道级熔断" |
 | 缓存栈后 50%（tombstone 版本地板、rebuild 单飞锁、Pub/Sub 广播） | tombstone CAS 的正确性论证很难白板 3 分钟讲清，讲一半反而显得不稳 | 主叙事止步于 cache-aside + after-commit 失效 + 为什么不双写；其余等追问 |
-| velocity 双实现（Redis + JDBC） | 学习价值高、面试价值低 | 一句"JDBC 版是精确性对照基线"带过 |
+| velocity 双实现（Redis + JDBC） | 学习价值高、interview价值低 | 一句"JDBC 版是精确性对照基线"带过 |
 | 注释密度 | 学习工具没问题；但"每行都有注释"可能被读为不自信，且中文注释日方不可读 | 不删注释；用英文 ARCHITECTURE.md 承担对外叙事 |
 
 ---
 
-## 8. 面试前最高 ROI 改进计划
+## 8. interview前最高 ROI 改进计划
 
 | 优先级 | 改进 | 工作量 | 回报 |
 | --- | --- | --- | --- |
 | 1 | 仓库卫生（`.gitignore` 清 `bin/ build/ .idea/`）+ **英文 ARCHITECTURE.md 一页纸** | 半天 | 第一印象 + 日方可读性，ROI 最高 |
-| 2 | ~~修 OVERDUE（§6.1）~~（已删除该状态解决）+ 自动扣款竞态（§6.2） | 半天~一天 | 消灭致命追问点，同时生产最佳面试故事 |
+| 2 | ~~修 OVERDUE（§6.1）~~（已删除该状态解决）+ 自动扣款竞态（§6.2） | 半天~一天 | 消灭致命追问点，同时生产最佳interview故事 |
 | 3 | 补 3 个并发 IT：还款同 key 并发 / posting-vs-expiry / presentment 重复请款 | 一天 | 把"我推理过"升级为"我有测试证明" |
 | 4 | "100 倍流量"口头方案小抄（热点行、按账户分片、拆服务后的 saga） | 半天（纯准备） | 直接补 JD 的 high-traffic 与 microservices 两个缺口 |
 | 5 | DEAD 可观测性（gauge + runbook 段落） | 2 小时 | "批处理静默失败"变成"有告警、可安全重放" |
@@ -417,7 +417,7 @@ Spring `@Scheduled` 又没有 misfire 补偿，所以错过唯一 tick 会让整
 
 ## 9. 英文背诵材料（English Recitation Pack）
 
-> 用法：每条是**面试口语版**（第一人称、可直接说出口），控制在 45–90 秒。
+> 用法：每条是**interview口语版**（第一人称、可直接说出口），控制在 45–90 秒。
 > 前面的 One-liner 用于开场或被打断时的最短版本。建议顺序：先背 9.1 / 9.2 / 9.3 / 9.5 / 9.6
 > （最高频），再背其余。
 

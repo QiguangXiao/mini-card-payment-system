@@ -17,7 +17,7 @@ import org.springframework.stereotype.Service;
  * <p>关键词：账单批处理, 账期, 逐账户事务, 故障隔离, statement batch, billing cycle,
  * per-account transaction, fault isolation, 締め処理(しめしょり), 請求バッチ(せいきゅうバッチ)。</p>
  *
- * <h2>为什么是这个形态（面试要能主动说出来）</h2>
+ * <h2>为什么是这个形态（interview要能主动说出来）</h2>
  *
  * <p>生产上的発卡行不会用应用内 {@code @Scheduled} 跑出账：真实形态是 job scheduler
  * （JP1/AJS、A-AUTO、Control-M）编排 ジョブネット，或 Spring Batch / AWS Step Functions，

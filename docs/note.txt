@@ -67,7 +67,7 @@ DispacherServlet：
 Service 层方法参数校验（@Validated 加在 Service 类上，配合 @NotNull、@Size 等）
 @RequestBody 对象内部字段的级联校验（不过那个走的是 @Valid，是另一套机制，HandlerMethodArgumentResolver 里直接调用 Validator，不经过 AOP 代理）
 
-你要是准备面试，这个点可能会被追问："@Valid 和 @Validated 有什么区别"——这俩机制完全不同：
+你要是准备interview，这个点可能会被追问："@Valid 和 @Validated 有什么区别"——这俩机制完全不同：
 
 @Valid（javax/jakarta.validation）：用在 @RequestBody 参数上，MVC 参数解析阶段直接调用校验，不走AOP
 @Validated（Spring 自己的注解）：用在类/方法上，走AOP代理，能做分组校验（@Validated(Group.class)），@Valid 不支持分组
@@ -141,9 +141,9 @@ try {
 
 用一句话概括这套模型:**任务(数据)在队列里等线程;线程(执行体)要么在队列里等任务/等资源,要么真的在跑任务——这两种"在"是互斥的、不会重叠的两个阶段**,worker 线程的一生就是在这两个阶段之间反复横跳:`take()` 挂起(B)→ 拿到任务、执行(RUNNABLE)→ 执行完 → 回到 `take()` 挂起(B)→ ……
 
-## 面试边界
+## interview边界
 
-这套"任务 vs 线程"的区分,面试里最多问到"能不能看懂 thread dump 里 worker 线程在等什么"这个层面就够了——比如你能一眼认出 `getTask()`/`ReentrantLock`/`Semaphore` 这几个关键栈帧对应哪种等待,这是加分项。至于 `Node`/`Condition` 内部链表怎么维护(单向 vs 双向、`waitStatus` 字段这些)已经是 AQS 源码阅读范畴,不属于典型 backend engineer 面试范围,不用再往下抠。
+这套"任务 vs 线程"的区分,interview里最多问到"能不能看懂 thread dump 里 worker 线程在等什么"这个层面就够了——比如你能一眼认出 `getTask()`/`ReentrantLock`/`Semaphore` 这几个关键栈帧对应哪种等待,这是加分项。至于 `Node`/`Condition` 内部链表怎么维护(单向 vs 双向、`waitStatus` 字段这些)已经是 AQS 源码阅读范畴,不属于典型 backend engineer interview范围,不用再往下抠。
 
 
 好,重新完整答一遍,这个问题确实值得讲透。
@@ -208,9 +208,9 @@ LinkedBlockingQueue (Tomcat TaskQueue)
 
 三条链表**物理上互不重叠**,只是逻辑上共享同一个外层对象名字(`TaskQueue`),这也是为什么之前容易把"任务在排队"和"线程在排队"讲混——它们确实同属一个 `BlockingQueue` 实例,但排的是完全不同的东西,走的是完全不同的内部数据结构。
 
-## 面试边界
+## interview边界
 
-到"知道 AQS 的 `Node` 和 `BlockingQueue` 自己的 `Node` 是两个类、条件队列和同步队列是两条链表"这个概念层面,已经算比较深的加分项了,足够应付"讲讲 ReentrantLock 和 synchronized 区别""AQS 大概怎么工作"这类问题。再往下抠 `nextWaiter` 具体怎么转移、`waitStatus` 的几个状态值分别代表什么,基本是 AQS 源码阅读/框架开发者的范畴,一般 backend engineer 面试不会问到这个粒度,不需要主动准备。
+到"知道 AQS 的 `Node` 和 `BlockingQueue` 自己的 `Node` 是两个类、条件队列和同步队列是两条链表"这个概念层面,已经算比较深的加分项了,足够应付"讲讲 ReentrantLock 和 synchronized 区别""AQS 大概怎么工作"这类问题。再往下抠 `nextWaiter` 具体怎么转移、`waitStatus` 的几个状态值分别代表什么,基本是 AQS 源码阅读/框架开发者的范畴,一般 backend engineer interview不会问到这个粒度,不需要主动准备。
 
 
 server.tomcat.threads.max: 200        # 对应 ThreadPoolExecutor 的 maxThreads
@@ -497,9 +497,9 @@ Feign 拿到响应,`supplyAsync` 里的 supplier 执行完,`future.complete(resu
 | ⑥ 等 Feign 响应 | risk-assess-N | 无(native socket read) | RUNNABLE(实际在等 I/O) |
 | ⑦ 响应回填、重新调度 | 某个 exec-M(不一定是 exec-3) | Tomcat TaskQueue 条件队列 | WAITING → RUNNABLE |
 
-## 这条链路值得在面试里说的一句话
+## 这条链路值得在interview里说的一句话
 
-如果面试官问"你了解异步 Controller 底层怎么运作的吗",可以概括成:**一次异步授权请求,完整生命周期里可能先后被两个不同的线程池、三批不同线程接手过——Tomcat 线程只负责接单和最终回写,真正等待下游的是业务线程池的 worker,两者靠 `AsyncContext` 和 `CompletableFuture` 的回调机制串联,而不是靠同一个线程从头跑到尾。** 这正好也是异步改造能省 Tomcat 线程资源的根本原因——⑥这一步慢的话,占用的是 `riskAssessExecutor` 的线程,不占 Tomcat 的。
+如果interview官问"你了解异步 Controller 底层怎么运作的吗",可以概括成:**一次异步授权请求,完整生命周期里可能先后被两个不同的线程池、三批不同线程接手过——Tomcat 线程只负责接单和最终回写,真正等待下游的是业务线程池的 worker,两者靠 `AsyncContext` 和 `CompletableFuture` 的回调机制串联,而不是靠同一个线程从头跑到尾。** 这正好也是异步改造能省 Tomcat 线程资源的根本原因——⑥这一步慢的话,占用的是 `riskAssessExecutor` 的线程,不占 Tomcat 的。
 
 
 
@@ -562,9 +562,9 @@ server:
 
 `AuthorizationService` 调用 `SimulatedExternalRiskController` 走的是 Feign,Feign 底层(如果配了 `feign-httpclient`/`feign-okhttp`)自己也维护一个 HTTP 连接池,道理完全一样——**调用方连接池的 keep-alive 超时,也要跟被调用方(风控服务/Tomcat)的 `keepAliveTimeout` 对齐**,否则你们内部服务间调用也会出现同样的间歇性连接重置问题,只是规模小、量不大时不容易被发现。
 
-## 面试边界
+## interview边界
 
-**"maxConnections 不等于并发用户数,LB/proxy 会做连接收敛"** 和 **"keep-alive 超时要代理侧和后端侧协调,否则会有间歇性 502"** 这两条,是支付/网关类岗位面试里含金量比较高的实操经验,建议记住,因为这正是"你有没有真的处理过生产连接问题"的分水岭问题。至于 nginx 具体参数名、TCP backlog 在不同云厂商 LB 上的具体行为差异,这些已经偏 SRE/网络运维范畴,不用主动准备,面试官深挖到这层的概率不高。
+**"maxConnections 不等于并发用户数,LB/proxy 会做连接收敛"** 和 **"keep-alive 超时要代理侧和后端侧协调,否则会有间歇性 502"** 这两条,是支付/网关类岗位interview里含金量比较高的实操经验,建议记住,因为这正是"你有没有真的处理过生产连接问题"的分水岭问题。至于 nginx 具体参数名、TCP backlog 在不同云厂商 LB 上的具体行为差异,这些已经偏 SRE/网络运维范畴,不用主动准备,interview官深挖到这层的概率不高。
 
 
 
@@ -649,7 +649,7 @@ LB 通过那 32 条 keepalive 连接发出去的请求,迟迟等不到 Tomcat �
 
 **LB、Tomcat 连接层、Tomcat 线程层,这几道"数字上限"本质上都只是缓冲区和止损阀,它们能延迟故障的暴露、能防止资源无限膨胀,但都不能消化掉"下游变慢"这个根本问题。真正能阻止故障往上游传导的,只有下游调用点自己的 timeout + circuit breaker——如果 Feign 没有 readTimeout,或者没有熔断器,哪怕 LB 和 Tomcat 每一层的数字配得再合理,故障照样会顺着这条链一路传导上去,只是传导的时间被拉长了而已。**
 
-这个结论如果放进面试回答里(比如被问"你怎么设计一个高可用的支付授权系统"),是一个非常有分量的收尾——它把"配置参数"和"熔断降级设计"的关系讲清楚了:**参数控制的是资源边界,熔断控制的是故障边界,两者缺一不可,但作用完全不同**。
+这个结论如果放进interview回答里(比如被问"你怎么设计一个高可用的支付授权系统"),是一个非常有分量的收尾——它把"配置参数"和"熔断降级设计"的关系讲清楚了:**参数控制的是资源边界,熔断控制的是故障边界,两者缺一不可,但作用完全不同**。
 
 
 
@@ -700,7 +700,7 @@ public void countUpOrAwaitConnection() throws InterruptedException {
 
 `maxConnections` 更准确的心智模型是:**一道门禁,过了就直接放行(count+1),没过就把想进门的人(这里是 Acceptor 线程,不是连接本身)拦在门口等**——它本身不是一个蓄水池,而是一个开关阈值。真正意义上"有形的、存着东西的队列",只有 OS backlog 和 TaskQueue 这两层,`maxConnections` 这一层是纯计数逻辑,没有队列实体。
 
-## 面试角度
+## interview角度
 
 这个区分如果被问到"maxConnections 满了之后发生什么",标准回答应该分两句说清楚:**"maxConnections 本身不是一个队列,它只是个计数阈值,满了之后 Acceptor 线程会被挂起、不再去取新连接;真正开始堆积的是 OS 的 TCP backlog(由 accept-count 控制),这才是有实际存储行为的等待队列。"** 这种精确区分"限流阈值"和"排队缓冲区"的能力,是能体现你不是背参数名、而是理解了底层机制的地方。
 
@@ -799,9 +799,9 @@ public void register(NioSocketWrapper socketWrapper) {
 | 处理的粒度 | 连接级别(建连这一次性动作) | 事件级别(每次可读事件触发一次) |
 | 产出 | 一个 socket 交给 Poller | 一个 `SocketProcessor` 任务交给 TaskQueue |
 
-## 面试边界
+## interview边界
 
-**Acceptor/Poller 的职责区分、以及"少量 Poller 线程靠 epoll 管理海量连接"这个原理**,是 NIO/Reactor 模式的核心知识点,面试问"Tomcat 怎么用少量线程支撑高并发连接"时是标准答案的骨架,值得掌握。但 `PollerEvent`/`SynchronizedQueue`/`wakeup()` 这种内部交接的具体实现细节,已经是 Tomcat 源码级别,一般不会被问到这么深——能说出"Acceptor 接连接、Poller 靠 Selector 监听事件、两者通过内部事件队列解耦"这个框架性描述,基本就覆盖了面试所需的深度。
+**Acceptor/Poller 的职责区分、以及"少量 Poller 线程靠 epoll 管理海量连接"这个原理**,是 NIO/Reactor 模式的核心知识点,interview问"Tomcat 怎么用少量线程支撑高并发连接"时是标准答案的骨架,值得掌握。但 `PollerEvent`/`SynchronizedQueue`/`wakeup()` 这种内部交接的具体实现细节,已经是 Tomcat 源码级别,一般不会被问到这么深——能说出"Acceptor 接连接、Poller 靠 Selector 监听事件、两者通过内部事件队列解耦"这个框架性描述,基本就覆盖了interview所需的深度。
 
 
 这个问题很重要,而且是生产环境里**一旦踩坑代价很大、但事前很容易被忽视**的一类操作——因为它平时不常发生,很多人对它的影响没有直觉。分几部分讲清楚。
@@ -860,9 +860,9 @@ partition = hash(key) % numPartitions
 
 **分区数变更是一次性的、不可逆的结构调整(只能增不能减),它不会重排存量数据,只影响之后的新消息路由——这意味着扩分区那一刻,理论上存在一个"新旧消息可能分处不同分区、丧失顺序保证"的窗口期。生产上最稳妥的做法是提前规划够分区数避免扩容,如果必须扩容,优先考虑发布新 topic 做平滑切换,而不是对有顺序依赖的存量 topic 直接 alter。**
 
-## 面试角度
+## interview角度
 
-这个知识点在面试里价值很高,因为它同时考察了 Kafka 机制理解和分布式系统的实操经验。如果被问到"Kafka 分区数能不能随便改",千万别只说"能增不能减"就结束,加分回答是补上**"增加分区会改变 key 到分区的哈希映射,对有顺序依赖的历史数据和新数据之间可能造成顺序割裂,所以生产上更倾向于提前规划够分区数,或者用新建 topic 灰度切换的方式规避这个问题"**——这正好也是支付场景(授权、扣款、对账这类强顺序依赖的流程)最容易被面试官拿来追问的方向。
+这个知识点在interview里价值很高,因为它同时考察了 Kafka 机制理解和分布式系统的实操经验。如果被问到"Kafka 分区数能不能随便改",千万别只说"能增不能减"就结束,加分回答是补上**"增加分区会改变 key 到分区的哈希映射,对有顺序依赖的历史数据和新数据之间可能造成顺序割裂,所以生产上更倾向于提前规划够分区数,或者用新建 topic 灰度切换的方式规避这个问题"**——这正好也是支付场景(授权、扣款、对账这类强顺序依赖的流程)最容易被interview官拿来追问的方向。
 
 
 
@@ -970,10 +970,10 @@ ThreadPoolTaskScheduler (Spring,遥控器)
                                         竞争机制依然是 ReentrantLock + Condition(AQS家族,跟LBQ一个体系)
 ```
 
-## 面试角度
+## interview角度
 
 如果被问到"Spring 定时任务底层用的什么数据结构",能说出**"`ScheduledThreadPoolExecutor` 继承自 `ThreadPoolExecutor`,复用了同一套 worker 线程调度逻辑,唯一的区别是内部队列写死为 `DelayedWorkQueue`——一个基于数组实现的小顶堆,按任务到期时间排序,保证每次 take() 拿到的都是最快该执行的任务,这跟普通线程池用的 FIFO 队列(LinkedBlockingQueue)在设计目的上完全不同"**,这个回答体现了你不仅知道"用了个队列",
-还理解了**为什么这个场景必须用堆而不是普通队列**——这种"知道设计动机"的回答,比单纯背类名更容易在面试里脱颖而出。
+还理解了**为什么这个场景必须用堆而不是普通队列**——这种"知道设计动机"的回答,比单纯背类名更容易在interview里脱颖而出。
 
 
 
@@ -1044,7 +1044,7 @@ public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialD
 
 这个"继承拿实现,接口拿契约"的模式,你其实已经在别的地方见过了——`ReentrantLock.Sync extends AbstractQueuedSynchronizer`,同样是继承 AQS 已经写好的 `park`/`acquire`/队列管理逻辑;而 `ReentrantLock implements Lock` 接口,只是对外暴露 `lock()`/`unlock()` 这几个方法签名。**Java 并发包里几乎所有"重型基础设施类"都是这个套路:靠继承复用一个功能强大的抽象基类(AQS 或 ThreadPoolExecutor),靠实现接口对外提供统一、可替换的类型契约。**
 
-## 面试角度
+## interview角度
 
 如果被问到"什么时候用继承,什么时候用接口",一个能体现真实理解、而不是背书的回答是:**"看你是想复用别人已经写好的实现代码,还是只想定义一套行为契约让调用方能面向接口编程。`ScheduledThreadPoolExecutor` 就是个好例子——它继承 `ThreadPoolExecutor` 是因为想直接白嫖那一整套 worker 线程管理逻辑,不用重写;它实现 `ScheduledExecutorService` 是因为需要暴露一套新的、`ThreadPoolExecutor` 原本没有的调度方法签名,让外部代码可以用 `ScheduledExecutorService` 
 这个类型统一引用,不用关心具体实现类是谁。"** 这个回答直接把抽象原则和你正在学的具体源码案例连起来了,比空谈"继承是 is-a,接口是 can-do"更有说服力。
@@ -1309,13 +1309,13 @@ WHERE user_id = 1001                                   -- ①
 
 ---
 
-**范围提示**：到 `EXPLAIN FORMAT=JSON` 看条件拆分为止，都还在后端五年经验的合理范围内，答出来是加分项。再往下的持久化游标实现、MRR 的 buffer 大小调优、优化器 cost model 怎么决定用不用 MRR，就属于 DBA/内核方向了，面试不会问，别花时间。
+**范围提示**：到 `EXPLAIN FORMAT=JSON` 看条件拆分为止，都还在后端五年经验的合理范围内，答出来是加分项。再往下的持久化游标实现、MRR 的 buffer 大小调优、优化器 cost model 怎么决定用不用 MRR，就属于 DBA/内核方向了，interview不会问，别花时间。
 
 
 
 
 
-先说一个诊断:**这不是 SQL 没学好,是两块不同的肌肉。** 你对索引、执行计划、引擎分层的理解已经超过很多五年经验的人,但"需求 → SQL"是独立的一项技能,靠读原理是长不出来的。而且日系面试里,现场让你写一条业务 SQL 的概率,**比问你 ICP 的概率高得多**,所以这块值得补。
+先说一个诊断:**这不是 SQL 没学好,是两块不同的肌肉。** 你对索引、执行计划、引擎分层的理解已经超过很多五年经验的人,但"需求 → SQL"是独立的一项技能,靠读原理是长不出来的。而且日系interview里,现场让你写一条业务 SQL 的概率,**比问你 ICP 的概率高得多**,所以这块值得补。
 
 问题的根源通常是同一个:**你在按 SQL 的书写顺序思考。** 从 `SELECT` 开始想"我要哪些列",但 `SELECT` 恰恰是逻辑上倒数第三步才决定的东西。开头就走错了方向,后面自然卡住。
 

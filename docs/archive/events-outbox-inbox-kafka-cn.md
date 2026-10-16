@@ -2,7 +2,7 @@
 
 > 本文合并自三份旧文档：`kafka-outbox-design.md`（英文设计说明）、
 > `kafka-learning-cn.md`（Kafka 配置详解）、`event-outbox-messaging-design-cn.md`
-> （实现走读 + 评价 + 面试问答）。合并时删除三者大量重复（dual-write、at-least-once、
+> （实现走读 + 评价 + interview问答）。合并时删除三者大量重复（dual-write、at-least-once、
 > envelope、DLT、消费者幂等在三份里各讲一遍），保留各自的独特价值：设计动机、**Kafka 配置参考**、
 > 逐类实现走读、真实 gap、硬核 Q&A。原三份已归档在 `docs/archive/`。
 
@@ -194,7 +194,7 @@ t400s  原 consumer 处理完想提交 offset → CommitFailedException（已不
    用一点延迟换 broker 攒批，网络往返数量级下降。
 3. **正确性**：上游用 Kafka 事务时 consumer 配 `isolation.level=read_committed`；
    `auto.offset.reset` 生产多用 `latest` 并配合 lag 告警——注意它**只在 group 没有已提交 offset 时生效**
-   （新 group / offset 过期被清），不是"每次启动从哪读"，这是最常被面试问倒的误解。
+   （新 group / offset 过期被清），不是"每次启动从哪读"，这是最常被interview问倒的误解。
 4. **容量**：partition 数是并行度天花板，扩 consumer 实例扩不过它；而 partition 只能加不能减，
    加了还会改变 key→partition 映射（短暂破坏同 key 有序），所以要提前规划。
 
@@ -281,7 +281,7 @@ consumer_inbox(consumer_name, event_id, processed_at, PRIMARY KEY (consumer_name
 
 **真实 gap（都不是 bug，是"上生产还差的工程化"，本次已核对仍存在）**：
 
-1. **数据保留 / 清理缺失（最该补）**。`outbox_events` 的 PUBLISHED 行、`consumer_inbox` 的所有行**永不删除**（已核对 `messaging` 下无 retention/cleanup job）。索引保证热路径快，但**存储无界增长**。生产需按 `published_at`/`processed_at` 滚动归档或时间分区 `DROP PARTITION`。*面试几乎必问"outbox 表会不会爆"。*
+1. **数据保留 / 清理缺失（最该补）**。`outbox_events` 的 PUBLISHED 行、`consumer_inbox` 的所有行**永不删除**（已核对 `messaging` 下无 retention/cleanup job）。索引保证热路径快，但**存储无界增长**。生产需按 `published_at`/`processed_at` 滚动归档或时间分区 `DROP PARTITION`。*interview几乎必问"outbox 表会不会爆"。*
 2. **producer 侧 DEAD 和 consumer 侧 DLT 都缺完整运维闭环**。消费失败会被写入按失败消费组路由的 DLT（当前只有 notification 一个），但没有 listener/monitor group 消费它，因而没有 DLT metric、告警或 replay 工具；outbox 事件转 `DEAD` 后也只是躺在表里。生产补齐时，consumer 侧应由独立 monitor group 订阅 DLT 并告警，修复代码或数据后再受控 replay；producer 侧至少应有 `DEAD` 计数指标 + 把 DEAD 改回 PENDING 的运维路径。
 3. **`eventVersion` 有字段但无消费侧版本协商**。`IntegrationEventReader` 只校验 `eventVersion >= 1`（已核对），**consumer 不按版本分支也不拒绝未知版本**。schema evolution 目前是"约定"不是"强制"：发不兼容的 v2 且字段恰好重叠时会被**静默误读**。要补：consumer 按 `(eventType, eventVersion)` 路由 / 拒绝，或上 schema registry。
 
@@ -301,7 +301,7 @@ consumer_inbox(consumer_name, event_id, processed_at, PRIMARY KEY (consumer_name
 
 ---
 
-## 13. 硬核面试 Q&A
+## 13. 硬核interview Q&A
 
 **Q1. 为什么不在业务事务里直接 `kafkaTemplate.send()`？**
 dual-write：MySQL 成功 Kafka 失败→事件丢；Kafka 成功 MySQL 回滚→下游看到不存在的决策。Outbox 把"发消息的意图"和业务状态放进同一 commit，再异步投递。
@@ -344,4 +344,4 @@ polling 简单、自洽、可控开关，秒级延迟对账单/通知足够；CD
 
 ## 14. 一句话总结
 
-> 用 Kafka 解耦授权后的异步副作用，用 Outbox 解决 MySQL 和 Kafka 的 dual-write lost-event；整体 at-least-once，所以 producer 等 broker ack、Outbox 负责 claim-lease-recover 重试、consumer 用 `eventId` 双层幂等、DLT 隔离坏消息。这是项目里最"可面试"的一块；真正待补的工程化只有三点：**outbox/inbox 数据保留清理、producer 侧 DEAD 可观测与重放、eventVersion 消费侧强制协商**。
+> 用 Kafka 解耦授权后的异步副作用，用 Outbox 解决 MySQL 和 Kafka 的 dual-write lost-event；整体 at-least-once，所以 producer 等 broker ack、Outbox 负责 claim-lease-recover 重试、consumer 用 `eventId` 双层幂等、DLT 隔离坏消息。这是项目里最"可interview"的一块；真正待补的工程化只有三点：**outbox/inbox 数据保留清理、producer 侧 DEAD 可观测与重放、eventVersion 消费侧强制协商**。
